@@ -1,0 +1,6 @@
+{
+  "name": "M.Savdo — Платформа выкупа товаров из Китая",
+  "description": "Электронный маркетплейс M.Savdo с прямым импортом товаров из Китая, каталогом, дифференцированной наценкой и панелью администратора.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

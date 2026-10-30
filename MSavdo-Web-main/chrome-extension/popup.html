@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>M.Savdo — AI Merchant Co-Pilot v5.0</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      width: 360px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      background-color: #09090b;
+      color: #ffffff;
+      padding: 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #27272a;
+      padding-bottom: 12px;
+      margin-bottom: 14px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      background: #FACC15;
+      color: #000000;
+      font-weight: 900;
+      font-size: 18px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(250, 204, 21, 0.4);
+    }
+    .brand-name {
+      font-size: 17px;
+      font-weight: 900;
+      color: #ffffff;
+      letter-spacing: -0.5px;
+    }
+    .brand-name span {
+      color: #FACC15;
+    }
+    .badge {
+      font-size: 10px;
+      background: #FACC15;
+      color: #000000;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    
+    .current-tab-card {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      padding: 12px;
+      margin-bottom: 14px;
+    }
+    .tab-status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .status-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 9999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .pill-green {
+      background: #052e16;
+      color: #4ade80;
+      border: 1px solid #166534;
+    }
+    .pill-amber {
+      background: #451a03;
+      color: #fbbf24;
+      border: 1px solid #78350f;
+    }
+    .tab-title-text {
+      font-size: 12px;
+      color: #e4e4e7;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .action-btn {
+      width: 100%;
+      padding: 12px;
+      border-radius: 12px;
+      border: none;
+      font-weight: 800;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.15s ease;
+      text-decoration: none;
+      margin-bottom: 8px;
+    }
+    .btn-copilot {
+      background: #FACC15;
+      color: #000000;
+      box-shadow: 0 4px 14px rgba(250, 204, 21, 0.35);
+    }
+    .btn-copilot:hover {
+      background: #eab308;
+      transform: translateY(-1px);
+    }
+    .btn-fast-import {
+      background: #10b981;
+      color: #ffffff;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3);
+    }
+    .btn-fast-import:hover {
+      background: #059669;
+    }
+    .btn-outline {
+      background: #18181b;
+      color: #e4e4e7;
+      border: 1px solid #3f3f46;
+    }
+    .btn-outline:hover {
+      background: #27272a;
+      border-color: #71717a;
+    }
+
+    .accordion-toggle {
+      background: none;
+      border: none;
+      color: #a1a1aa;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 8px 0 4px 0;
+    }
+    .settings-panel {
+      display: none;
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 10px;
+      padding: 10px;
+      margin-top: 6px;
+      margin-bottom: 10px;
+    }
+    .settings-panel label {
+      display: block;
+      font-size: 11px;
+      color: #a1a1aa;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .settings-panel input {
+      width: 100%;
+      padding: 6px 8px;
+      background: #09090b;
+      border: 1px solid #3f3f46;
+      border-radius: 6px;
+      color: #FACC15;
+      font-family: monospace;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+    .preset-btns {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .preset-btns button {
+      flex: 1;
+      padding: 4px;
+      font-size: 10px;
+      background: #27272a;
+      color: #e4e4e7;
+      border: 1px solid #3f3f46;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .preset-btns button:hover {
+      color: #FACC15;
+    }
+
+    .status-msg {
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 11px;
+      line-height: 1.4;
+      margin-top: 8px;
+      display: none;
+    }
+    .status-success {
+      background: #052e16;
+      border: 1px solid #166534;
+      color: #86efac;
+    }
+    .status-error {
+      background: #450a0a;
+      border: 1px solid #991b1b;
+      color: #fca5a5;
+    }
+
+    .footer {
+      border-top: 1px solid #27272a;
+      padding-top: 10px;
+      margin-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+      color: #71717a;
+    }
+    .footer strong {
+      color: #FACC15;
+    }
+  </style>
+</head>
+<body>
+  <!-- ХЕДЕР -->
+  <div class="header">
+    <div class="brand">
+      <div class="brand-logo">M</div>
+      <div>
+        <div class="brand-name">M.<span>SAVDO</span></div>
+      </div>
+    </div>
+    <div class="badge">Co-Pilot v5.0</div>
+  </div>
+
+  <!-- КАРТОЧКА ТЕКУЩЕЙ ВКЛАДКИ -->
+  <div class="current-tab-card">
+    <div class="tab-status-row">
+      <span style="font-size:10px; color:#a1a1aa; font-weight:700;">ТЕКУЩАЯ СТРАНИЦА:</span>
+      <span id="tab-site-type" class="status-pill pill-amber">Определение...</span>
+    </div>
+    <div id="tab-title" class="tab-title-text">Загрузка информации о странице...</div>
+  </div>
+
+  <!-- РУЧНОЕ ДОБАВЛЕНИЕ НАЗВАНИЯ И ОПИСАНИЯ (ПУНКТ 8) -->
+  <div style="background:#18181b; border:1px solid #27272a; border-radius:12px; padding:10px; margin-bottom:12px;">
+    <div style="font-size:11px; font-weight:700; color:#FACC15; margin-bottom:8px; display:flex; align-items:center; gap:5px;">
+      <span>✏️ Ручные данные (если пусто — сгенерирует ИИ):</span>
+    </div>
+    
+    <label style="display:block; font-size:10px; color:#a1a1aa; font-weight:600; margin-bottom:3px;">
+      Название товара:
+    </label>
+    <input 
+      type="text" 
+      id="manual-title" 
+      placeholder="Оставьте пустым для автогенерации ИИ"
+      style="width:100%; padding:7px 9px; background:#09090b; border:1px solid #3f3f46; border-radius:8px; color:#ffffff; font-size:11px; margin-bottom:8px;"
+    />
+
+    <label style="display:block; font-size:10px; color:#a1a1aa; font-weight:600; margin-bottom:3px;">
+      Описание товара:
+    </label>
+    <textarea 
+      id="manual-description" 
+      rows="2" 
+      placeholder="Оставьте пустым — ИИ сам напишет описание и прикрепит характеристики"
+      style="width:100%; padding:7px 9px; background:#09090b; border:1px solid #3f3f46; border-radius:8px; color:#ffffff; font-size:11px; margin-bottom:8px; resize:vertical; font-family:inherit;"
+    ></textarea>
+
+    <!-- ПОЛЕ ДЛЯ ВСТАВКИ КОДА СТРАНИЦЫ (ПУНКТ 2) -->
+    <details style="border-top:1px solid #27272a; padding-top:6px;">
+      <summary style="font-size:10px; color:#a1a1aa; cursor:pointer; font-weight:700; user-select:none;">
+        ⚡ Вставить код страницы (HTML / window.context) ▼
+      </summary>
+      <div style="margin-top:6px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <span style="font-size:9px; color:#71717a;">Для идеального разбора без блокировок:</span>
+          <button id="btn-paste-code" type="button" style="background:#27272a; color:#FACC15; border:1px solid #3f3f46; border-radius:4px; font-size:9px; padding:2px 6px; cursor:pointer;">
+            📋 Вставить из буфера
+          </button>
+        </div>
+        <textarea 
+          id="page-code-input" 
+          rows="3" 
+          placeholder="Вставьте исходный HTML-код страницы или window.context..."
+          style="width:100%; padding:6px; background:#09090b; border:1px solid #3f3f46; border-radius:6px; color:#a1a1aa; font-size:10px; font-family:monospace; resize:vertical;"
+        ></textarea>
+      </div>
+    </details>
+  </div>
+
+  <!-- БЫСТРЫЙ ИМПОРТ ИЗ ОКНА РАСШИРЕНИЯ -->
+  <button id="btn-quick-import" class="action-btn btn-fast-import">
+    <span>⚡ Импортировать товар через ИИ</span>
+  </button>
+
+  <!-- ГЛАВНАЯ КНОПКА ОТКРЫТИЯ ПАНЕЛИ -->
+  <button id="btn-open-panel" class="action-btn btn-outline" style="font-size:11px; padding:8px;">
+    <span>🔍 Открыть модальное окно на странице 1688</span>
+  </button>
+
+  <!-- ОТКРЫТЬ ВИТРИНУ -->
+  <button id="btn-open-site" class="action-btn btn-outline" style="font-size:11px; padding:8px;">
+    <span>🌐 Открыть витрину магазина M.Savdo</span>
+  </button>
+
+  <!-- СТАТУС ВЫПОЛНЕНИЯ -->
+  <div id="status-box" class="status-msg"></div>
+
+  <!-- СВЕРНУТЫЕ НАСТРОЙКИ СЕРВЕРА -->
+  <button id="toggle-settings" class="accordion-toggle">
+    <span>⚙️ Настройки сервера и связи</span>
+    <span id="settings-arrow">▼</span>
+  </button>
+
+  <div id="settings-panel" class="settings-panel">
+    <label for="server-url">Адрес сервера M.Savdo:</label>
+    <input type="text" id="server-url" value="http://127.0.0.1:5000">
+    <div class="preset-btns">
+      <button id="preset-flask">Python :5000</button>
+      <button id="preset-node">Node :3000</button>
+      <button id="preset-cloud">Облако (Cloud)</button>
+    </div>
+    <button id="btn-ping" class="action-btn btn-outline" style="padding:6px; font-size:11px; margin-bottom:0;">
+      <span>⚡ Проверить связь</span>
+    </button>
+  </div>
+
+  <!-- ПОДВАЛ -->
+  <div class="footer">
+    <span>Сервис: <strong>@MSavdo.tj</strong></span>
+    <span>1688 / Pinduoduo / Taobao</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

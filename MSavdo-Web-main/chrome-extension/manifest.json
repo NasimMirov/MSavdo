@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "M.Savdo — AI Merchant Co-Pilot v5.0",
+  "version": "5.0.0",
+  "description": "Автоматический импорт товаров с 1688.com, Pinduoduo, Taobao в сервис M.Savdo с ИИ-Бухгалтером, ИИ-Таргетологом и матрицей вариантов.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "M.Savdo — AI Merchant Co-Pilot"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.1688.com/*",
+        "*://1688.com/*",
+        "*://*.yangkeduo.com/*",
+        "*://yangkeduo.com/*",
+        "*://*.pinduoduo.com/*",
+        "*://pinduoduo.com/*",
+        "*://*.taobao.com/*",
+        "*://taobao.com/*",
+        "*://*.tmall.com/*",
+        "*://tmall.com/*",
+        "*://*.alibaba.com/*",
+        "*://alibaba.com/*",
+        "*://*.translate.goog/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
