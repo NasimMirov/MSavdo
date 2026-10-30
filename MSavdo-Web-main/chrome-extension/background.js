@@ -37,8 +37,8 @@ async function handleImportProduct(payload) {
   const candidates = [
     cleanBase ? `${cleanBase}/api/add-product` : null,
     "http://127.0.0.1:3000/api/add-product",
-    "http://localhost:3000/api/add-product",
-    "http://127.0.0.1:5000/api/add-product",
+    "http://213.21.251.100:3000/api/add-product",
+    "http://213.21.251/api/add-product",
     "http://localhost:5000/api/add-product",
     `${CLOUD_APP_URL}/api/add-product`
   ].filter(Boolean);
