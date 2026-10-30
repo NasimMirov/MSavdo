@@ -1,0 +1,15 @@
+meta:
+  environment: node
+  toolchain:
+    name: npm
+    version: 20
+build:
+  requirements:
+    - package.json
+  steps:
+    - npm install --force
+run:
+  persistence:
+    - msavdo.db
+  command: npx tsx server.ts
+  port: 3000

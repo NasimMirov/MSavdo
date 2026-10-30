@@ -95,7 +95,9 @@ if (process.env.GEMINI_API_KEY) {
 // ==========================================
 // БАЗА ДАННЫХ SQLITE (msavdo.db)
 // ==========================================
-const dbPath = path.join(__dirname, 'msavdo.db');
+const dbPath = process.env.NODE_ENV === 'production'
+  ? '/data/msavdo.db'
+  : path.join(__dirname, 'msavdo.db');
 const db = new DatabaseSync(dbPath);
 
 db.exec('PRAGMA foreign_keys = ON;');
