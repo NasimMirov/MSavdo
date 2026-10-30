@@ -111,7 +111,7 @@ async function handleImportProduct(payload) {
   const candidates = [
     \`\${cleanBase}/api/add-product\`,
     "http://127.0.0.1:3000/api/add-product",
-    "http://localhost:3000/api/add-product",
+    "https://213.21.0.251/api/add-product",
     "https://ais-dev-ahmyq45nmycvpjtbn4woji-541461425934.asia-northeast1.run.app/api/add-product",
     "http://127.0.0.1:5000/api/add-product",
     "http://localhost:5000/api/add-product"
