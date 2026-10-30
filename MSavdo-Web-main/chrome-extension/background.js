@@ -1,143 +1,176 @@
-// background.js — Service Worker расширения M.Savdo (Manifest V3)
-// Высокоскоростная интеллектуальная маршрутизация между портами 5000 (Python Flask), 3000 (Node.js) и облаком
-
-const CLOUD_APP_URL = "https://ais-dev-ahmyq45nmycvpjtbn4woji-541461425934.asia-northeast1.run.app";
 const DEFAULT_SERVER_URL = "http://127.0.0.1:3000";
+const MARKETPLACE_DOMAINS = [
+  "1688.com",
+  "yangkeduo.com",
+  "pinduoduo.com",
+  "taobao.com",
+  "tmall.com",
+  "alibaba.com"
+];
 
-async function getServerUrl() {
-  return new Promise((resolve) => {
+function getStoredServerUrl() {
+  return new Promise((resolve, reject) => {
     chrome.storage.local.get(["serverUrl"], (result) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
       resolve(result.serverUrl || DEFAULT_SERVER_URL);
     });
   });
 }
 
-async function fetchWithTimeout(url, options = {}, timeoutMs = 6000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
+function normalizeServerBase(rawUrl) {
+  let url;
   try {
-    const response = await fetch(url, {
+    url = new URL(String(rawUrl || "").trim());
+  } catch {
+    throw new Error("Укажите корректный URL сервера в настройках расширения.");
+  }
+
+  const isLoopback = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(url.hostname);
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback))
+    || url.username
+    || url.password
+    || url.search
+    || url.hash
+  ) {
+    throw new Error("Для удалённого сервера требуется HTTPS; HTTP разрешён только для localhost.");
+  }
+
+  return url.href.replace(/\/+$/, "");
+}
+
+async function getServerUrl() {
+  return normalizeServerBase(await getStoredServerUrl());
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
       ...options,
-      credentials: "include",
+      credentials: "omit",
+      redirect: "error",
       signal: controller.signal
     });
-    clearTimeout(id);
-    return response;
-  } catch (err) {
-    clearTimeout(id);
-    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
-async function handleImportProduct(payload) {
-  const configuredUrl = await getServerUrl();
-  const cleanBase = (configuredUrl || "").replace(/\/+$/, "");
+function isMarketplacePage(rawUrl) {
+  if (!rawUrl) return false;
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    return MARKETPLACE_DOMAINS.some((domain) =>
+      url.hostname === domain || url.hostname.endsWith(`.${domain}`)
+    );
+  } catch {
+    return false;
+  }
+}
 
-  // Быстрый перебор серверов: пользовательский URL -> Node (3000) -> Flask (5000) -> Cloud
-  const candidates = [
-    cleanBase ? `${cleanBase}/api/add-product` : null,
-    "http://127.0.0.1:3000/api/add-product",
-    "http://213.21.251.100:3000/api/add-product",
-    "http://213.21.251/api/add-product",
-    "http://localhost:5000/api/add-product",
-    `${CLOUD_APP_URL}/api/add-product`
-  ].filter(Boolean);
-
-  const uniqueUrls = Array.from(new Set(candidates));
-  let errorsList = [];
-
-  for (const url of uniqueUrls) {
-    try {
-      console.log("[M.Savdo Background] Отправка на:", url);
-      const res = await fetchWithTimeout(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json"
-        },
-        body: JSON.stringify(payload)
-      }, 12000);
-
-      // Проверяем, что ответ — JSON, а не HTML страница перенаправления
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("json")) {
-        const text = await res.text();
-        console.warn(`[M.Savdo Background] Сервер ${url} вернул HTML вместо JSON`);
-        errorsList.push(`${url}: возвращена веб-страница вместо API`);
-        continue;
-      }
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.status === "success") {
-          console.log("[M.Savdo Background] ✓ Успешно сохранено на:", url);
-          // Сохраняем рабочий адрес как дефолтный
-          const workingBase = url.replace(/\/api\/add-product$/, "");
-          chrome.storage.local.set({ serverUrl: workingBase });
-
-          return {
-            success: true,
-            serverUrl: url,
-            product: data.product,
-            message: data.message || "Товар успешно импортирован"
-          };
-        } else {
-          return {
-            success: false,
-            error: data.message || "Ошибка API M.Savdo"
-          };
-        }
-      } else {
-        const errJson = await res.json().catch(() => ({}));
-        errorsList.push(`${url}: HTTP ${res.status} (${errJson.message || errJson.error || 'Ошибка'})`);
-      }
-    } catch (err) {
-      console.warn(`[M.Savdo Background] Ошибка связи с ${url}:`, err.message);
-      errorsList.push(`${url}: ${err.message}`);
-    }
+async function handleImportProduct(payload, sender) {
+  const sourceUrl = sender.tab?.url || payload?.original_link;
+  const fromExtensionPage = !sender.tab
+    && typeof sender.url === "string"
+    && sender.url.startsWith(chrome.runtime.getURL(""));
+  if ((!sender.tab && !fromExtensionPage) || !isMarketplacePage(sourceUrl)) {
+    return { success: false, error: "Импорт разрешён только со страниц поддерживаемых маркетплейсов." };
+  }
+  const rawText = typeof payload?.raw_text === "string"
+    ? payload.raw_text
+    : typeof payload?.raw_html_text === "string"
+      ? payload.raw_html_text
+      : null;
+  const images = Array.isArray(payload?.images) ? payload.images : [];
+  if (
+    !payload
+    || typeof rawText !== "string"
+    || rawText.length > 200000
+    || images.length > 50
+    || !Number.isFinite(payload.price_cny)
+  ) {
+    return { success: false, error: "Данные товара неполные или превышают допустимый размер." };
   }
 
-  return {
-    success: false,
-    error: `Не удалось связаться с сервером M.Savdo.\nПроверенные адреса:\n• ${errorsList.join('\n• ')}\n\nУбедитесь, что запущен app.py (порт 5000) или Node сервер (порт 3000), либо скопируйте JSON товара вручную.`
-  };
+  const endpoint = `${await getServerUrl()}/api/add-product`;
+  try {
+    const response = await fetchWithTimeout(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({ ...payload, raw_text: rawText, images })
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("application/json")) {
+      throw new Error("Сервер вернул ответ не в формате JSON.");
+    }
+
+    const data = await response.json();
+    if (!response.ok || data.status !== "success") {
+      return {
+        success: false,
+        error: data.message || data.error || `Ошибка сервера: HTTP ${response.status}`
+      };
+    }
+    return {
+      success: true,
+      serverUrl: endpoint,
+      product: data.product,
+      message: data.message || "Товар успешно импортирован"
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Не удалось безопасно связаться с сервером ${endpoint}: ${error.message}`
+    };
+  }
 }
 
 async function handlePing(targetUrl) {
-  const base = (targetUrl || await getServerUrl()).replace(/\/+$/, "");
+  const base = targetUrl ? normalizeServerBase(targetUrl) : await getServerUrl();
   try {
-    const res = await fetchWithTimeout(`${base}/api/ping`, {
+    const response = await fetchWithTimeout(`${base}/api/ping`, {
       method: "GET",
       headers: { "Accept": "application/json" }
     }, 4000);
-    const contentType = res.headers.get("content-type") || "";
-    if (res.ok && contentType.includes("json")) {
-      const data = await res.json();
-      return { success: true, url: base, data };
+    const contentType = response.headers.get("content-type") || "";
+    if (response.ok && contentType.includes("application/json")) {
+      return { success: true, url: base, data: await response.json() };
     }
-    return { success: false, url: base, error: `Код ответа: ${res.status}` };
-  } catch (err) {
-    return { success: false, url: base, error: err.message };
+    return { success: false, url: base, error: `Код ответа: ${response.status}` };
+  } catch (error) {
+    return { success: false, url: base, error: error.message };
   }
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "importProduct") {
-    handleImportProduct(request.payload)
+    handleImportProduct(request.payload, sender)
       .then(sendResponse)
-      .catch((err) => sendResponse({ success: false, error: err.message }));
+      .catch((error) => sendResponse({ success: false, error: error.message }));
     return true;
   }
 
   if (request.action === "ping") {
     handlePing(request.url)
       .then(sendResponse)
-      .catch((err) => sendResponse({ success: false, error: err.message }));
+      .catch((error) => sendResponse({ success: false, error: error.message }));
     return true;
   }
 
   if (request.action === "getServerUrl") {
-    getServerUrl().then((url) => sendResponse({ serverUrl: url }));
+    getServerUrl()
+      .then((serverUrl) => sendResponse({ serverUrl }))
+      .catch((error) => sendResponse({ error: error.message }));
     return true;
   }
 });

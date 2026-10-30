@@ -1,4 +1,3 @@
-// M.Savdo content script: collect marketplace text, product images, and visual SKU data.
 (function () {
   "use strict";
 
@@ -6,340 +5,147 @@
   window.__MSAVDO_CONTENT_SCRIPT_LOADED__ = true;
 
   const MODAL_ID = "msavdo-smart-import-modal";
-  const EXCLUDED_IMAGE_TOKENS = ["logo", "avatar", "qrcode", "banner"];
-  const COLOR_MARKERS = /黑|白|灰|蓝|紅|红|粉|黄|绿|綠|棕|咖|米|紫|橙|金|银|銀|青|卡其|酒红|酒紅|藏青|军绿|軍綠|透明|香槟|拼色|多色/;
+  const MAX_TEXT_LENGTH = 200000;
+  const MAX_IMAGES = 50;
+  const EXCLUDED_IMAGE_TOKENS = ["logo", "avatar", "qrcode", "qr-code", "banner", "icon"];
 
-  function extractCleanTextLayer() {
-    const body = document.body;
-    if (!body) return "";
-
-    const bodyText = body.innerText || "";
-    const clone = body.cloneNode(true);
-    for (const node of clone.querySelectorAll("script, style, #msavdo-smart-import-modal")) {
+  function getPageText() {
+    if (!document.body) return "";
+    const bodyCopy = document.body.cloneNode(true);
+    for (const node of bodyCopy.querySelectorAll("script, style, noscript")) {
       node.remove();
     }
 
-    return (clone.innerText || clone.textContent || bodyText)
+    return (bodyCopy.innerText || bodyCopy.textContent || "")
       .replace(/\r\n?/g, "\n")
       .replace(/[ \t]+/g, " ")
       .replace(/\n[ \t]*\n(?:[ \t]*\n)*/g, "\n\n")
-      .trim();
+      .trim()
+      .slice(0, MAX_TEXT_LENGTH);
   }
 
-  function extractBasePriceCny(text) {
-    let lowestPrice = Infinity;
+  function getBasePrice(text) {
+    const prices = [];
     const pricePattern = /(?:[¥￥]\s*(\d{1,7}(?:\.\d{1,2})?)|(\d{1,7}(?:\.\d{1,2})?)\s*(?:元|人民币))/g;
     let match;
 
     while ((match = pricePattern.exec(text)) !== null) {
-      const value = Number(match[1] || match[2]);
-      if (Number.isFinite(value) && value >= 0.01 && value <= 100000) {
-        lowestPrice = Math.min(lowestPrice, value);
+      const price = Number(match[1] || match[2]);
+      if (Number.isFinite(price) && price > 0 && price <= 100000) {
+        prices.push(price);
       }
     }
 
-    if (!Number.isFinite(lowestPrice)) return 50;
-    return Number(lowestPrice.toFixed(2));
-  }
-
-  function isExcludedImageUrl(url) {
-    const lowerUrl = String(url || "").toLowerCase();
-    for (const token of EXCLUDED_IMAGE_TOKENS) {
-      if (lowerUrl.includes(token)) return true;
-    }
-    return false;
+    return prices.length > 0 ? Math.min(...prices) : null;
   }
 
   function normalizeImageUrl(rawUrl) {
-    if (!rawUrl || typeof rawUrl !== "string") return "";
+    if (typeof rawUrl !== "string" || !rawUrl.trim()) return "";
 
     try {
-      const parsed = new URL(rawUrl.trim(), document.baseURI);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
-
-      parsed.pathname = parsed.pathname
-        .replace(/(\.(?:jpe?g|png|webp))_\d+x\d+(?:q\d+)?\.(?:jpe?g|png|webp)$/i, "$1")
-        .replace(/_\d+x\d+(?:q\d+)?(?=\.(?:jpe?g|png|webp)$)/i, "");
-
-      const normalized = parsed.href;
-      if (isExcludedImageUrl(normalized)) return "";
-      return normalized;
-    } catch (_) {
+      const url = new URL(rawUrl.trim(), document.baseURI);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+      const lowerUrl = url.href.toLowerCase();
+      for (const token of EXCLUDED_IMAGE_TOKENS) {
+        if (lowerUrl.includes(token)) return "";
+      }
+      return url.href;
+    } catch {
       return "";
     }
   }
 
-  function getSrcsetCandidates(srcset) {
-    if (!srcset) return [];
-
-    const candidates = [];
-    for (const item of srcset.split(",")) {
-      const parts = item.trim().split(/\s+/);
-      if (!parts[0]) continue;
-      const widthMatch = parts[1] ? parts[1].match(/^(\d+)w$/) : null;
-      candidates.push({
-        url: parts[0],
-        width: widthMatch ? Number(widthMatch[1]) : 0,
-      });
+  function getImageUrl(image) {
+    const attributes = ["data-zoom-image", "data-original", "data-large", "data-src", "src"];
+    for (const attribute of attributes.slice(0, -1)) {
+      const url = normalizeImageUrl(image.getAttribute(attribute));
+      if (url) return url;
     }
-
-    candidates.sort((left, right) => right.width - left.width);
-    return candidates;
+    return normalizeImageUrl(image.currentSrc || image.getAttribute("src"));
   }
 
-  function getImageUrlFromElement(element) {
-    if (!element) return "";
-
-    const preferredAttributes = [
-      "data-zoom-image",
-      "data-original",
-      "data-large",
-      "data-image",
-      "data-img",
-      "data-lazy-src",
-      "data-src",
-    ];
-
-    for (const attribute of preferredAttributes) {
-      const value = element.getAttribute(attribute);
-      if (value) {
-        const normalized = normalizeImageUrl(value);
-        if (normalized) return normalized;
+  function collectImages() {
+    const imageUrls = new Set();
+    for (const image of document.querySelectorAll("img")) {
+      const url = getImageUrl(image);
+      const width = Math.max(image.naturalWidth || 0, Number(image.getAttribute("width")) || 0);
+      const height = Math.max(image.naturalHeight || 0, Number(image.getAttribute("height")) || 0);
+      if (url && width >= 160 && height >= 160) {
+        imageUrls.add(url);
       }
+      if (imageUrls.size >= MAX_IMAGES) break;
     }
 
-    const srcsetCandidates = getSrcsetCandidates(element.getAttribute("srcset"));
-    for (const candidate of srcsetCandidates) {
-      const normalized = normalizeImageUrl(candidate.url);
-      if (normalized) return normalized;
+    const ogImage = document.querySelector('meta[property="og:image"]');
+    if (imageUrls.size < MAX_IMAGES && ogImage) {
+      const url = normalizeImageUrl(ogImage.content);
+      if (url) imageUrls.add(url);
     }
 
-    if (element instanceof HTMLImageElement && element.currentSrc) {
-      const currentSource = normalizeImageUrl(element.currentSrc);
-      if (currentSource) return currentSource;
-    }
-
-    return normalizeImageUrl(element.getAttribute("src") || "");
+    return Array.from(imageUrls).slice(0, MAX_IMAGES);
   }
 
-  function getImageCandidates() {
-    const candidates = new Map();
-    const imageElements = document.querySelectorAll("img");
-
-    for (const image of imageElements) {
-      const url = getImageUrlFromElement(image);
-      if (!url) continue;
-
-      const srcsetCandidates = getSrcsetCandidates(image.getAttribute("srcset"));
-      let rawSourceUrl = image.currentSrc || image.getAttribute("src") || "";
-      for (const candidate of srcsetCandidates) {
-        const candidateUrl = normalizeImageUrl(candidate.url);
-        if (candidateUrl === url) {
-          rawSourceUrl = candidate.url;
-          break;
-        }
-      }
-
-      candidates.set(url, {
-        url,
-        naturalWidth: image.naturalWidth || 0,
-        naturalHeight: image.naturalHeight || 0,
-        sourceUrl: normalizeImageUrl(rawSourceUrl),
-      });
-    }
-
-    const openGraphImage = document.querySelector('meta[property="og:image"]');
-    if (openGraphImage) {
-      const url = normalizeImageUrl(openGraphImage.content);
-      if (url && !candidates.has(url)) {
-        candidates.set(url, { url, naturalWidth: 0, naturalHeight: 0, sourceUrl: "" });
-      }
-    }
-
-    return candidates;
-  }
-
-  function measureImage(url) {
-    return new Promise((resolve) => {
-      const image = new Image();
-      const timeout = window.setTimeout(() => {
-        image.onload = null;
-        image.onerror = null;
-        resolve({ width: 0, height: 0 });
-      }, 4000);
-
-      image.onload = () => {
-        window.clearTimeout(timeout);
-        resolve({ width: image.naturalWidth || 0, height: image.naturalHeight || 0 });
-      };
-      image.onerror = () => {
-        window.clearTimeout(timeout);
-        resolve({ width: 0, height: 0 });
-      };
-      image.src = url;
-    });
-  }
-
-  async function keepHighQualityImages(imageCandidates) {
-    const candidates = Array.from(imageCandidates.values());
-    const accepted = [];
-    let nextIndex = 0;
-
-    async function worker() {
-      while (nextIndex < candidates.length) {
-        const candidate = candidates[nextIndex];
-        nextIndex += 1;
-
-        let dimensions = { width: candidate.naturalWidth, height: candidate.naturalHeight };
-        if (
-          !dimensions.width ||
-          !dimensions.height ||
-          (candidate.sourceUrl && candidate.sourceUrl !== candidate.url)
-        ) {
-          dimensions = await measureImage(candidate.url);
-        }
-
-        if (dimensions.width >= 300 && dimensions.height >= 300) {
-          accepted.push(candidate.url);
-        }
-      }
-    }
-
-    const workerCount = Math.min(8, candidates.length);
-    const workers = [];
-    for (let index = 0; index < workerCount; index += 1) {
-      workers.push(worker());
-    }
-    await Promise.all(workers);
-    return accepted;
-  }
-
-  function getColorLabel(element) {
-    if (!element) return "";
-
-    const labelParts = [
-      element.getAttribute("title"),
+  function getChineseLabel(element) {
+    const candidates = [
       element.getAttribute("aria-label"),
+      element.getAttribute("title"),
       element.getAttribute("data-color"),
       element.getAttribute("alt"),
       element.textContent,
     ];
 
-    for (const part of labelParts) {
-      const text = String(part || "").replace(/\s+/g, " ").trim();
-      if (!text || text.length > 80 || !COLOR_MARKERS.test(text)) continue;
-
-      const chineseParts = text.match(/[\u3400-\u9fff]{1,16}/g) || [];
-      for (const chinesePart of chineseParts) {
-        if (COLOR_MARKERS.test(chinesePart)) return chinesePart;
-      }
+    for (const candidate of candidates) {
+      const label = String(candidate || "").replace(/\s+/g, " ").trim();
+      if (!label || label.length > 100) continue;
+      const chineseText = label.match(/[\u3400-\u9fff]{1,20}/g);
+      if (chineseText && chineseText.length > 0) return chineseText.join("");
     }
-
     return "";
   }
 
-  function getBackgroundImageUrl(element) {
-    try {
-      const backgroundImage = window.getComputedStyle(element).backgroundImage;
-      const match = backgroundImage.match(/url\((["']?)(.*?)\1\)/i);
-      return match ? normalizeImageUrl(match[2]) : "";
-    } catch (_) {
-      return "";
-    }
-  }
-
-  function getAssociatedImageUrl(container, sourceImage) {
-    const containerUrl = getImageUrlFromElement(container);
-    if (containerUrl) return containerUrl;
-
-    if (sourceImage) {
-      const imageUrl = getImageUrlFromElement(sourceImage);
-      if (imageUrl) return imageUrl;
-    }
-
-    const imageElements = container.querySelectorAll("img");
-    for (const image of imageElements) {
-      const imageUrl = getImageUrlFromElement(image);
-      if (imageUrl) return imageUrl;
-    }
-
-    return getBackgroundImageUrl(container);
-  }
-
-  function extractVisualSkuMap() {
-    const visualSkuMap = [];
-    const seenColors = new Set();
-    const images = document.querySelectorAll("img");
-
-    for (const image of images) {
-      let container = image.parentElement;
-      let depth = 0;
-
-      while (container && depth < 6) {
-        const rawColor = getColorLabel(container);
-        if (rawColor) {
-          const imageUrl = getAssociatedImageUrl(container, image);
-          if (imageUrl && !seenColors.has(rawColor)) {
-            seenColors.add(rawColor);
-            visualSkuMap.push({ raw_color: rawColor, image_url: imageUrl });
-          }
-          break;
-        }
-        container = container.parentElement;
-        depth += 1;
+  function findControlImage(control) {
+    let current = control;
+    for (let depth = 0; current && depth < 4; depth += 1) {
+      const images = current.querySelectorAll("img");
+      if (images.length === 1) {
+        const image = images[0];
+        const url = getImageUrl(image);
+        if (url) return url;
       }
+      if (images.length > 1) return "";
+      current = current.parentElement;
     }
+    return "";
+  }
 
+  function collectVisualSkuMap() {
+    const seen = new Set();
+    const result = [];
     const controls = document.querySelectorAll(
-      'button, [role="button"], [role="radio"], [role="option"], [aria-pressed], [aria-selected], label, a, [data-image], [data-img], [data-color]'
+      'button, label, [role="radio"], [role="option"], [aria-label], [data-color]'
     );
-    for (const control of controls) {
-      const rawColor = getColorLabel(control);
-      if (!rawColor || seenColors.has(rawColor)) continue;
 
-      const imageUrl = getAssociatedImageUrl(control, null);
-      if (imageUrl) {
-        seenColors.add(rawColor);
-        visualSkuMap.push({ raw_color: rawColor, image_url: imageUrl });
-      }
+    for (const control of controls) {
+      const rawColor = getChineseLabel(control);
+      if (!rawColor || seen.has(rawColor)) continue;
+      const imageUrl = findControlImage(control);
+      if (!imageUrl) continue;
+      seen.add(rawColor);
+      result.push({ raw_color: rawColor, image_url: imageUrl });
     }
 
-    return visualSkuMap;
+    return result;
   }
 
-  async function gatherProductData() {
-    const rawHtmlText = extractCleanTextLayer();
-    const imageCandidates = getImageCandidates();
-    const visualSkuMap = extractVisualSkuMap();
-
-    for (const item of visualSkuMap) {
-      if (!imageCandidates.has(item.image_url)) {
-        imageCandidates.set(item.image_url, {
-          url: item.image_url,
-          naturalWidth: 0,
-          naturalHeight: 0,
-          sourceUrl: "",
-        });
-      }
-    }
-
-    const images = await keepHighQualityImages(imageCandidates);
-    const highQualityImages = new Set(images);
-    const highQualitySkuMap = [];
-    for (const item of visualSkuMap) {
-      if (highQualityImages.has(item.image_url)) {
-        highQualitySkuMap.push(item);
-      }
-    }
-
+  function gatherProductData() {
+    const rawText = getPageText();
     return {
-      raw_html_text: rawHtmlText,
+      raw_text: rawText,
       raw_title: document.title || "",
-      price_cny: extractBasePriceCny(rawHtmlText),
-      images,
+      price_cny: getBasePrice(rawText),
+      images: collectImages(),
       original_link: window.location.href,
-      visual_sku_map: highQualitySkuMap,
-      weight_kg: 0.5,
+      visual_sku_map: collectVisualSkuMap(),
       use_gemini: true,
     };
   }
@@ -383,38 +189,60 @@
       color: "#0f172a",
       boxShadow: "0 20px 60px rgba(0,0,0,.35)",
     });
-    panel.innerHTML = `
-      <h2 style="margin:0 0 10px;font-size:20px">M.Savdo — умный импорт</h2>
-      <p id="msavdo-import-summary" style="margin:0 0 18px;color:#475569">Подготовка текста страницы, цены и изображений…</p>
-      <p id="msavdo-import-status" style="min-height:20px;margin:0 0 16px;font-size:13px"></p>
-      <div style="display:flex;justify-content:flex-end;gap:10px">
-        <button id="msavdo-import-close" type="button" style="padding:10px 14px;border:0;border-radius:9px;background:#e2e8f0;cursor:pointer">Закрыть</button>
-        <button id="msavdo-import-submit" type="button" disabled style="padding:10px 16px;border:0;border-radius:9px;background:#111827;color:#fff;font-weight:700;cursor:pointer">Умный ИИ Импорт</button>
-      </div>
-    `;
 
+    const title = document.createElement("h2");
+    title.textContent = "M.Savdo — Умный ИИ Импорт";
+    Object.assign(title.style, { margin: "0 0 10px", fontSize: "20px" });
+
+    const summary = document.createElement("p");
+    summary.textContent = "Подготовка текста страницы, цены и фотографий…";
+    Object.assign(summary.style, { margin: "0 0 18px", color: "#475569" });
+
+    const disclosure = document.createElement("p");
+    disclosure.textContent = "После нажатия кнопки текст страницы, цена и ссылки на фотографии будут отправлены на сервер, указанный в настройках расширения.";
+    Object.assign(disclosure.style, { margin: "0 0 14px", color: "#64748b", fontSize: "12px" });
+
+    const status = document.createElement("p");
+    Object.assign(status.style, { minHeight: "20px", margin: "0 0 16px", fontSize: "13px" });
+
+    const buttons = document.createElement("div");
+    Object.assign(buttons.style, { display: "flex", justifyContent: "flex-end", gap: "10px" });
+
+    const closeButton = document.createElement("button");
+    closeButton.type = "button";
+    closeButton.textContent = "Закрыть";
+    Object.assign(closeButton.style, { padding: "10px 14px", border: "0", borderRadius: "9px", background: "#e2e8f0", cursor: "pointer" });
+
+    const submitButton = document.createElement("button");
+    submitButton.type = "button";
+    submitButton.disabled = true;
+    submitButton.textContent = "Умный ИИ Импорт";
+    Object.assign(submitButton.style, { padding: "10px 16px", border: "0", borderRadius: "9px", background: "#111827", color: "#fff", fontWeight: "700", cursor: "pointer" });
+
+    buttons.append(closeButton, submitButton);
+    panel.append(title, summary, disclosure, status, buttons);
     overlay.appendChild(panel);
     (document.body || document.documentElement).appendChild(overlay);
 
-    const summary = panel.querySelector("#msavdo-import-summary");
-    const status = panel.querySelector("#msavdo-import-status");
-    const submitButton = panel.querySelector("#msavdo-import-submit");
     let payload = null;
-
-    panel.querySelector("#msavdo-import-close").addEventListener("click", () => overlay.remove());
+    closeButton.addEventListener("click", () => overlay.remove());
     submitButton.addEventListener("click", async () => {
+      if (!payload || !Number.isFinite(payload.price_cny)) {
+        status.style.color = "#b91c1c";
+        status.textContent = "На странице не найдена цена в юанях. Импорт остановлен, чтобы не подставлять цену.";
+        return;
+      }
+
       submitButton.disabled = true;
       submitButton.textContent = "Отправка данных…";
       status.textContent = "";
-
       try {
         const response = await sendRuntimeMessage({ action: "importProduct", payload });
         if (!response || !response.success) {
           throw new Error(response?.error || "Сервер не сохранил товар");
         }
-
         status.style.color = "#047857";
-        status.textContent = `Товар отправлен на импорт: ${response.product?.title || "успешно"}`;
+        status.textContent = `Товар импортирован: ${response.product?.title || "успешно"}`;
         submitButton.textContent = "Импорт завершён";
       } catch (error) {
         status.style.color = "#b91c1c";
@@ -424,33 +252,36 @@
       }
     });
 
-    gatherProductData()
-      .then((productPayload) => {
-        payload = productPayload;
-        summary.textContent =
-          `Цена: ¥${payload.price_cny} · Качественных фото: ${payload.images.length} · ` +
-          `Цветов с фото: ${payload.visual_sku_map.length} · Текст страницы: ${payload.raw_html_text.length} символов`;
-        submitButton.disabled = false;
-      })
-      .catch((error) => {
-        summary.textContent = `Не удалось собрать данные страницы: ${error.message}`;
-      });
+    try {
+      payload = gatherProductData();
+      summary.textContent = Number.isFinite(payload.price_cny)
+        ? `Цена: ¥${payload.price_cny} · Фото: ${payload.images.length} · Цветов с фото: ${payload.visual_sku_map.length} · Текст страницы: ${payload.raw_text.length} символов`
+        : `Цена в юанях не найдена · Фото: ${payload.images.length} · Текст страницы: ${payload.raw_text.length} символов`;
+      submitButton.disabled = !Number.isFinite(payload.price_cny);
+      if (!Number.isFinite(payload.price_cny)) {
+        status.style.color = "#b91c1c";
+        status.textContent = "Импорт недоступен без распознанной цены в юанях.";
+      }
+    } catch (error) {
+      summary.textContent = `Не удалось собрать данные страницы: ${error.message}`;
+    }
   }
 
-  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request.action === "openImporterModal" || request.action === "triggerImport") {
       showImporterModal();
-      sendResponse({ success: true, message: "Импортер активирован" });
+      sendResponse({ success: true, message: "Импортёр открыт" });
       return false;
     }
 
     if (request.action === "gatherProductData") {
-      gatherProductData()
-        .then((payload) => sendResponse({ success: true, payload }))
-        .catch((error) => sendResponse({ success: false, error: error.message }));
-      return true;
+      try {
+        sendResponse({ success: true, payload: gatherProductData() });
+      } catch (error) {
+        sendResponse({ success: false, error: error.message });
+      }
+      return false;
     }
-
     return false;
   });
 })();

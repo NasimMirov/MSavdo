@@ -67,14 +67,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
         {/* Срок доставки */}
         {isStock ? (
-          <div className="absolute top-2.5 right-2.5 bg-emerald-600/95 backdrop-blur-md text-white text-[9px] font-bold px-2 py-0.5 rounded-md shadow-xs border border-emerald-400/40 flex items-center gap-1">
+          <div className="absolute top-2.5 right-2.5 max-w-[75%] whitespace-normal break-words bg-emerald-600/95 backdrop-blur-md text-white text-[9px] font-bold px-2 py-0.5 rounded-md shadow-xs border border-emerald-400/40 flex items-center gap-1">
             <Truck className="w-3 h-3 text-white" />
-            <span>В наличии (1 день)</span>
+            <span className="min-w-0 leading-tight">В наличии (Доставка 1 день)</span>
           </div>
         ) : (
-          <div className="absolute top-2.5 right-2.5 bg-black/85 backdrop-blur-md text-amber-300 text-[9px] font-bold px-2 py-0.5 rounded-md shadow-xs border border-amber-400/20 flex items-center gap-1">
+          <div className="absolute top-2.5 right-2.5 max-w-[75%] whitespace-normal break-words bg-black/85 backdrop-blur-md text-amber-300 text-[9px] font-bold px-2 py-0.5 rounded-md shadow-xs border border-amber-400/20 flex items-center gap-1">
             <Clock className="w-3 h-3 text-amber-400" />
-            <span>Под заказ 15–30 дн.</span>
+            <span className="min-w-0 leading-tight">Под заказ: 15-30 дней напрямую с фабрики</span>
           </div>
         )}
 

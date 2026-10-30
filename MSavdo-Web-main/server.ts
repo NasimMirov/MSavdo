@@ -266,6 +266,14 @@ for (const existingOrder of existingOrdersForItems) {
   }
 }
 
+const ADMIN_PRODUCT_CATEGORIES = [
+  'Мужская коллекция',
+  'Женская коллекция',
+  'Премиальная обувь',
+  'Аудио и смарт-гаджеты',
+  'Игрушки и хобби',
+];
+
 const FIXED_CATEGORY_TREE = [
   {
     name: 'Одежда, обувь и аксессуары',
@@ -327,6 +335,10 @@ const FIXED_CATEGORY_TREE = [
       'Товары для кемпинга и туризма',
       'Автоэлектроника и аксессуары',
     ],
+  },
+  {
+    name: 'Коллекции M.Savdo',
+    subcategories: ADMIN_PRODUCT_CATEGORIES,
   },
 ];
 
@@ -574,12 +586,24 @@ if (knownDefaultAdmin.length > 0) {
 // ЦЕНООБРАЗОВАНИЕ В TJS
 // ==========================================
 function calculateVariantPriceTjs(priceCny: number, weightKg: number = 0.5): number {
-  const rate = parseFloat(getSetting('cny_tjs_rate', '1.45')) || 1.45;
   const numCny = Number.isFinite(Number(priceCny)) ? Number(priceCny) : 0;
   const numWeight = Number.isFinite(Number(weightKg)) ? Number(weightKg) : 0.5;
   const markup = numCny <= 20 ? 2.0 : numCny <= 100 ? 1.6 : 1.3;
 
-  return Math.round((numCny * rate * markup) + (numWeight * 30));
+  return Math.round((numCny * 1.45 * markup) + (numWeight * 30));
+}
+
+const storedVariantsForRepricing = db.prepare(
+  'SELECT id, price_cny, weight_kg FROM product_variants'
+).all() as Array<{ id: number; price_cny: number; weight_kg: number }>;
+const updateStoredVariantPrice = db.prepare(
+  'UPDATE product_variants SET price_tjs = ? WHERE id = ?'
+);
+for (const variant of storedVariantsForRepricing) {
+  updateStoredVariantPrice.run(
+    calculateVariantPriceTjs(variant.price_cny, variant.weight_kg),
+    variant.id
+  );
 }
 
 // Генераторы артикулов SKU
@@ -1030,20 +1054,33 @@ function resolveCategoryId(categoryName: string): number {
   return getFixedSubcategoryId(categoryName);
 }
 
+function determineAdminCategoryFallback(title: string): string {
+  const lowerTitle = title.toLocaleLowerCase('ru');
+  if (/(игруш|хобби|конструктор|пазл|кукл|радиоуправ|дрон|квадрокоптер)/i.test(lowerTitle)) {
+    return 'Игрушки и хобби';
+  }
+  if (/(наушник|гарнитур|аудио|колонк|смарт.?час|гаджет|электрон|микрофон)/i.test(lowerTitle)) {
+    return 'Аудио и смарт-гаджеты';
+  }
+  if (/(обув|кроссов|кед|ботин|туфл|сапог|сандал|сланц)/i.test(lowerTitle)) {
+    return 'Премиальная обувь';
+  }
+  if (/(женск|женщин|девушк|плать|юбк|блузк)/i.test(lowerTitle)) {
+    return 'Женская коллекция';
+  }
+  return 'Мужская коллекция';
+}
+
 async function resolveCategoryWithAi(title: string): Promise<string> {
   const cleanTitle = (title || '').trim();
-  if (!cleanTitle) return 'Мужская одежда';
+  if (!cleanTitle) return 'Мужская коллекция';
 
   if (!aiClient) {
-    return determineSubcategoryRuleBased(cleanTitle);
+    return determineAdminCategoryFallback(cleanTitle);
   }
 
   try {
-    const categoryOptions = STRICT_ALLOWED_CATEGORIES.join('\n- ');
-    const prompt = `Ты классификатор каталога. По названию товара "${cleanTitle}" выбери ровно одну наиболее подходящую существующую подкатегорию. Новые категории создавать нельзя.
-Допустимые подкатегории:
-- ${categoryOptions}
-Ответь только точным названием одной подкатегории.`;
+    const prompt = `Определи категорию для товара. Выбери строго один вариант из списка: ${ADMIN_PRODUCT_CATEGORIES.join(', ')}. Верни только название.\nТовар: ${cleanTitle}`;
 
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('AI Category Timeout')), 6000)
@@ -1055,15 +1092,15 @@ async function resolveCategoryWithAi(title: string): Promise<string> {
 
     const response = await Promise.race([generatePromise, timeoutPromise]);
     const rawCategory = response.text ? response.text.trim().replace(/["'`.]/g, '') : '';
-    for (const category of STRICT_ALLOWED_CATEGORIES) {
+    for (const category of ADMIN_PRODUCT_CATEGORIES) {
       if (rawCategory.toLocaleLowerCase('ru') === category.toLocaleLowerCase('ru')) {
         return category;
       }
     }
-    return determineSubcategoryRuleBased(cleanTitle);
+    return determineAdminCategoryFallback(cleanTitle);
   } catch (error: any) {
     console.warn('[Gemini AI Category Warning]', error.message);
-    return determineSubcategoryRuleBased(cleanTitle);
+    return determineAdminCategoryFallback(cleanTitle);
   }
 }
 
@@ -1951,10 +1988,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
         const vWeight = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 0.5;
         const parsedCny = Number(v.price_cny);
         const vCny = Number.isFinite(parsedCny) && parsedCny >= 0 ? parsedCny : 0;
-        const requestedTjs = Number(v.price_tjs);
-        const vTjs = Number.isFinite(requestedTjs) && requestedTjs >= 0
-          ? Math.round(requestedTjs)
-          : calculateVariantPriceTjs(vCny, vWeight);
+        const vTjs = calculateVariantPriceTjs(vCny, vWeight);
         const parsedStock = Number(v.stock);
         const vStock = Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 10;
         const vSku = typeof v.variant_sku === 'string' && v.variant_sku.trim()
@@ -2096,10 +2130,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
         const vWeight = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 0.5;
         const parsedCny = Number(v.price_cny);
         const vCny = Number.isFinite(parsedCny) && parsedCny >= 0 ? parsedCny : 0;
-        const requestedTjs = Number(v.price_tjs);
-        const vTjs = Number.isFinite(requestedTjs) && requestedTjs >= 0
-          ? Math.round(requestedTjs)
-          : calculateVariantPriceTjs(vCny, vWeight);
+        const vTjs = calculateVariantPriceTjs(vCny, vWeight);
         const parsedStock = Number(v.stock);
         const vStock = Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 10;
         const vSku = v.variant_sku || generateVariantSku(baseSku, vColor, vSize);
@@ -2618,26 +2649,24 @@ app.post('/api/admin/categories', requireAdmin, (req, res) => {
 app.get('/api/settings', (_req, res) => {
   return res.json({
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
-    delivery_per_kg_tjs: getSetting('delivery_per_kg_tjs', '30'),
+    delivery_per_kg_tjs: '30',
   });
 });
 
 app.get('/api/admin/settings', requireAdmin, (_req, res) => {
   return res.json({
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
-    delivery_per_kg_tjs: getSetting('delivery_per_kg_tjs', '30'),
-    cny_tjs_rate: getSetting('cny_tjs_rate', '1.45'),
+    delivery_per_kg_tjs: '30',
+    cny_tjs_rate: '1.45',
   });
 });
 
 app.post('/api/admin/settings', requireAdmin, (req, res) => {
   try {
-    const { whatsapp_phone, delivery_per_kg_tjs, cny_tjs_rate } = req.body;
+    const { whatsapp_phone } = req.body;
     if (whatsapp_phone) setSetting('whatsapp_phone', String(whatsapp_phone).trim());
-    if (delivery_per_kg_tjs) setSetting('delivery_per_kg_tjs', String(delivery_per_kg_tjs).trim());
-    if (cny_tjs_rate) setSetting('cny_tjs_rate', String(cny_tjs_rate).trim());
 
-    // Пересчет цен всех вариантов в базе по новому курсу/доставке
+    // Keep stored prices consistent with the fixed pricing formula.
     const allVariants = db.prepare('SELECT id, price_cny, weight_kg FROM product_variants').all() as Array<{ id: number; price_cny: number; weight_kg: number }>;
     const updateV = db.prepare('UPDATE product_variants SET price_tjs = ? WHERE id = ?');
     for (const v of allVariants) {
@@ -2645,7 +2674,7 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
       updateV.run(newTjs, v.id);
     }
 
-    return res.json({ success: true, message: 'Настройки сохранены и все цены вариантов пересчитаны' });
+    return res.json({ success: true, message: 'Контакт сохранён, цены вариантов пересчитаны по фиксированной формуле' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

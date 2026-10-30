@@ -49,6 +49,11 @@ interface AdminPanelProps {
   onRefreshCatalog: () => void;
 }
 
+function calculatePriceTjs(priceCny: number, weightKg: number): number {
+  const markup = priceCny <= 20 ? 2 : priceCny <= 100 ? 1.6 : 1.3;
+  return Math.round((priceCny * 1.45 * markup) + (weightKg * 30));
+}
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({
   onBack,
   onRefreshCatalog,
@@ -398,7 +403,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       delivery_type: 'order',
       status: 'active',
       category_id: null,
-      category_name: 'Определится через ИИ Gemini 3.8 Flash',
+      category_name: 'Категория будет определена автоматически через Gemini',
       main_image: '',
       images: [],
       video_url: '',
@@ -1828,42 +1833,42 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <span>Финансовые и логистические параметры</span>
             </h3>
             <p className="text-xs text-slate-500 mt-1">
-              Курс пересчета юаня в сомони и стоимость авиа-доставки из Китая в Душанбе
+              Фиксированная формула розничной цены и контакты для заказов
             </p>
           </div>
 
           <form onSubmit={handleSaveSettings} className="space-y-4 text-xs">
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                Курс юаня (1 CNY в сомони TJS)
+                Курс юаня (фиксировано: 1 CNY = 1.45 TJS)
               </label>
               <input
                 type="number"
                 step="0.01"
                 required
+                readOnly
                 value={settings.cny_tjs_rate}
-                onChange={(e) => setSettings({ ...settings, cny_tjs_rate: e.target.value })}
-                className="w-full p-3 border border-slate-300 rounded-xl text-sm font-mono font-bold"
+                className="w-full p-3 border border-slate-300 rounded-xl text-sm font-mono font-bold bg-slate-100"
               />
               <span className="text-[10px] text-slate-400">
-                Закупочная цена в юанях умножается на этот курс и коэффициент наценки.
+                Наценка: до 20 CNY — ×2.0; до 100 CNY — ×1.6; выше — ×1.3.
               </span>
             </div>
 
             <div>
               <label className="block font-bold text-slate-700 mb-1">
-                Тариф доставки за 1 килограмм (TJS)
+                Доставка за килограмм (фиксировано: 30 TJS)
               </label>
               <input
                 type="number"
                 step="1"
                 required
+                readOnly
                 value={settings.delivery_per_kg_tjs}
-                onChange={(e) => setSettings({ ...settings, delivery_per_kg_tjs: e.target.value })}
-                className="w-full p-3 border border-slate-300 rounded-xl text-sm font-mono font-bold"
+                className="w-full p-3 border border-slate-300 rounded-xl text-sm font-mono font-bold bg-slate-100"
               />
               <span className="text-[10px] text-slate-400">
-                По регламенту: 30 сомони за 1 кг. Добавляется к цене каждого варианта исходя из его веса.
+                Итог: round((цена CNY × 1.45 × коэффициент) + (вес, кг × 30)).
               </span>
             </div>
 
@@ -2838,9 +2843,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           required
                           min="0"
                           step="1"
-                          value={v.price_tjs ?? 0}
-                          onChange={(e) => handleUpdateVariantField(vIdx, 'price_tjs', Number(e.target.value))}
-                          className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-black text-slate-900 focus:border-amber-400 outline-none"
+                          value={calculatePriceTjs(Number(v.price_cny) || 0, Number(v.weight_kg) || 0.5)}
+                          readOnly
+                          className="w-full p-2 bg-slate-100 border border-slate-300 rounded-xl text-xs font-mono font-black text-slate-900"
                         />
                       </div>
                       <div className="sm:col-span-1">

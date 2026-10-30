@@ -376,12 +376,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   {product.delivery_type === 'stock' ? (
                     <div className="text-xs sm:text-sm font-bold text-emerald-700 mt-0.5 flex items-center gap-1.5 justify-end">
                       <Truck className="w-4 h-4 text-emerald-600 shrink-0" />
-                      <span>В наличии (1 день)</span>
+                      <span className="max-w-[72%] whitespace-normal break-words text-right leading-tight">В наличии (Доставка 1 день)</span>
                     </div>
                   ) : (
                     <div className="text-xs sm:text-sm font-bold text-amber-600 mt-0.5 flex items-center gap-1.5 justify-end">
                       <Clock className="w-4 h-4 text-amber-500 shrink-0" />
-                      <span>Под заказ 15–30 дней</span>
+                      <span className="max-w-[72%] whitespace-normal break-words text-right leading-tight">Под заказ: 15-30 дней напрямую с фабрики</span>
                     </div>
                   )}
                 </div>
@@ -391,12 +391,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               {product.delivery_type === 'stock' ? (
                 <div className="mt-3 p-3 bg-emerald-50/90 border border-emerald-300 rounded-2xl flex items-center gap-2.5 text-xs text-emerald-950 shadow-xs">
                   <Truck className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span><strong>🚚 В наличии на складе в Душанбе:</strong> доставка курьером за 1 день</span>
+                  <span><strong>В наличии (Доставка 1 день)</strong> — на складе в Душанбе</span>
                 </div>
               ) : (
                 <div className="mt-3 p-3 bg-amber-50/90 border border-amber-200/90 rounded-2xl flex items-center gap-2.5 text-xs text-slate-800 shadow-xs">
                   <Clock className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span><strong>⏳ Под заказ:</strong> 15-30 дней напрямую с фабрики</span>
+                  <span><strong>Под заказ: 15-30 дней напрямую с фабрики</strong></span>
                 </div>
               )}
 
@@ -562,16 +562,18 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                             <p className="line-clamp-2 min-h-9 text-xs font-semibold leading-4 text-slate-800">
                               {related.title}
                             </p>
-                            <div className="flex min-h-5 items-center justify-between gap-1">
+                            <div className="flex min-h-10 items-center justify-between gap-1">
                               <span className="text-sm font-extrabold text-emerald-700">
                                 {Number(related.min_price_tjs || 0).toLocaleString('ru-RU')} TJS
                               </span>
-                              <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold ${
+                              <span className={`min-w-0 max-w-[65%] whitespace-normal break-words rounded-full px-2 py-1 text-right text-[9px] font-bold leading-tight ${
                                 related.delivery_type === 'stock'
                                   ? 'bg-emerald-100 text-emerald-800'
                                   : 'bg-amber-100 text-amber-800'
                               }`}>
-                                {related.delivery_type === 'stock' ? 'В наличии' : 'Под заказ'}
+                                {related.delivery_type === 'stock'
+                                  ? 'В наличии (Доставка 1 день)'
+                                  : 'Под заказ: 15-30 дней напрямую с фабрики'}
                               </span>
                             </div>
                           </div>
