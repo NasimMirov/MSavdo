@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Product, ProductVariant, Category, Order } from '../types';
 import { 
   AlertTriangle, 
@@ -44,6 +44,30 @@ import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
 import { apiFetch } from '../api';
 
+interface TelegramLoginResult {
+  id_token?: string;
+  error?: string;
+}
+
+interface TelegramLoginConfig {
+  client_id: number;
+  nonce: string;
+}
+
+declare global {
+  interface Window {
+    Telegram?: {
+      Login?: {
+        init: (
+          options: { client_id: number; scope: string[]; nonce: string; lang: string },
+          callback: (result: TelegramLoginResult) => void,
+        ) => void;
+        open: (callback?: (result: TelegramLoginResult) => void) => void;
+      };
+    };
+  }
+}
+
 interface AdminPanelProps {
   onBack: () => void;
   onRefreshCatalog: () => void;
@@ -60,10 +84,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 }) => {
   // Авторизация
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loginUsername, setLoginUsername] = useState('admin');
-  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [isTelegramLoginReady, setIsTelegramLoginReady] = useState(false);
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
@@ -131,34 +154,96 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
   }, []);
 
-  useEffect(() => {
-    if (isAuthenticated) loadAdminData();
-  }, [isAuthenticated]);
+  const completeTelegramLogin = useCallback(async (result: TelegramLoginResult) => {
+    if (result.error) {
+      setLoginError('Вход через Telegram отменён или не выполнен. Попробуйте ещё раз.');
+      return;
+    }
+    if (!result.id_token) {
+      setLoginError('Telegram не вернул подтверждение входа. Попробуйте ещё раз.');
+      return;
+    }
 
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
     setIsLoggingIn(true);
     setLoginError('');
-
     try {
-      const res = await adminFetch('/api/admin/login', {
+      const response = await apiFetch('/api/admin/telegram-auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+        body: JSON.stringify({ id_token: result.id_token }),
       });
-      const data = await res.json();
-
-      if (res.ok && data.success) {
+      const data = await response.json();
+      if (response.ok && data.success) {
         setIsAuthenticated(true);
       } else {
-        setLoginError(data.error || 'Ошибка входа');
+        setLoginError(data.error || 'Не удалось войти через Telegram');
       }
-    } catch (err: any) {
-      setLoginError(err.message || 'Ошибка сети');
+    } catch (error: any) {
+      setLoginError(error.message || 'Ошибка соединения с сервером');
     } finally {
       setIsLoggingIn(false);
     }
+  }, []);
+
+  useEffect(() => {
+    if (isAuthenticated) return;
+    let active = true;
+    let script: HTMLScriptElement | undefined;
+
+    const initializeTelegramLogin = async () => {
+      try {
+        const response = await apiFetch('/api/admin/telegram-auth/config', { method: 'POST' });
+        const config = await response.json() as TelegramLoginConfig & { error?: string };
+        if (!response.ok) throw new Error(config.error || 'Не удалось настроить вход через Telegram');
+        if (!active) return;
+
+        script = document.createElement('script');
+        script.src = 'https://oauth.telegram.org/js/telegram-login.js?3';
+        script.async = true;
+        script.onload = () => {
+          if (!active) return;
+          const loginSdk = window.Telegram?.Login;
+          if (!loginSdk) {
+            setLoginError('Не удалось загрузить Telegram Login. Проверьте соединение и обновите страницу.');
+            return;
+          }
+          loginSdk.init({
+            client_id: config.client_id,
+            scope: ['profile'],
+            nonce: config.nonce,
+            lang: 'ru',
+          });
+          setIsTelegramLoginReady(true);
+        };
+        script.onerror = () => {
+          if (active) setLoginError('Не удалось загрузить Telegram Login. Проверьте соединение и обновите страницу.');
+        };
+        document.head.appendChild(script);
+      } catch (error: any) {
+        if (active) setLoginError(error.message || 'Не удалось настроить вход через Telegram');
+      }
+    };
+
+    void initializeTelegramLogin();
+    return () => {
+      active = false;
+      script?.remove();
+    };
+  }, [completeTelegramLogin, isAuthenticated]);
+
+  const openTelegramLogin = () => {
+    const loginSdk = window.Telegram?.Login;
+    if (!loginSdk) {
+      setLoginError('Telegram Login ещё загружается. Попробуйте немного позже.');
+      return;
+    }
+    setLoginError('');
+    loginSdk.open(completeTelegramLogin);
   };
+
+  useEffect(() => {
+    if (isAuthenticated) loadAdminData();
+  }, [isAuthenticated]);
 
   const handleLogout = () => {
     if (isAuthenticated) {
@@ -1022,38 +1107,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-4 text-xs">
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">Имя пользователя</label>
-              <input
-                type="text"
-                required
-                value={loginUsername}
-                onChange={(e) => setLoginUsername(e.target.value)}
-                className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
-              />
-            </div>
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">Пароль</label>
-              <input
-                type="password"
-                required
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
-              />
-            </div>
+          <div className="space-y-4 text-xs">
             <button
-              type="submit"
-              disabled={isLoggingIn}
-              className="w-full py-3.5 bg-slate-900 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm disabled:opacity-50"
+              type="button"
+              onClick={openTelegramLogin}
+              disabled={isLoggingIn || !isTelegramLoginReady}
+              className="w-full py-3.5 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm disabled:opacity-50"
             >
-              {isLoggingIn ? 'Проверка...' : 'Войти в панель управления'}
+              {isLoggingIn ? 'Проверка Telegram...' : isTelegramLoginReady ? 'Войти через Telegram' : 'Загрузка Telegram Login...'}
             </button>
             <div className="p-3 bg-slate-50 rounded-xl text-[11px] text-slate-500 text-center border border-slate-100">
-              Данные администратора задаются при настройке сервера. Для защищённой cookie-сессии откройте панель через HTTPS.
+              Доступ разрешён только двум Telegram-аккаунтам, настроенным на сервере. Откройте панель через HTTPS.
             </div>
-          </form>
+          </div>
         </div>
       </div>
     );

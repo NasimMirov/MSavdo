@@ -36,6 +36,20 @@ const adminJwtSecret = Buffer.from(jwtSecretEnv || crypto.randomBytes(64).toStri
 if (!jwtSecretEnv) {
   console.warn('[Admin Auth] ADMIN_JWT_SECRET не задан; JWT-сессии будут сброшены при перезапуске процесса');
 }
+const telegramLoginClientId = process.env.TELEGRAM_LOGIN_CLIENT_ID?.trim() || '';
+const adminTelegramIdList = (process.env.ADMIN_TELEGRAM_ALLOWED_IDS || '')
+  .split(',')
+  .map((id) => id.trim())
+  .filter(Boolean);
+const adminTelegramAllowedIds = new Set(adminTelegramIdList);
+const isTelegramLoginConfigured = /^\d+$/.test(telegramLoginClientId)
+  && Number.isSafeInteger(Number(telegramLoginClientId))
+  && adminTelegramIdList.length === 2
+  && adminTelegramIdList.every((id) => /^\d+$/.test(id))
+  && adminTelegramAllowedIds.size === 2;
+if (process.env.NODE_ENV === 'production' && !isTelegramLoginConfigured) {
+  throw new Error('Задайте TELEGRAM_LOGIN_CLIENT_ID и ровно два ADMIN_TELEGRAM_ALLOWED_IDS');
+}
 const adminAllowedOrigins = new Set([
   'https://msavdo.shop',
   'https://www.msavdo.shop',
@@ -160,6 +174,11 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS admin_revoked_tokens (
     token_id TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS admin_telegram_nonces (
+    nonce_hash TEXT PRIMARY KEY,
     expires_at INTEGER NOT NULL
   );
 
@@ -477,60 +496,6 @@ try {
   console.warn('[DB Sanitizer]', e);
 }
 
-const PASSWORD_KEY_LENGTH = 64;
-const PASSWORD_HASH_ROUNDS = 16384;
-const DISABLED_DEFAULT_ADMIN_HASH = 'disabled$default-admin-password';
-
-function legacyHashPassword(password: string): string {
-  return crypto.createHash('sha256').update(password + '_msavdo_salt').digest('hex');
-}
-
-function derivePasswordKey(password: string, salt: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    crypto.scrypt(
-      password,
-      salt,
-      PASSWORD_KEY_LENGTH,
-      { N: PASSWORD_HASH_ROUNDS, r: 8, p: 1, maxmem: 64 * 1024 * 1024 },
-      (error, derivedKey) => {
-        if (error) return reject(error);
-        return resolve(derivedKey);
-      },
-    );
-  });
-}
-
-async function hashPassword(password: string): Promise<string> {
-  const salt = crypto.randomBytes(16);
-  const derivedKey = await derivePasswordKey(password, salt);
-  return `scrypt$${salt.toString('base64url')}$${derivedKey.toString('base64url')}`;
-}
-
-async function verifyPassword(password: string, storedHash: string): Promise<{ valid: boolean; needsRehash: boolean }> {
-  if (storedHash.startsWith('scrypt$')) {
-    const parts = storedHash.split('$');
-    if (parts.length !== 3) return { valid: false, needsRehash: false };
-    const salt = Buffer.from(parts[1], 'base64url');
-    const expectedKey = Buffer.from(parts[2], 'base64url');
-    if (salt.length !== 16 || expectedKey.length !== PASSWORD_KEY_LENGTH) {
-      return { valid: false, needsRehash: false };
-    }
-    const actualKey = await derivePasswordKey(password, salt);
-    return {
-      valid: crypto.timingSafeEqual(actualKey, expectedKey),
-      needsRehash: false,
-    };
-  }
-
-  if (!/^[a-f0-9]{64}$/i.test(storedHash)) return { valid: false, needsRehash: false };
-  const actualHash = Buffer.from(legacyHashPassword(password), 'hex');
-  const expectedHash = Buffer.from(storedHash, 'hex');
-  return {
-    valid: crypto.timingSafeEqual(actualHash, expectedHash),
-    needsRehash: true,
-  };
-}
-
 // Настройки по умолчанию
 function getSetting(key: string, defaultValue: string): string {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
@@ -549,45 +514,6 @@ if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('delivery_per_kg
 }
 if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('whatsapp_phone')) {
   setSetting('whatsapp_phone', '992444431');
-}
-
-const initialAdminPassword = process.env.ADMIN_INITIAL_PASSWORD || '';
-const isStrongInitialPassword = initialAdminPassword.length >= 12
-  && initialAdminPassword.length <= 1024
-  && initialAdminPassword !== 'admin123';
-const adminCount = (db.prepare('SELECT COUNT(*) as count FROM admin_users').get() as { count: number }).count;
-if (adminCount === 0 && isStrongInitialPassword) {
-  const username = (process.env.ADMIN_INITIAL_USERNAME || 'admin').trim();
-  if (!username || username.length > 255) {
-    throw new Error('ADMIN_INITIAL_USERNAME должен содержать от 1 до 255 символов');
-  }
-  const initialPasswordHash = await hashPassword(initialAdminPassword);
-  db.prepare('INSERT INTO admin_users (username, password_hash) VALUES (?, ?)').run(username, initialPasswordHash);
-  console.log(`[Admin Auth] Создана учётная запись администратора: ${username}`);
-} else if (adminCount === 0) {
-  console.warn('[Admin Auth] Администратор не создан. Для первичной настройки задайте ADMIN_INITIAL_PASSWORD (не менее 12 символов).');
-}
-
-const passwordRecords = db.prepare('SELECT id, password_hash FROM admin_users').all() as Array<{ id: number; password_hash: string }>;
-const disableUnhashedPassword = db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?');
-for (const record of passwordRecords) {
-  if (record.password_hash.startsWith('scrypt$') || /^[a-f0-9]{64}$/i.test(record.password_hash)) continue;
-  disableUnhashedPassword.run('disabled$legacy-password-not-hashed', record.id);
-}
-
-const knownDefaultAdmin = db.prepare("SELECT id, username FROM admin_users WHERE password_hash = ? OR password_hash LIKE 'disabled$%'")
-  .all(legacyHashPassword('admin123')) as Array<{ id: number; username: string }>;
-if (knownDefaultAdmin.length > 0) {
-  const replacementHash = isStrongInitialPassword
-    ? await hashPassword(initialAdminPassword)
-    : DISABLED_DEFAULT_ADMIN_HASH;
-  const replaceDefaultPassword = db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?');
-  for (const admin of knownDefaultAdmin) {
-    replaceDefaultPassword.run(replacementHash, admin.id);
-    if (!isStrongInitialPassword) {
-      console.error(`[Admin Auth] Учётная запись ${admin.username} отключена или использовала небезопасный пароль. Задайте ADMIN_INITIAL_PASSWORD и перезапустите сервер.`);
-    }
-  }
 }
 
 // ==========================================
@@ -1120,17 +1046,39 @@ async function resolveCategoryWithAi(title: string): Promise<string> {
 // МИДЛВЕЙР АВТОРИЗАЦИИ АДМИНИСТРАТОРА
 // ==========================================
 const ADMIN_COOKIE_NAME = '__Host-msavdo_admin';
+const ADMIN_TELEGRAM_NONCE_COOKIE = '__Host-msavdo_telegram_nonce';
 const ADMIN_SESSION_SECONDS = 2 * 60 * 60;
 const blockedLoginIps = new Map<string, number>();
-const dummyPasswordSalt = Buffer.from('msavdo-admin-login-dummy-salt');
+const TELEGRAM_LOGIN_NONCE_SECONDS = 5 * 60;
 
 interface AdminJwtClaims {
   sub: number;
   username: string;
+  auth_method: 'telegram';
+  telegram_id: string;
   iat: number;
   exp: number;
   jti: string;
 }
+
+interface TelegramIdTokenClaims {
+  iss?: string;
+  aud?: string | string[];
+  sub?: string;
+  id?: number | string;
+  nonce?: string;
+  iat?: number;
+  exp?: number;
+  azp?: string;
+}
+
+type TelegramJwk = crypto.JsonWebKey & {
+  kid?: string;
+  alg?: string;
+  use?: string;
+};
+
+let telegramJwksCache: { expiresAt: number; keys: TelegramJwk[] } | null = null;
 
 function signAdminJwt(claims: AdminJwtClaims): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -1140,12 +1088,97 @@ function signAdminJwt(claims: AdminJwtClaims): string {
   return `${signingInput}.${signature}`;
 }
 
-function getAdminCookie(req: express.Request): string | null {
+async function getTelegramJwks(forceRefresh = false): Promise<TelegramJwk[]> {
+  if (!forceRefresh && telegramJwksCache && telegramJwksCache.expiresAt > Date.now()) {
+    return telegramJwksCache.keys;
+  }
+
+  const response = await fetch('https://oauth.telegram.org/.well-known/jwks.json', {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) {
+    throw new Error(`Telegram JWKS вернул HTTP ${response.status}`);
+  }
+  const payload = await response.json() as { keys?: TelegramJwk[] };
+  if (!Array.isArray(payload.keys) || payload.keys.length === 0) {
+    throw new Error('Telegram JWKS не содержит ключей подписи');
+  }
+
+  telegramJwksCache = { keys: payload.keys, expiresAt: Date.now() + 60 * 60 * 1000 };
+  return telegramJwksCache.keys;
+}
+
+async function verifyTelegramIdToken(
+  token: string,
+  expectedNonce: string,
+): Promise<TelegramIdTokenClaims | null> {
+  const parts = token.split('.');
+  if (parts.length !== 3 || parts.some((part) => !part)) return null;
+
+  let header: { alg?: string; kid?: string };
+  let claims: TelegramIdTokenClaims;
+  try {
+    header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (header.alg !== 'RS256' || typeof header.kid !== 'string') return null;
+
+  let keys = await getTelegramJwks();
+  let jwk = keys.find((key) => key.kid === header.kid && key.kty === 'RSA' && (!key.use || key.use === 'sig'));
+  if (!jwk) {
+    keys = await getTelegramJwks(true);
+    jwk = keys.find((key) => key.kid === header.kid && key.kty === 'RSA' && (!key.use || key.use === 'sig'));
+  }
+  if (!jwk) return null;
+
+  let isSignatureValid = false;
+  try {
+    const publicKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
+    isSignatureValid = crypto.verify(
+      'RSA-SHA256',
+      Buffer.from(`${parts[0]}.${parts[1]}`),
+      publicKey,
+      Buffer.from(parts[2], 'base64url'),
+    );
+  } catch {
+    return null;
+  }
+  if (!isSignatureValid) return null;
+
+  const now = Math.floor(Date.now() / 1000);
+  const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
+  if (
+    claims.iss !== 'https://oauth.telegram.org'
+    || !audiences.includes(telegramLoginClientId)
+    || (audiences.length > 1 && claims.azp !== telegramLoginClientId)
+    || claims.nonce !== expectedNonce
+    || typeof claims.sub !== 'string'
+    || !(
+      (typeof claims.id === 'number' && Number.isSafeInteger(claims.id) && claims.id > 0)
+      || (typeof claims.id === 'string' && /^\d+$/.test(claims.id))
+    )
+    || typeof claims.iat !== 'number'
+    || !Number.isInteger(claims.iat)
+    || typeof claims.exp !== 'number'
+    || !Number.isInteger(claims.exp)
+    || claims.iat > now + 30
+    || now - claims.iat > TELEGRAM_LOGIN_NONCE_SECONDS
+    || claims.exp <= now
+  ) {
+    return null;
+  }
+
+  return claims;
+}
+
+function getCookieValue(req: express.Request, name: string): string | null {
   const cookieHeader = req.headers.cookie;
   if (!cookieHeader) return null;
   for (const cookie of cookieHeader.split(';')) {
     const separator = cookie.indexOf('=');
-    if (separator < 0 || cookie.slice(0, separator).trim() !== ADMIN_COOKIE_NAME) continue;
+    if (separator < 0 || cookie.slice(0, separator).trim() !== name) continue;
     try {
       return decodeURIComponent(cookie.slice(separator + 1).trim());
     } catch {
@@ -1153,6 +1186,10 @@ function getAdminCookie(req: express.Request): string | null {
     }
   }
   return null;
+}
+
+function getAdminCookie(req: express.Request): string | null {
+  return getCookieValue(req, ADMIN_COOKIE_NAME);
 }
 
 function verifyAdminJwt(token: string): AdminJwtClaims | null {
@@ -1178,6 +1215,9 @@ function verifyAdminJwt(token: string): AdminJwtClaims | null {
   if (
     !Number.isInteger(payload.sub)
     || !payload.username
+    || payload.auth_method !== 'telegram'
+    || typeof payload.telegram_id !== 'string'
+    || !adminTelegramAllowedIds.has(payload.telegram_id)
     || !Number.isInteger(payload.exp)
     || payload.exp <= now
     || typeof payload.jti !== 'string'
@@ -1197,7 +1237,7 @@ function getRequestIp(req: express.Request): string {
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
-const loginRateLimiter = rateLimit({
+const telegramLoginRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 5,
   standardHeaders: 'draft-8',
@@ -1215,7 +1255,19 @@ const loginRateLimiter = rateLimit({
   },
 });
 
-function checkLoginIpBlock(req: express.Request, res: express.Response, next: express.NextFunction) {
+const telegramConfigRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+const publicAdminRoutes = new Set([
+  '/api/admin/telegram-auth/config',
+  '/api/admin/telegram-auth/login',
+]);
+
+function checkTelegramLoginIpBlock(req: express.Request, res: express.Response, next: express.NextFunction) {
   const clientIp = getRequestIp(req);
   const blockedUntil = blockedLoginIps.get(clientIp);
   if (!blockedUntil) return next();
@@ -1237,7 +1289,7 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 app.use('/api/admin', (req, res, next) => {
-  if (req.originalUrl.split('?')[0] === '/api/admin/login') return next();
+  if (publicAdminRoutes.has(req.originalUrl.split('?')[0])) return next();
   return requireAdmin(req, res, next);
 });
 
@@ -1245,48 +1297,76 @@ app.use('/api/admin', (req, res, next) => {
 // REST API МАРШРУТЫ
 // ==========================================
 
-// 1. АВТОРИЗАЦИЯ АДМИНИСТРАТОРА
-app.post('/api/admin/login', checkLoginIpBlock, loginRateLimiter, async (req, res) => {
+// 1. АВТОРИЗАЦИЯ АДМИНИСТРАТОРА ЧЕРЕЗ TELEGRAM
+app.post('/api/admin/telegram-auth/config', telegramConfigRateLimiter, (req, res) => {
+  if (!isTelegramLoginConfigured) {
+    return res.status(503).json({ error: 'Telegram-вход не настроен на сервере' });
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = crypto.randomBytes(32).toString('base64url');
+  const nonceHash = crypto.createHash('sha256').update(nonce).digest('hex');
+  const expiresAt = now + TELEGRAM_LOGIN_NONCE_SECONDS;
+  db.prepare('DELETE FROM admin_telegram_nonces WHERE expires_at <= ?').run(now);
+  db.prepare('INSERT INTO admin_telegram_nonces (nonce_hash, expires_at) VALUES (?, ?)').run(nonceHash, expiresAt);
+  res.cookie(ADMIN_TELEGRAM_NONCE_COOKIE, nonce, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'strict',
+    path: '/',
+    maxAge: TELEGRAM_LOGIN_NONCE_SECONDS * 1000,
+  });
+  return res.json({ client_id: Number(telegramLoginClientId), nonce });
+});
+
+app.post('/api/admin/telegram-auth/login', checkTelegramLoginIpBlock, telegramLoginRateLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body || {};
-    if (
-      typeof username !== 'string'
-      || typeof password !== 'string'
-      || !username.trim()
-      || !password
-      || username.length > 255
-      || password.length > 1024
-    ) {
-      return res.status(400).json({ error: 'Укажите имя пользователя и пароль' });
+    if (!isTelegramLoginConfigured) {
+      return res.status(503).json({ error: 'Telegram-вход не настроен на сервере' });
+    }
+    const idToken = req.body?.id_token;
+    const nonceCookie = getCookieValue(req, ADMIN_TELEGRAM_NONCE_COOKIE);
+    if (typeof idToken !== 'string' || idToken.length > 10000 || !nonceCookie) {
+      return res.status(400).json({ error: 'Не удалось проверить ответ Telegram. Обновите страницу и попробуйте снова.' });
+    }
+    const claims = await verifyTelegramIdToken(idToken, nonceCookie);
+    if (!claims) {
+      return res.status(401).json({ error: 'Подпись или срок действия ответа Telegram недействительны' });
     }
 
-    const user = db.prepare('SELECT * FROM admin_users WHERE username = ?').get(username.trim()) as {
-      id: number;
-      username: string;
-      password_hash: string;
-    } | undefined;
-    if (!user || user.password_hash.startsWith('disabled$')) {
-      await derivePasswordKey(password, dummyPasswordSalt);
-      return res.status(401).json({ error: 'Неверный логин или пароль администратора' });
+    const now = Math.floor(Date.now() / 1000);
+    const nonceHash = crypto.createHash('sha256').update(nonceCookie).digest('hex');
+    const consumedNonce = db.prepare(
+      'DELETE FROM admin_telegram_nonces WHERE nonce_hash = ? AND expires_at > ?',
+    ).run(nonceHash, now);
+    res.clearCookie(ADMIN_TELEGRAM_NONCE_COOKIE, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'strict',
+      path: '/',
+    });
+    if (consumedNonce.changes !== 1) {
+      return res.status(401).json({ error: 'Запрос входа уже использован или истёк. Начните вход заново.' });
+    }
+    const telegramUserId = String(claims.id);
+    if (!telegramUserId || !adminTelegramAllowedIds.has(telegramUserId)) {
+      return res.status(403).json({ error: 'Этот Telegram-аккаунт не разрешён для входа в админ-панель' });
     }
 
-    if (!user.password_hash.startsWith('scrypt$')) {
-      await derivePasswordKey(password, dummyPasswordSalt);
-    }
-    const verification = await verifyPassword(password, user.password_hash);
-    if (!verification.valid) {
-      return res.status(401).json({ error: 'Неверный логин или пароль администратора' });
-    }
-    if (verification.needsRehash) {
-      const upgradedHash = await hashPassword(password);
-      db.prepare('UPDATE admin_users SET password_hash = ? WHERE id = ?').run(upgradedHash, user.id);
-    }
+    const adminUsername = `telegram_${telegramUserId}`;
+    db.prepare(
+      'INSERT OR IGNORE INTO admin_users (username, password_hash) VALUES (?, ?)',
+    ).run(adminUsername, 'disabled$telegram-only');
+    const adminUser = db.prepare('SELECT id, username FROM admin_users WHERE username = ?')
+      .get(adminUsername) as { id: number; username: string } | undefined;
+    if (!adminUser) throw new Error('Не удалось создать внутреннюю учётную запись Telegram-администратора');
 
-    const issuedAt = Math.floor(Date.now() / 1000);
+    const issuedAt = now;
     const tokenId = crypto.randomUUID();
     const token = signAdminJwt({
-      sub: user.id,
-      username: user.username,
+      sub: adminUser.id,
+      username: adminUser.username,
+      auth_method: 'telegram',
+      telegram_id: telegramUserId,
       iat: issuedAt,
       exp: issuedAt + ADMIN_SESSION_SECONDS,
       jti: tokenId,
@@ -1298,10 +1378,10 @@ app.post('/api/admin/login', checkLoginIpBlock, loginRateLimiter, async (req, re
       path: '/',
       maxAge: ADMIN_SESSION_SECONDS * 1000,
     });
-    return res.json({ success: true, user: { id: user.id, username: user.username } });
+    return res.json({ success: true, user: { id: adminUser.id, username: adminUser.username } });
   } catch (error: any) {
-    console.error('[Admin Login Error]', error);
-    return res.status(500).json({ error: 'Не удалось выполнить вход администратора' });
+    console.error('[Telegram Admin Login Error]', error);
+    return res.status(500).json({ error: 'Не удалось выполнить вход через Telegram' });
   }
 });
 
