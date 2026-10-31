@@ -36,12 +36,17 @@ const adminJwtSecret = Buffer.from(jwtSecretEnv || crypto.randomBytes(64).toStri
 if (!jwtSecretEnv) {
   console.warn('[Admin Auth] ADMIN_JWT_SECRET не задан; JWT-сессии будут сброшены при перезапуске процесса');
 }
-const adminAllowedOrigins = new Set(
-  (process.env.ADMIN_ALLOWED_ORIGINS || '')
+const adminAllowedOrigins = new Set([
+  'https://msavdo.shop',
+  'https://www.msavdo.shop',
+  'https://api.msavdo.shop',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  ...(process.env.ADMIN_ALLOWED_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
-);
+]);
 
 // ==========================================
 // НАСТРОЙКА CORS
