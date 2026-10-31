@@ -60,7 +60,7 @@ declare global {
       Login?: {
         init: (
           options: { client_id: number; scope: string[]; nonce: string; lang: string },
-          callback: (result: TelegramLoginResult) => void,
+          callback?: (result: TelegramLoginResult) => void,
         ) => void;
         open: (callback?: (result: TelegramLoginResult) => void) => void;
       };

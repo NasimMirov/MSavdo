@@ -1289,7 +1289,8 @@ function requireAdmin(req: express.Request, res: express.Response, next: express
 }
 
 app.use('/api/admin', (req, res, next) => {
-  if (publicAdminRoutes.has(req.originalUrl.split('?')[0])) return next();
+  const requestPath = `${req.baseUrl}${req.path}`;
+  if (req.method === 'POST' && publicAdminRoutes.has(requestPath)) return next();
   return requireAdmin(req, res, next);
 });
 
