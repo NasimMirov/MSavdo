@@ -14,6 +14,9 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
+const MAX_IMPORT_TEXT_LENGTH = 6000;
+const GEMINI_IMPORT_MODEL = 'gemini-3.5-flash-lite';
+const GEMINI_IMPORT_TIMEOUT_MS = 10000;
 const trustProxyHops = process.env.TRUST_PROXY_HOPS;
 if (trustProxyHops) {
   const parsedTrustProxyHops = Number(trustProxyHops);
@@ -866,6 +869,13 @@ async function analyzeProductWithGemini(
     return fallback;
   }
 
+  const fallbackPromise = Promise.resolve()
+    .then(() => fallbackAnalysis(rawText, rawTitle, basePriceCny, weightKg))
+    .then(
+      (analysis) => ({ analysis }),
+      (error: unknown) => ({ error }),
+    );
+
   try {
     const skuMapSnippet = JSON.stringify(visualSkuMap || [], null, 2);
     const categoryOptions = STRICT_ALLOWED_CATEGORIES.join('\n   - ');
@@ -940,31 +950,26 @@ ${textSnippet}
 }`;
 
     let responseText = '';
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       const response = await Promise.race([
         aiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
+          model: GEMINI_IMPORT_MODEL,
           contents: prompt,
           config: {
             responseMimeType: 'application/json',
           },
         }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Таймаут Gemini API (30с)')), 30000)
-        )
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error(`Таймаут Gemini API (${GEMINI_IMPORT_TIMEOUT_MS}мс)`)),
+            GEMINI_IMPORT_TIMEOUT_MS,
+          );
+        }),
       ]);
       responseText = response.text?.trim() || '{}';
-    } catch (firstErr: any) {
-      console.warn('[Gemini 1st attempt warning]:', firstErr.message, 'Повторный запрос через 1.5с...');
-      await new Promise((r) => setTimeout(r, 1500));
-      const retryResponse = await aiClient.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
-      responseText = retryResponse.text?.trim() || '{}';
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
     }
 
     const parsed = JSON.parse(responseText);
@@ -1034,7 +1039,9 @@ ${textSnippet}
     };
   } catch (err: any) {
     console.warn('[Gemini AI Parse Error]', err.message);
-    const fb = fallbackAnalysis(rawText, rawTitle, basePriceCny, weightKg);
+    const fallbackResult = await fallbackPromise;
+    if ('error' in fallbackResult) throw fallbackResult.error;
+    const fb = fallbackResult.analysis;
     if (structuredContext?.specifications && structuredContext.specifications.length > 0) {
       fb.specifications = structuredContext.specifications;
     }
@@ -2221,7 +2228,7 @@ app.post('/api/add-product', async (req, res) => {
       youtube_url = '',
     } = req.body;
 
-    const fullRawText = (raw_html_text || raw_text || '').trim();
+    const fullRawText = (raw_html_text || raw_text || '').trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
     const effectiveTitle = (inputRawTitle || inputTitle || '').trim();
     const baseCny = parseFloat(price_cny) || 50;
     const initialWeight = parseFloat(weight_kg) || 0.5;
@@ -2255,9 +2262,9 @@ app.post('/api/add-product', async (req, res) => {
     let variantsToProcess: ParsedVariant[] = [];
     let specificationsToProcess: Array<{ name: string; value: string }> = [];
 
-    // Приоритет разбора: Gemini 3.8 Flash
+    // Приоритет разбора: Gemini Flash-Lite
     if (aiClient && fullRawText.length > 0) {
-      console.log('[Gemini 3.8 Flash] Интеллектуальный разбор с привязкой картинок visual_sku_map...');
+      console.log('[Gemini Flash-Lite] Интеллектуальный разбор с привязкой картинок visual_sku_map...');
       const aiAnalysis = await analyzeProductWithGemini(fullRawText, effectiveTitle, baseCny, initialWeight, visualSkuMap);
       finalTitle = aiAnalysis.title || effectiveTitle;
       finalDesc = inputDesc || aiAnalysis.description;

@@ -5,23 +5,76 @@
   window.__MSAVDO_CONTENT_SCRIPT_LOADED__ = true;
 
   const MODAL_ID = "msavdo-smart-import-modal";
-  const MAX_TEXT_LENGTH = 200000;
-  const MAX_IMAGES = 50;
+  const MAX_TEXT_LENGTH = 6000;
+  const MAX_IMAGES = 8;
   const EXCLUDED_IMAGE_TOKENS = ["logo", "avatar", "qrcode", "qr-code", "banner", "icon"];
 
-  function getPageText() {
-    if (!document.body) return "";
-    const bodyCopy = document.body.cloneNode(true);
-    for (const node of bodyCopy.querySelectorAll("script, style, noscript")) {
+  function getElementText(element) {
+    const copy = element.cloneNode(true);
+    for (const node of copy.querySelectorAll("script, style, noscript")) {
       node.remove();
     }
 
-    return (bodyCopy.innerText || bodyCopy.textContent || "")
+    return (copy.innerText || copy.textContent || "")
       .replace(/\r\n?/g, "\n")
       .replace(/[ \t]+/g, " ")
       .replace(/\n[ \t]*\n(?:[ \t]*\n)*/g, "\n\n")
-      .trim()
-      .slice(0, MAX_TEXT_LENGTH);
+      .trim();
+  }
+
+  function getPageText() {
+    if (!document.body) return "";
+
+    const textParts = [];
+    const seen = new Set();
+    let textLength = 0;
+    const appendText = (text) => {
+      const normalized = String(text || "").trim();
+      if (!normalized || seen.has(normalized) || textLength >= MAX_TEXT_LENGTH) return;
+      seen.add(normalized);
+      const separatorLength = textParts.length > 0 ? 2 : 0;
+      const remainingLength = MAX_TEXT_LENGTH - textLength - separatorLength;
+      if (remainingLength <= 0) return;
+      const part = normalized.slice(0, remainingLength);
+      textParts.push(part);
+      textLength += separatorLength + part.length;
+    };
+
+    appendText(document.querySelector("h1")?.innerText);
+    appendText(document.querySelector('meta[property="og:title"]')?.content);
+    appendText(document.title);
+
+    const textLengthBeforeProductData = textLength;
+    const productDataSelectors = [
+      '[class*="price" i]',
+      '[id*="price" i]',
+      '[class*="attribute" i]',
+      '[id*="attribute" i]',
+      '[class*="spec" i]',
+      '[id*="spec" i]',
+      '[class*="parameter" i]',
+      '[id*="parameter" i]',
+      '[class*="property" i]',
+      '[id*="property" i]',
+      "table",
+      "dl",
+    ];
+
+    for (const selector of productDataSelectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (element.closest("footer, nav, aside")) continue;
+        appendText(getElementText(element));
+        if (textLength >= MAX_TEXT_LENGTH) break;
+      }
+      if (textLength >= MAX_TEXT_LENGTH) break;
+    }
+
+    if (textLength === textLengthBeforeProductData) {
+      const mainContent = document.querySelector("main, article, [role='main']");
+      if (mainContent) appendText(getElementText(mainContent));
+    }
+
+    return textParts.join("\n\n");
   }
 
   function getBasePrice(text) {
@@ -126,6 +179,7 @@
     );
 
     for (const control of controls) {
+      if (result.length >= MAX_IMAGES) break;
       const rawColor = getChineseLabel(control);
       if (!rawColor || seen.has(rawColor)) continue;
       const imageUrl = findControlImage(control);
@@ -145,7 +199,7 @@
       price_cny: getBasePrice(rawText),
       images: collectImages(),
       original_link: window.location.href,
-      visual_sku_map: collectVisualSkuMap(),
+      visual_sku_map: collectVisualSkuMap().slice(0, MAX_IMAGES),
       use_gemini: true,
     };
   }
