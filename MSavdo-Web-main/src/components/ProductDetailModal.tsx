@@ -380,7 +380,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   alt={product.title}
                   referrerPolicy="no-referrer"
                   onClick={openPhotoZoom}
-                  className="w-full h-full object-cover transition-all duration-300 cursor-zoom-in"
+                  className="h-full w-full object-contain p-1 transition-all duration-300 cursor-zoom-in sm:p-2"
                 />
               )}
               {currentMedia?.type !== 'video' && (
