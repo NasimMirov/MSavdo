@@ -324,6 +324,30 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const productId = Number(new URLSearchParams(window.location.search).get('product'));
+    if (!Number.isSafeInteger(productId) || productId <= 0) return;
+
+    const controller = new AbortController();
+    apiFetch(`/api/products/${productId}`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Не удалось открыть товар (${response.status})`);
+        return response.json();
+      })
+      .then((data) => {
+        if (controller.signal.aborted || !data?.product) return;
+        handleOpenProduct(data.product as Product);
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('[Product Deep Link Error]', error);
+          addToast('error', 'Не удалось открыть товар', 'Попробуйте перейти в каталог и выбрать товар ещё раз.');
+        }
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     const sendVisit = async () => {
       let deviceModel = '';
       const navigatorWithHints = navigator as Navigator & {

@@ -50,7 +50,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
 
         {product.main_image && !imageError ? (
-          <a href={productUrl} aria-label={product.title} className="contents">
+          <a
+            href={productUrl}
+            aria-label={product.title}
+            className="contents"
+            onClick={(event) => event.stopPropagation()}
+          >
             <img
               src={product.main_image}
               alt={product.title}
@@ -106,7 +111,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
 
           <h3 className="text-[11px] sm:text-sm font-bold text-slate-900 line-clamp-2 leading-snug font-heading group-hover:text-amber-600 transition-colors">
-            <a href={productUrl}>
+            <a
+              href={productUrl}
+              className="text-inherit no-underline"
+              onClick={(event) => event.stopPropagation()}
+            >
               {product.title}
             </a>
           </h3>

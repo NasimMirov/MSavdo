@@ -2038,6 +2038,70 @@ app.get('/api/products', (req, res) => {
   }
 });
 
+app.get('/api/products/:id', (req, res) => {
+  try {
+    const productId = Number(req.params.id);
+    if (!Number.isSafeInteger(productId) || productId <= 0) {
+      return res.status(400).json({ error: 'Некорректный ID товара' });
+    }
+
+    const product = db.prepare(`
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
+             p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.specifications,
+             p.created_at, p.views_count, c.name AS category_name,
+             COALESCE(MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS min_price_tjs,
+             COALESCE(MAX(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS max_price_tjs
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN product_variants v ON v.product_id = p.id
+      WHERE p.id = ? AND p.status = 'active'
+      GROUP BY p.id
+    `).get(productId) as any;
+
+    if (!product) return res.status(404).json({ error: 'Товар не найден' });
+
+    let specifications: Array<{ name: string; value: string }> = [];
+    if (product.specifications) {
+      try {
+        const parsed = JSON.parse(product.specifications);
+        specifications = Array.isArray(parsed)
+          ? parsed
+          : Object.entries(parsed).map(([name, value]) => ({ name, value: String(value) }));
+      } catch {
+        specifications = String(product.specifications).split('\n').map((line) => {
+          const [name, ...parts] = line.split(/[:：]/);
+          return { name: name.trim(), value: parts.join(':').trim() };
+        }).filter((item) => item.name && item.value);
+      }
+    }
+    if (specifications.length === 0) {
+      specifications = fallbackAnalysis('', product.title, 50, 0.5).specifications || [];
+    }
+
+    const variants = db.prepare(`
+      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
+      FROM product_variants
+      WHERE product_id = ?
+      ORDER BY id ASC
+    `).all(productId);
+
+    return res.json({
+      product: {
+        ...product,
+        delivery_type: product.delivery_type || 'order',
+        video_urls: normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || ''),
+        video_url: product.youtube_url || product.video_url || '',
+        youtube_url: product.youtube_url || product.video_url || '',
+        specifications,
+        variants,
+      },
+    });
+  } catch (error) {
+    console.error('[Public Product Detail Error]', error);
+    return res.status(500).json({ error: 'Не удалось загрузить товар' });
+  }
+});
+
 app.get('/api/products/:id/related', (req, res) => {
   try {
     const productId = Number(req.params.id);
@@ -3901,8 +3965,13 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       .join('');
     const galleryHtml = imageList.map((image) => `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`).join('');
     const safeStructuredData = JSON.stringify([structuredData, breadcrumbData]).replace(/</g, '\\u003c');
+    const isSearchCrawler = /googlebot|bingbot|yandex(bot)?|baiduspider|duckduckbot|slurp|facebookexternalhit|twitterbot/i
+      .test(req.get('user-agent') || '');
+    const appRedirect = isSearchCrawler
+      ? ''
+      : `<script>window.location.replace('/?product=${product.id}')</script>`;
 
-    res.set('Cache-Control', 'public, max-age=300');
+    res.set('Cache-Control', 'public, max-age=300').set('Vary', 'User-Agent');
     return res.type('html').send(`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(product.title)} — купить с доставкой | M.Savdo</title>
@@ -3918,7 +3987,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 <p class="price">${escapeHtml(priceLabel)}</p><p>${escapeHtml(description)}</p>
 ${specsHtml ? `<h2>Характеристики</h2><ul class="specs">${specsHtml}</ul>` : ''}
 <p>Артикул: ${escapeHtml(product.base_sku)}</p><a class="button" href="${escapeHtml(whatsappUrl)}" target="_blank" rel="noopener noreferrer">Уточнить и заказать в WhatsApp</a>
-<a class="button secondary" href="/">Открыть каталог M.Savdo</a></section></article></main></body></html>`);
+<a class="button secondary" href="/">Открыть каталог M.Savdo</a></section></article></main>${appRedirect}</body></html>`);
   } catch (error) {
     console.error('[SEO Product Page] Не удалось сформировать страницу товара:', error);
     return res.status(500).type('text/plain').send('Не удалось загрузить страницу товара');
