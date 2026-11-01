@@ -62,6 +62,14 @@ interface VisitAnalytics {
   event_retention_days: number;
 }
 
+interface SearchAnalytics {
+  total_searches: number;
+  unique_queries: number;
+  popular_queries: Array<{ query_text: string; searches_count: number; last_searched_at: string }>;
+  queries: Array<{ query_text: string; searches_count: number; first_searched_at: string; last_searched_at: string }>;
+  has_more: boolean;
+}
+
 declare global {
   interface Window {
     Telegram?: {
@@ -100,7 +108,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
-  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'gemini_ai' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -117,6 +125,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isSavingOrder, setIsSavingOrder] = useState(false);
   const [visitAnalytics, setVisitAnalytics] = useState<VisitAnalytics | null>(null);
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
+  const [searchAnalytics, setSearchAnalytics] = useState<SearchAnalytics | null>(null);
+  const [isLoadingSearches, setIsLoadingSearches] = useState(false);
 
   // Навигатор товаров: поиск, фильтры, сортировка и режим отображения
   const [navSearch, setNavSearch] = useState('');
@@ -351,6 +361,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const loadSearchAnalytics = async (append = false) => {
+    setIsLoadingSearches(true);
+    try {
+      const offset = append ? searchAnalytics?.queries.length || 0 : 0;
+      const response = await adminFetch(`/api/admin/search-analytics?offset=${offset}`);
+      if (!response.ok) throw new Error(`Search analytics request failed: ${response.status}`);
+      const data = await response.json() as SearchAnalytics;
+      setSearchAnalytics((current) => append && current
+        ? { ...data, queries: [...current.queries, ...data.queries] }
+        : data);
+    } catch (error) {
+      console.error('[Admin Search Analytics Error]', error);
+      showNotice('Не удалось загрузить статистику поиска');
+    } finally {
+      setIsLoadingSearches(false);
+    }
+  };
+
   const handleUpdateOrderStatus = async (orderId: number, newStatus: string) => {
     try {
       const res = await adminFetch(`/api/admin/orders/${orderId}/status`, {
@@ -528,6 +556,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       main_image: '',
       images: [],
       video_url: '',
+      video_urls: [],
       youtube_url: '',
       specifications: [
         { name: 'Материал', value: '100% натуральный хлопок' },
@@ -624,6 +653,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       main_image: p.main_image || imgList[0] || '',
       images: imgList,
       video_url: p.video_url || '',
+      video_urls: Array.isArray(p.video_urls)
+        ? p.video_urls
+        : (p.video_url ? [p.video_url] : []),
       youtube_url: p.youtube_url || p.video_url || '',
       default_weight_kg: varList[0]?.weight_kg || 0.5,
       specifications: specList,
@@ -905,8 +937,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         status: editingProduct.status || 'active',
         main_image: editingProduct.main_image || (editingProduct.images?.[0] || ''),
         images: editingProduct.images || [],
-        video_url: editingProduct.video_url || '',
-        youtube_url: editingProduct.youtube_url || '',
+        video_urls: Array.isArray(editingProduct.video_urls)
+          ? editingProduct.video_urls
+          : String(editingProduct.video_urls || '').split(/\r?\n/).map((url: string) => url.trim()).filter(Boolean),
+        video_url: editingProduct.video_url || editingProduct.video_urls?.[0] || '',
+        youtube_url: editingProduct.youtube_url || editingProduct.video_urls?.[0] || '',
         default_weight_kg: editingProduct.default_weight_kg || 0.5,
         specifications: (editingProduct.specifications || []).filter((s: any) => s.name.trim() && s.value.trim()),
         variants: editingProduct.variants || [],
@@ -1006,7 +1041,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           prev.map((item) => (item.id === p.id ? { ...item, delivery_type: newDelivery } : item))
         );
         onRefreshCatalog();
-        showNotice(`Доставка для ${p.base_sku}: ${newDelivery === 'stock' ? 'В наличии · 1 день' : 'Доставка 18–30 дней'}`);
+        showNotice(`Доставка для ${p.base_sku}: ${newDelivery === 'stock' ? 'В наличии · 1 день' : 'Доставка 12–35 дней'}`);
       }
     } catch (err) {
       console.error('Ошибка смены доставки:', err);
@@ -1256,6 +1291,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </button>
 
         <button
+          onClick={() => {
+            setActiveTab('searches');
+            void loadSearchAnalytics();
+          }}
+          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
+            activeTab === 'searches'
+              ? 'bg-slate-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Search className="w-4 h-4 text-amber-500" />
+          <span>Поиски</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('gemini_ai')}
           className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
             activeTab === 'gemini_ai'
@@ -1304,7 +1354,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <div className="bg-white p-3.5 rounded-2xl border border-amber-200 bg-amber-50/30 shadow-xs">
               <span className="text-[11px] text-amber-700 font-medium block flex items-center gap-1">
                 <Clock className="w-3 h-3" />
-                <span>Доставка 18–30 дней:</span>
+                <span>Доставка 12–35 дней:</span>
               </span>
               <span className="text-xl font-extrabold text-amber-900 font-mono mt-0.5 block">
                 {adminProducts.filter(p => p.delivery_type !== 'stock').length}
@@ -1623,7 +1673,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 ) : (
                                   <>
                                     <Clock className="w-3 h-3 text-amber-700" />
-                                    <span>Доставка 18–30 дней</span>
+                                    <span>Доставка 12–35 дней</span>
                                   </>
                                 )}
                               </button>
@@ -1769,7 +1819,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               p.delivery_type === 'stock' ? 'bg-emerald-600 text-white' : 'bg-amber-400 text-black'
                             }`}
                           >
-                            {p.delivery_type === 'stock' ? 'В наличии · 1 день' : 'Доставка 18–30 дней'}
+                            {p.delivery_type === 'stock' ? 'В наличии · 1 день' : 'Доставка 12–35 дней'}
                           </button>
                         </div>
                       </div>
@@ -1842,7 +1892,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <div>
               <h3 className="text-base font-bold text-slate-900">Посещения сайта</h3>
               <p className="mt-1 text-xs text-slate-500">
-                Сохраняются обезличенный идентификатор IP и тип устройства; журнал событий хранится 90 дней.
+                Сохраняются обезличенный идентификатор IP и сведения об устройстве, которые передаёт браузер. Точная модель доступна не на всех устройствах.
               </p>
             </div>
             <button
@@ -1886,7 +1936,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <thead className="sticky top-0 bg-slate-50 text-slate-500">
                         <tr>
                           <th className="px-4 py-2 font-semibold">Посетитель (анонимно)</th>
-                          <th className="px-4 py-2 font-semibold">Устройство и браузер</th>
+                          <th className="px-4 py-2 font-semibold">Модель / ОС / браузер</th>
                           <th className="px-4 py-2 font-semibold">Время</th>
                         </tr>
                       </thead>
@@ -1906,6 +1956,105 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </table>
                   </div>
                 )}
+              </div>
+            </>
+          ) : null}
+        </section>
+      )}
+
+      {activeTab === 'searches' && (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Поисковые запросы</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Счётчики по запросам за всё время; IP и данные посетителей с поисками не связываются.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { void loadSearchAnalytics(); }}
+              disabled={isLoadingSearches}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isLoadingSearches ? 'animate-spin' : ''}`} />
+              Обновить
+            </button>
+          </div>
+
+          {isLoadingSearches && !searchAnalytics ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Загрузка поисков…</div>
+          ) : searchAnalytics ? (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                  <p className="text-[11px] font-medium text-slate-500">Поисков всего</p>
+                  <p className="mt-1 font-mono text-2xl font-extrabold text-slate-900">{searchAnalytics.total_searches.toLocaleString()}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                  <p className="text-[11px] font-medium text-slate-500">Разных запросов</p>
+                  <p className="mt-1 font-mono text-2xl font-extrabold text-slate-900">{searchAnalytics.unique_queries.toLocaleString()}</p>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <h4 className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-900">Самые частые поиски</h4>
+                {searchAnalytics.popular_queries.length ? (
+                  <ol className="divide-y divide-slate-100">
+                    {searchAnalytics.popular_queries.map((query, index) => (
+                      <li key={`popular-${query.query_text}`} className="flex items-center justify-between gap-3 px-4 py-2.5 text-xs">
+                        <span className="min-w-0 truncate font-medium text-slate-700">
+                          <span className="mr-2 text-slate-400">{index + 1}.</span>{query.query_text}
+                        </span>
+                        <span className="shrink-0 rounded-full bg-amber-50 px-2 py-1 font-mono font-bold text-amber-800">{query.searches_count}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : <p className="p-4 text-sm text-slate-500">Поисковых запросов пока нет.</p>}
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <h4 className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-900">
+                  Все запросы ({searchAnalytics.unique_queries})
+                </h4>
+                {searchAnalytics.queries.length ? (
+                  <>
+                    <div className="max-h-[55vh] overflow-auto">
+                      <table className="w-full min-w-[480px] text-left text-xs">
+                        <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                          <tr>
+                            <th className="px-4 py-2 font-semibold">Запрос</th>
+                            <th className="px-4 py-2 font-semibold">Поисков</th>
+                            <th className="px-4 py-2 font-semibold">Последний поиск</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {searchAnalytics.queries.map((query) => (
+                            <tr key={query.query_text}>
+                              <td className="px-4 py-2.5 font-medium text-slate-700">{query.query_text}</td>
+                              <td className="px-4 py-2.5 font-mono text-slate-700">{query.searches_count.toLocaleString()}</td>
+                              <td className="px-4 py-2.5 text-slate-600">
+                                {new Date(query.last_searched_at).toLocaleString(
+                                  language === 'tg' ? 'tg-TJ' : language === 'en' ? 'en-GB' : 'ru-RU',
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {searchAnalytics.has_more && (
+                      <button
+                        type="button"
+                        onClick={() => { void loadSearchAnalytics(true); }}
+                        disabled={isLoadingSearches}
+                        className="w-full border-t border-slate-200 px-4 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                      >
+                        {isLoadingSearches ? 'Загрузка…' : 'Показать ещё'}
+                      </button>
+                    )}
+                  </>
+                ) : <p className="p-4 text-sm text-slate-500">Поисковых запросов пока нет.</p>}
               </div>
             </>
           ) : null}
@@ -2322,7 +2471,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           {order.delivery_type === 'order' ? (
                             <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 flex items-center gap-1">
                               <Clock className="w-3 h-3 text-amber-600" />
-                              <span>Доставка 18–30 дней</span>
+                              <span>Доставка 12–35 дней</span>
                             </span>
                           ) : (
                             <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-900 border border-emerald-200 flex items-center gap-1">
@@ -2821,18 +2970,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
               </div>
 
-              {/* YOUTUBE */}
+              {/* ВНЕШНИЕ ВИДЕО */}
               <div className="space-y-1">
                 <label className="block font-bold text-slate-800 text-xs">
-                  Ссылка на YouTube-видео
+                  Ссылки на видео (по одной на строку)
                 </label>
-                <input
-                  type="url"
-                  value={editingProduct.youtube_url || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, youtube_url: e.target.value })}
-                  placeholder="https://www.youtube.com/watch?v=... или https://youtu.be/..."
-                  className="w-full p-2.5 border border-slate-300 rounded-xl text-xs text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
+                <textarea
+                  rows={3}
+                  value={Array.isArray(editingProduct.video_urls)
+                    ? editingProduct.video_urls.join('\n')
+                    : (editingProduct.video_urls || editingProduct.youtube_url || '')}
+                  onChange={(e) => {
+                    const videoUrls = e.target.value.split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
+                    setEditingProduct({
+                      ...editingProduct,
+                      video_urls: videoUrls,
+                      video_url: videoUrls[0] || '',
+                      youtube_url: videoUrls[0] || '',
+                    });
+                  }}
+                  placeholder="Вставьте прямые ссылки или YouTube URL, каждую с новой строки"
+                  className="w-full resize-y rounded-xl border border-slate-300 p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
                 />
+                <p className="text-[10px] text-slate-500">Видео воспроизводятся по внешней ссылке и не загружаются на сервер.</p>
               </div>
 
               {/* ======================================================== */}

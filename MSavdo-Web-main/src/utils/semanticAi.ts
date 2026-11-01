@@ -33,11 +33,47 @@ export interface ExtractedHtmlContext {
   categoryHint?: string;
   images: string[];
   videoUrl?: string;
+  videoUrls: string[];
   weightKg?: number;
   specifications: Array<{ name: string; value: string }>;
   variants: SemanticVariant[];
   skuInfoMap?: Record<string, any>;
   rawSnippetForAi: string;
+}
+
+function normalizeVideoUrl(value: string): string {
+  const url = value
+    .replace(/\\u002F/gi, '/')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/gi, '&')
+    .trim();
+  if (url.startsWith('//')) return `https:${url}`;
+  if (!/^https?:\/\//i.test(url) || /\.(?:jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url)) return '';
+  return url;
+}
+
+function collectVideoUrls(value: unknown): string[] {
+  const urls = new Set<string>();
+  const visit = (current: unknown, key = '', isVideoContext = false): void => {
+    const videoContext = isVideoContext || /video|playurl|mediaurl/i.test(key);
+    if (typeof current === 'string') {
+      if (!videoContext || /poster|image|cover/i.test(key)) return;
+      const url = normalizeVideoUrl(current);
+      if (url) urls.add(url);
+      return;
+    }
+    if (Array.isArray(current)) {
+      current.forEach((item) => visit(item, key, videoContext));
+      return;
+    }
+    if (current && typeof current === 'object') {
+      for (const [childKey, childValue] of Object.entries(current)) {
+        visit(childValue, childKey, videoContext);
+      }
+    }
+  };
+  visit(value);
+  return [...urls].slice(0, 12);
 }
 
 // 1. СЛОВАРЬ ЦВЕТОВ И ОТТЕНКОВ
@@ -198,6 +234,7 @@ export function translateVariantName(chineseText: string): string {
 export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtmlContext {
   const result: ExtractedHtmlContext = {
     images: [],
+    videoUrls: [],
     specifications: [],
     variants: [],
     rawSnippetForAi: ''
@@ -252,7 +289,12 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
     }
 
     // Видео
-    result.videoUrl = dataObj.videoUrl || dataObj.mainVideo?.videoUrl || dataObj.videoInfo?.videoUrl || '';
+    result.videoUrls = collectVideoUrls(parsedJson);
+    result.videoUrl = result.videoUrls[0]
+      || dataObj.videoUrl
+      || dataObj.mainVideo?.videoUrl
+      || dataObj.videoInfo?.videoUrl
+      || '';
 
     // Вес
     const weightVal = parseFloat(
@@ -303,6 +345,19 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
       }
     }
   }
+
+  const videoUrlMatches = rawInput.matchAll(/(?:videoUrl|playUrl|video_url|videoAddress|mediaUrl)\s*["']?\s*[:=]\s*["']([^"']+)["']/gi);
+  for (const match of videoUrlMatches) {
+    const url = normalizeVideoUrl(match[1]);
+    if (url && !result.videoUrls.includes(url)) result.videoUrls.push(url);
+  }
+  const videoTagMatches = rawInput.matchAll(/<(?:video|source)\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi);
+  for (const match of videoTagMatches) {
+    const url = normalizeVideoUrl(match[1]);
+    if (url && !result.videoUrls.includes(url)) result.videoUrls.push(url);
+  }
+  result.videoUrls = result.videoUrls.slice(0, 12);
+  if (!result.videoUrl && result.videoUrls.length > 0) result.videoUrl = result.videoUrls[0];
 
   // 3. Дополнительный / Резервный сбор из HTML (если JSON неполный или поврежден — Правило 3)
   if (!result.title) {

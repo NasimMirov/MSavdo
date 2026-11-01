@@ -39,7 +39,8 @@ const rulesCopy = {
         title: 'Сроки обработки и доставки',
         paragraphs: [
           '3.1. Заказ направляется производителю для производства или отгрузки в течение 24 часов после подтверждения спецификации в WhatsApp.',
-          '3.2. Доставка до пунктов выдачи в Таджикистане (включая Душанбе и Худжанд) обычно занимает от 12 до 20 календарных дней.',
+          '3.2. Ориентировочный срок доставки — от 12 до 35 календарных дней. В редких случаях возможны задержки по причинам, не зависящим от M.Savdo.',
+          '3.3. Перевозку товара из Китая до пункта приёма M.Savdo выполняют сотрудничающие с сервисом карго-компании, отвечающие за этот участок доставки.',
         ],
       },
       {
@@ -91,7 +92,8 @@ const rulesCopy = {
         title: 'Муҳлати коркард ва расонидан',
         paragraphs: [
           '3.1. Дар давоми 24 соат пас аз тасдиқи мушаххасоти фармоиш дар WhatsApp, фармоиш барои истеҳсол ё фиристодан ба истеҳсолкунанда равона мешавад.',
-          '3.2. Расонидан то нуқтаҳои қабул дар Тоҷикистон, аз ҷумла Душанбе ва Хуҷанд, одатан аз 12 то 20 рӯзи тақвимиро мегирад.',
+          '3.2. Муҳлати тахминии расонидан аз 12 то 35 рӯзи тақвимӣ аст. Дар ҳолатҳои кам бинобар сабабҳои ба M.Savdo вобаста набуда таъхир имкон дорад.',
+          '3.3. Интиқоли мол аз Чин то нуқтаи қабули M.Savdo аз ҷониби ширкатҳои каргои ҳамкор анҷом дода шуда, онҳо барои ин қитъаи роҳ масъуланд.',
         ],
       },
       {
@@ -143,7 +145,8 @@ const rulesCopy = {
         title: 'Processing and delivery times',
         paragraphs: [
           '3.1. Within 24 hours after the specification is confirmed on WhatsApp, the order is sent to the manufacturer for production or dispatch.',
-          '3.2. Delivery to collection points in Tajikistan, including Dushanbe and Khujand, usually takes 12–20 calendar days.',
+          '3.2. The estimated delivery time is 12–35 calendar days. In rare cases, delays may occur for reasons beyond M.Savdo’s control.',
+          '3.3. Cargo companies working with the service transport items from China to the M.Savdo receiving point and are responsible for that part of delivery.',
         ],
       },
       {

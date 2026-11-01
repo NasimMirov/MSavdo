@@ -80,16 +80,22 @@ export default function App() {
   const [categoriesTree, setCategoriesTree] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [whatsappPhone, setWhatsappPhone] = useState('992444431');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [searchHints, setSearchHints] = useState<{
+    suggestions: string[];
+    popular: Array<{ query_text: string; searches_count: number }>;
+  }>({ suggestions: [], popular: [] });
 
   // Фильтры, живой поиск и сортировка (Требование 7)
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'stock' | 'order'>('all');
-  const [sortBy, setSortBy] = useState<'popular' | 'price_asc' | 'price_desc' | 'newest'>('newest');
+  const [sortBy, setSortBy] = useState<'popular' | 'price_asc' | 'price_desc' | 'newest'>('popular');
   const [expandedCategoryId, setExpandedCategoryId] = useState<number | null>(null);
   const [isCategoryBrowserOpen, setIsCategoryBrowserOpen] = useState(false);
   const [browsingCategoryId, setBrowsingCategoryId] = useState<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const lastTrackedSearch = useRef('');
   const viewedProductIds = useRef<Set<number>>(new Set());
   const catalogRequestId = useRef(0);
   const isProductModalOpen = selectedProduct !== null;
@@ -262,12 +268,30 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    apiFetch('/api/visits', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-      keepalive: true,
-    }).catch((error) => console.error('[Site Visit Tracking Error]', error));
+    const sendVisit = async () => {
+      let deviceModel = '';
+      const navigatorWithHints = navigator as Navigator & {
+        userAgentData?: {
+          getHighEntropyValues?: (hints: string[]) => Promise<{ model?: string }>;
+        };
+      };
+      if (navigatorWithHints.userAgentData?.getHighEntropyValues) {
+        try {
+          const hints = await navigatorWithHints.userAgentData.getHighEntropyValues(['model']);
+          deviceModel = hints.model?.trim().slice(0, 80) || '';
+        } catch (error) {
+          console.warn('[Device Model Detection Error]', error);
+        }
+      }
+
+      apiFetch('/api/visits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_model: deviceModel }),
+        keepalive: true,
+      }).catch((error) => console.error('[Site Visit Tracking Error]', error));
+    };
+    void sendVisit();
   }, []);
 
   const initialCatalogFilters = useRef(true);
@@ -279,6 +303,50 @@ export default function App() {
     const timer = window.setTimeout(() => { void fetchProducts(); }, searchQuery ? 250 : 0);
     return () => window.clearTimeout(timer);
   }, [searchQuery, selectedCategoryId, deliveryFilter, sortBy]);
+
+  useEffect(() => {
+    if (!isSearchFocused) return;
+    const controller = new AbortController();
+    const query = searchQuery.trim();
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams();
+      if (query) params.set('q', query);
+      apiFetch(`/api/search/suggestions?${params.toString()}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`Search suggestions request failed: ${response.status}`);
+          const data = await response.json();
+          setSearchHints({
+            suggestions: Array.isArray(data?.suggestions) ? data.suggestions : [],
+            popular: Array.isArray(data?.popular) ? data.popular : [],
+          });
+        })
+        .catch((error) => {
+          if (error.name !== 'AbortError') {
+            console.error('[Search Suggestions Error]', error);
+          }
+        });
+    }, 140);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searchQuery, isSearchFocused]);
+
+  useEffect(() => {
+    const query = searchQuery.trim().replace(/\s+/g, ' ');
+    if (query.length < 2 || query === lastTrackedSearch.current) return;
+    const timer = window.setTimeout(() => {
+      lastTrackedSearch.current = query;
+      apiFetch('/api/searches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      }).then((response) => {
+        if (!response.ok) throw new Error(`Search tracking request failed: ${response.status}`);
+      }).catch((error) => console.error('[Search Tracking Error]', error));
+    }, 1400);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, isSearchFocused]);
 
   useEffect(() => {
     if (selectedCategoryId === null) {
@@ -312,12 +380,12 @@ export default function App() {
       const existing = prev.find((i) => i.id === itemWithVariants.id);
       if (existing) {
         return prev.map((i) =>
-          i.id === itemWithVariants.id ? { ...i, quantity: i.quantity + 1 } : i
+          i.id === itemWithVariants.id ? { ...i, quantity: i.quantity + itemWithVariants.quantity } : i
         );
       }
       return [...prev, itemWithVariants];
     });
-    addToast('success', 'Товар добавлен в корзину', `${itemWithVariants.title} (${itemWithVariants.color}, ${itemWithVariants.size})`);
+    addToast('success', 'Товар добавлен в корзину', `${itemWithVariants.title} · ${itemWithVariants.quantity} шт. (${itemWithVariants.color}, ${itemWithVariants.size})`);
   };
 
   const handleUpdateQuantity = (id: string, delta: number) => {
@@ -334,7 +402,7 @@ export default function App() {
     );
   };
 
-  const handleChangeCartVariant = (
+  const handleAddCartVariant = (
     itemId: string,
     variant: NonNullable<Product['variants']>[number],
   ) => {
@@ -342,27 +410,25 @@ export default function App() {
       const selectedItem = current.find((item) => item.id === itemId);
       if (!selectedItem) return current;
       const nextId = `${selectedItem.product_id}-${variant.variant_sku}`;
+      const nextItem: CartItem = {
+        ...selectedItem,
+        id: nextId,
+        variant_id: variant.id,
+        variant_sku: variant.variant_sku,
+        color: variant.color,
+        size: variant.size,
+        price_tjs: variant.price_tjs,
+        stock: variant.stock,
+        image: variant.image_url || selectedItem.image,
+        quantity: 1,
+      };
       const duplicate = current.find((item) => item.id === nextId && item.id !== itemId);
       if (duplicate) {
-        return current
-          .filter((item) => item.id !== itemId)
-          .map((item) => item.id === nextId
-            ? { ...item, quantity: item.quantity + selectedItem.quantity }
-            : item);
+        return current.map((item) => item.id === nextId
+          ? { ...item, quantity: item.quantity + 1 }
+          : item);
       }
-      return current.map((item) => item.id === itemId
-        ? {
-          ...item,
-          id: nextId,
-          variant_id: variant.id,
-          variant_sku: variant.variant_sku,
-          color: variant.color,
-          size: variant.size,
-          price_tjs: variant.price_tjs,
-          stock: variant.stock,
-          image: variant.image_url || item.image,
-        }
-        : item);
+      return [...current, nextItem];
     });
   };
 
@@ -427,7 +493,7 @@ export default function App() {
       {/* Строгая клиентская изоляция: никаких кнопок импорта или ссылок на Китай */}
       {/* ======================================================== */}
       <header className="sticky top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-16 sm:min-h-[76px] py-2 flex flex-wrap items-center gap-2 sm:gap-6">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-14 sm:min-h-[76px] py-2 flex items-center gap-2 sm:gap-6">
           
           <div 
             onClick={() => {
@@ -435,39 +501,94 @@ export default function App() {
               setSelectedCategoryId(null);
               setSearchQuery('');
             }}
-            className="cursor-pointer flex items-center gap-2 sm:gap-3 shrink-0 select-none group"
+            className="cursor-pointer flex items-center gap-1.5 sm:gap-3 shrink-0 select-none group"
           >
-            <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-xl overflow-hidden border border-black/10 shadow-md shrink-0 bg-[#f4c542] flex items-center justify-center">
+            <div className="relative w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl overflow-hidden border border-black/10 shadow-md shrink-0 bg-[#f4c542] flex items-center justify-center">
               <img 
                 src={BRAND_LOGO_URL} 
                 alt="MSavdo" 
                 className="w-full h-full object-contain group-hover:scale-105 transition-transform"
               />
             </div>
-            <span className="text-lg sm:text-2xl font-black tracking-tight text-slate-950 font-heading">MSavdo</span>
+            <span className="text-base sm:text-2xl font-black tracking-tight text-slate-950 font-heading">MSavdo</span>
           </div>
 
           {currentView === 'catalog' && (
-            <div className="relative order-3 basis-full min-w-0 flex-1 max-w-none md:order-none md:basis-auto md:max-w-3xl md:ml-auto">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+            <div className="relative min-w-0 flex-1 max-w-3xl md:ml-auto">
+              <Search className="absolute left-2.5 sm:left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-500 pointer-events-none" />
               <input
                 ref={searchInputRef}
                 type="search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => window.setTimeout(() => setIsSearchFocused(false), 120)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    setIsSearchFocused(false);
+                    searchInputRef.current?.blur();
+                  }
+                  if (event.key === 'Escape') setIsSearchFocused(false);
+                }}
                 placeholder={t('searchProducts')}
                 aria-label={t('searchProducts')}
-                className="w-full h-10 sm:h-11 rounded-xl border border-black/10 bg-white/95 pl-9 pr-9 text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 shadow-sm outline-none transition focus:ring-2 focus:ring-slate-900/20"
+                className="w-full h-9 sm:h-11 rounded-lg sm:rounded-xl border border-black/10 bg-white/95 pl-8 sm:pl-9 pr-8 text-[11px] sm:text-sm font-medium text-slate-900 placeholder:text-slate-500 shadow-sm outline-none transition focus:ring-2 focus:ring-slate-900/20"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
                   aria-label={t('clearSearch')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:text-slate-700"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:text-slate-700"
                 >
                   <X className="w-4 h-4" />
                 </button>
+              )}
+              {isSearchFocused && (
+                <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                  {searchHints.suggestions.length > 0 && (
+                    <div className="mb-1">
+                      <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{t('searchSuggestions')}</p>
+                      {searchHints.suggestions.map((suggestion) => (
+                        <button
+                          key={`suggestion-${suggestion}`}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setSearchQuery(suggestion);
+                            setIsSearchFocused(false);
+                            searchInputRef.current?.blur();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs text-slate-700 hover:bg-amber-50"
+                        >
+                          <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                          <span className="line-clamp-1">{suggestion}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {searchHints.popular.length > 0 && (
+                    <div>
+                      <p className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{t('popularSearches')}</p>
+                      {searchHints.popular.map((item) => (
+                        <button
+                          key={`popular-${item.query_text}`}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            setSearchQuery(item.query_text);
+                            setIsSearchFocused(false);
+                            searchInputRef.current?.blur();
+                          }}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-xs text-slate-700 hover:bg-amber-50"
+                        >
+                          <span className="line-clamp-1">{item.query_text}</span>
+                          <span className="shrink-0 text-[10px] text-slate-400">{item.searches_count}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -524,7 +645,7 @@ export default function App() {
             
             {/* Compact category sections: icons belong to sections, not their subcategories. */}
             <section aria-label={t('allCategories')} className="space-y-2">
-              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+              <div className="grid w-max max-w-full auto-cols-[132px] grid-flow-col grid-rows-2 gap-1 overflow-x-auto pb-1 scrollbar-none sm:auto-cols-[160px]">
                 <button
                   type="button"
                   onClick={() => {
@@ -532,14 +653,14 @@ export default function App() {
                     setExpandedCategoryId(null);
                   }}
                   aria-pressed={selectedCategoryId === null}
-                  className={`flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+                  className={`flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 py-1 text-left transition-colors ${
                     selectedCategoryId === null
                       ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
                       : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
                   }`}
                 >
-                  <span className="text-base leading-none" aria-hidden="true">🛍️</span>
-                  <span className="text-[11px] font-bold">{t('allCategories')}</span>
+                  <span className="text-xs leading-none" aria-hidden="true">🛍️</span>
+                  <span className="truncate text-[10px] font-bold">{t('allCategories')}</span>
                 </button>
 
                 {categoriesTree.map((section) => {
@@ -556,16 +677,16 @@ export default function App() {
                       }}
                       aria-pressed={isSelected}
                       title={section.name}
-                      className={`flex min-h-9 max-w-[180px] shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+                      className={`flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 py-1 text-left transition-colors ${
                         isSelected
                           ? 'border-amber-500 bg-amber-100 text-slate-950 shadow-sm'
                           : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
                       }`}
                     >
-                      <span className="text-base leading-none" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
-                      <span className="max-w-[145px] text-[10px] font-bold leading-tight">{section.name}</span>
+                      <span className="text-xs leading-none" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
+                      <span className="truncate text-[9px] font-bold leading-tight">{section.name}</span>
                       {section.subcategories && section.subcategories.length > 0 && (
-                        <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={`h-2.5 w-2.5 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                       )}
                     </button>
                   );
@@ -576,7 +697,7 @@ export default function App() {
                 const section = categoriesTree.find((category) => category.id === expandedCategoryId);
                 if (!section?.subcategories?.length) return null;
                 return (
-                  <div className="flex gap-1 overflow-x-auto py-0.5 scrollbar-none">
+                  <div className="grid grid-cols-2 gap-1 py-0.5 sm:grid-cols-3">
                     {section.subcategories.map((category) => (
                       <button
                         key={category.id}
@@ -586,7 +707,7 @@ export default function App() {
                         )}
                         aria-pressed={selectedCategoryId === category.id}
                         title={category.name}
-                        className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${
+                        className={`min-w-0 truncate rounded-md px-1.5 py-1 text-left text-[9px] font-semibold transition-colors ${
                           selectedCategoryId === category.id
                             ? 'bg-slate-900 text-white'
                             : 'bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-slate-900'
@@ -769,17 +890,20 @@ export default function App() {
             </header>
             <div className="overflow-y-auto overscroll-contain p-3">
               {browsingCategoryId === null ? (
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
                   {categoriesTree.map((section) => (
                     <button
                       key={section.id}
                       type="button"
                       onClick={() => setBrowsingCategoryId(section.id)}
-                      className="flex min-h-14 items-center gap-3 rounded-xl border border-slate-200 px-3 py-2 text-left transition hover:border-amber-400 hover:bg-amber-50"
+                      className="flex min-h-12 min-w-0 items-center gap-2 rounded-lg border border-slate-200 px-2 py-1.5 text-left transition hover:border-amber-400 hover:bg-amber-50"
                     >
-                      <span className="text-xl" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
-                      <span className="min-w-0 flex-1 text-xs font-bold text-slate-800">{section.name}</span>
-                      <ChevronDown className="h-4 w-4 -rotate-90 text-slate-400" />
+                      <span className="text-base" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[10px] font-bold text-slate-800">{section.name}</span>
+                        <span className="block text-[9px] text-slate-500">{t('categoryProductCount')}: {section.product_count || 0}</span>
+                      </span>
+                      <ChevronDown className="h-3.5 w-3.5 -rotate-90 text-slate-400" />
                     </button>
                   ))}
                 </div>
@@ -787,7 +911,7 @@ export default function App() {
                 const section = categoriesTree.find((category) => category.id === browsingCategoryId);
                 if (!section) return null;
                 return (
-                  <div className="space-y-2">
+                  <div className="space-y-1.5">
                     <button
                       type="button"
                       onClick={() => {
@@ -796,9 +920,10 @@ export default function App() {
                         setBrowsingCategoryId(null);
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
-                      className="w-full rounded-xl bg-slate-900 px-4 py-3 text-left text-xs font-bold text-white"
+                      className="flex w-full items-center justify-between rounded-lg bg-slate-900 px-3 py-2 text-left text-[10px] font-bold text-white"
                     >
-                      {t('showSectionProducts')}
+                      <span>{t('showSectionProducts')}</span>
+                      <span>{t('categoryProductCount')}: {section.product_count || 0}</span>
                     </button>
                     {section.subcategories?.map((category) => (
                       <button
@@ -811,10 +936,10 @@ export default function App() {
                           setBrowsingCategoryId(null);
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
-                        className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-xs font-semibold text-slate-700 transition hover:border-amber-400 hover:bg-amber-50"
+                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-left text-[10px] font-semibold text-slate-700 transition hover:border-amber-400 hover:bg-amber-50"
                       >
-                        <span>{category.name}</span>
-                        <ChevronDown className="h-3.5 w-3.5 -rotate-90 text-slate-400" />
+                        <span className="min-w-0 truncate">{category.name}</span>
+                        <span className="shrink-0 text-[9px] font-medium text-slate-500">{t('categoryProductCount')}: {category.product_count || 0}</span>
                       </button>
                     ))}
                   </div>
@@ -849,7 +974,7 @@ export default function App() {
         items={cart}
         products={products}
         onUpdateQuantity={handleUpdateQuantity}
-        onChangeVariant={handleChangeCartVariant}
+        onAddVariant={handleAddCartVariant}
         onRemoveItem={handleRemoveFromCart}
         onClearCart={handleClearCart}
         onOpenRules={() => {
@@ -904,7 +1029,7 @@ export default function App() {
         </button>
 
         <a
-          href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}`}
+          href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Ассаламу Алайкум!')}`}
           target="_blank"
           rel="noreferrer"
           className="flex flex-col items-center gap-1 text-emerald-400"

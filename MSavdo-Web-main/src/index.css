@@ -29,7 +29,7 @@ html[data-theme="dark"] [class*="bg-white/"] {
 }
 
 html[data-theme="dark"] .bg-slate-900 {
-  background-color: #050505 !important;
+  background-color: #20252d !important;
 }
 
 html[data-theme="dark"] .bg-emerald-50,
@@ -61,7 +61,7 @@ html[data-theme="dark"] .text-slate-600 {
 
 html[data-theme="dark"] .text-slate-500,
 html[data-theme="dark"] .text-slate-400 {
-  color: #9ca3af !important;
+  color: #aeb8c5 !important;
 }
 
 html[data-theme="dark"] .text-emerald-600,
@@ -87,6 +87,23 @@ html[data-theme="dark"] .border-slate-200,
 html[data-theme="dark"] .border-slate-300,
 html[data-theme="dark"] [class*="border-slate-200/"] {
   border-color: #333 !important;
+}
+
+html[data-theme="dark"] .bg-gradient-to-br,
+html[data-theme="dark"] .bg-gradient-to-tr {
+  background-image: none !important;
+  background-color: #171b22 !important;
+}
+
+html[data-theme="dark"] .product-description-panel {
+  background: #171b22 !important;
+  background-image: none !important;
+  border-color: #343b46 !important;
+  color: #e5eaf1 !important;
+}
+
+html[data-theme="dark"] .product-description-text {
+  color: #d7dee8 !important;
 }
 
 html[data-theme="dark"] .divide-slate-100 > :not(:first-child) {

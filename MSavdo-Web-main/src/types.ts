@@ -24,6 +24,7 @@ export interface Product {
   main_image: string;
   images?: string;
   video_url?: string;
+  video_urls?: string[];
   youtube_url?: string;
   created_at?: string;
   views_count?: number;
@@ -37,6 +38,7 @@ export interface Category {
   id: number;
   name: string;
   parent_id: number | null;
+  product_count?: number;
   subcategories?: Category[];
 }
 

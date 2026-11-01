@@ -145,6 +145,7 @@ db.exec(`
     main_image TEXT,
     images TEXT,
     video_url TEXT,
+    video_urls TEXT,
     youtube_url TEXT,
     specifications TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -196,6 +197,9 @@ try {
   db.exec('ALTER TABLE products ADD COLUMN video_url TEXT;');
 } catch (_) {}
 try {
+  db.exec('ALTER TABLE products ADD COLUMN video_urls TEXT;');
+} catch (_) {}
+try {
   db.exec('ALTER TABLE products ADD COLUMN youtube_url TEXT;');
 } catch (_) {}
 try {
@@ -207,6 +211,54 @@ try {
 try {
   db.exec('ALTER TABLE products ADD COLUMN views_count INTEGER DEFAULT 0;');
 } catch (_) {}
+
+function normalizeVideoUrls(value: unknown, fallback = ''): string[] {
+  let candidates: unknown[] = [];
+  if (Array.isArray(value)) {
+    candidates = value;
+  } else if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      candidates = Array.isArray(parsed) ? parsed : [value];
+    } catch {
+      candidates = value.split(/\r?\n/);
+    }
+  }
+  if (fallback) candidates.push(fallback);
+  const urls = new Set<string>();
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    let url = candidate.trim().replace(/\\\//g, '/');
+    if (url.startsWith('//')) url = `https:${url}`;
+    if (!/^https?:\/\//i.test(url) || url.length > 2048) continue;
+    urls.add(url);
+    if (urls.size >= 12) break;
+  }
+  return [...urls];
+}
+
+function appendSearchKeywords(
+  description: string,
+  title: string,
+  category: string,
+  specifications: Array<{ name: string; value: string }>,
+): string {
+  const marker = 'Ключевые слова для поиска:';
+  if (description.includes(marker)) return description;
+  const stopWords = new Set([
+    'для', 'или', 'при', 'это', 'как', 'что', 'этот', 'эта', 'модель', 'товар',
+    'набор', 'новый', 'новая', 'новое', 'размер', 'цвет', 'the', 'and', 'with',
+  ]);
+  const keywords = new Set<string>();
+  const source = [title, category, ...specifications.flatMap((item) => [item.name, item.value])].join(' ');
+  for (const word of source.match(/[\p{L}\p{N}]{3,}/gu) || []) {
+    const keyword = word.toLocaleLowerCase('ru');
+    if (!stopWords.has(keyword)) keywords.add(keyword);
+    if (keywords.size >= 18) break;
+  }
+  if (keywords.size === 0) return description;
+  return `${description.trim()}\n\n${marker} ${[...keywords].join(', ')}`;
+}
 
 // Таблица заказов клиентов с номерами заказов и деталями
 db.exec(`
@@ -248,6 +300,13 @@ db.exec(`
     device_info TEXT NOT NULL,
     visited_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS site_search_queries (
+    normalized_query TEXT PRIMARY KEY,
+    query_text TEXT NOT NULL,
+    searches_count INTEGER NOT NULL DEFAULT 0,
+    first_searched_at TEXT NOT NULL,
+    last_searched_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS site_visit_totals (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     visits_count INTEGER NOT NULL DEFAULT 0,
@@ -256,8 +315,10 @@ db.exec(`
   INSERT OR IGNORE INTO site_visit_totals (id, visits_count, unique_visitors_count) VALUES (1, 0, 0);
   CREATE INDEX IF NOT EXISTS idx_products_active_category_id ON products(status, category_id, id DESC);
   CREATE INDEX IF NOT EXISTS idx_products_active_popularity ON products(status, views_count DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_products_active_title ON products(status, title COLLATE NOCASE);
   CREATE INDEX IF NOT EXISTS idx_variants_product_id ON product_variants(product_id);
   CREATE INDEX IF NOT EXISTS idx_site_visit_events_visited_at ON site_visit_events(visited_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_site_search_queries_count ON site_search_queries(searches_count DESC, last_searched_at DESC);
 `);
 
 const ordersColumns = db.prepare('PRAGMA table_info(orders)').all() as Array<{ name: string }>;
@@ -1411,7 +1472,7 @@ function getRequestIp(req: express.Request): string {
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
-function getVisitorDeviceInfo(userAgent: string): string {
+function getVisitorDeviceInfo(userAgent: string, requestedModel = ''): string {
   const os = /Android/i.test(userAgent)
     ? 'Android'
     : /iPhone|iPad|iPod/i.test(userAgent)
@@ -1439,7 +1500,9 @@ function getVisitorDeviceInfo(userAgent: string): string {
     : /Mobile|Android|iPhone|iPod/i.test(userAgent)
       ? 'Mobile'
       : 'Desktop';
-  return `${device} · ${os} · ${browser}`;
+  const parsedAndroidModel = userAgent.match(/Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/[^;)]+)?\)/i)?.[1]?.trim();
+  const model = requestedModel || parsedAndroidModel || device;
+  return `${model.slice(0, 80)} · ${os} · ${browser}`;
 }
 
 const siteVisitRateLimiter = rateLimit({
@@ -1457,7 +1520,10 @@ app.post('/api/visits', siteVisitRateLimiter, (req, res) => {
   const visitorHash = crypto.createHmac('sha256', adminJwtSecret).update(getRequestIp(req)).digest('hex');
   const requestUserAgent = req.get('user-agent');
   const userAgent = requestUserAgent?.slice(0, 1000) || '';
-  const deviceInfo = getVisitorDeviceInfo(userAgent);
+  const requestedModel = typeof req.body?.device_model === 'string'
+    ? req.body.device_model.replace(/[^\p{L}\p{N} ._-]/gu, '').trim().slice(0, 80)
+    : '';
+  const deviceInfo = getVisitorDeviceInfo(userAgent, requestedModel);
 
   try {
     db.exec('BEGIN IMMEDIATE;');
@@ -1501,6 +1567,97 @@ app.post('/api/visits', siteVisitRateLimiter, (req, res) => {
     db.exec('ROLLBACK;');
     console.error('[Site Visit Tracking Error]', error);
     return res.status(500).json({ error: 'Не удалось сохранить статистику посещения' });
+  }
+});
+
+const searchRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+function normalizeSearchQuery(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const query = value.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const letterCount = (query.match(/\p{L}/gu) || []).length;
+  const digitCount = (query.match(/\d/g) || []).length;
+  if (query.length < 2 || letterCount === 0 || digitCount >= 7 || /[@]/.test(query)) return '';
+  if (!/^[\p{L}\p{N}\s._-]+$/u.test(query)) return '';
+  return query;
+}
+
+function getSearchCaseVariants(query: string): string[] {
+  const lower = query.toLocaleLowerCase('ru');
+  const capitalized = lower.charAt(0).toLocaleUpperCase('ru') + lower.slice(1);
+  return [...new Set([query, lower, capitalized])];
+}
+
+app.post('/api/searches', searchRateLimiter, (req, res) => {
+  const query = normalizeSearchQuery(req.body?.query);
+  if (!query) return res.status(204).end();
+  const now = new Date().toISOString();
+  const normalizedQuery = query.toLocaleLowerCase('ru');
+  try {
+    db.prepare(`
+      INSERT INTO site_search_queries (normalized_query, query_text, searches_count, first_searched_at, last_searched_at)
+      VALUES (?, ?, 1, ?, ?)
+      ON CONFLICT(normalized_query) DO UPDATE SET
+        query_text = excluded.query_text,
+        searches_count = searches_count + 1,
+        last_searched_at = excluded.last_searched_at
+    `).run(normalizedQuery, query, now, now);
+    return res.status(204).end();
+  } catch (error) {
+    console.error('[Search Tracking Error]', error);
+    return res.status(500).json({ error: 'Не удалось сохранить поисковый запрос' });
+  }
+});
+
+app.get('/api/search/suggestions', (req, res) => {
+  const query = typeof req.query.q === 'string'
+    ? req.query.q.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80)
+    : '';
+  try {
+    const popularQueries = db.prepare(`
+      SELECT query_text, searches_count
+      FROM site_search_queries
+      ORDER BY searches_count DESC, last_searched_at DESC
+      LIMIT 8
+    `).all() as Array<{ query_text: string; searches_count: number }>;
+    if (!query) return res.json({ suggestions: [], popular: popularQueries });
+
+    const normalizedQuery = query.toLocaleLowerCase('ru');
+    const pattern = `${normalizedQuery}%`;
+    const matchingQueries = db.prepare(`
+      SELECT query_text, searches_count
+      FROM site_search_queries
+      WHERE normalized_query LIKE ?
+      ORDER BY searches_count DESC, last_searched_at DESC
+      LIMIT 6
+    `).all(pattern) as Array<{ query_text: string; searches_count: number }>;
+    const variants = getSearchCaseVariants(query);
+    const titleConditions = variants.map(() => 'title LIKE ?').join(' OR ');
+    const titlePatterns = variants.map((variant) => `${variant}%`);
+    const matchingProducts = db.prepare(`
+      SELECT title
+      FROM products
+      WHERE status = 'active' AND (${titleConditions})
+      GROUP BY title
+      ORDER BY MAX(views_count) DESC, MAX(id) DESC
+      LIMIT 6
+    `).all(...titlePatterns) as Array<{ title: string }>;
+    const suggestions = [...new Set([
+      ...matchingQueries.map((item) => item.query_text),
+      ...matchingProducts.map((item) => item.title),
+    ])].slice(0, 8);
+    return res.json({
+      suggestions,
+      popular: popularQueries,
+    });
+  } catch (error) {
+    console.error('[Search Suggestions Error]', error);
+    return res.status(500).json({ error: 'Не удалось загрузить подсказки поиска' });
   }
 });
 
@@ -1585,6 +1742,41 @@ app.get('/api/admin/visit-analytics', (req, res) => {
   } catch (error) {
     console.error('[Site Visit Analytics Error]', error);
     return res.status(500).json({ error: 'Не удалось загрузить статистику посещений' });
+  }
+});
+
+app.get('/api/admin/search-analytics', (req, res) => {
+  const requestedOffset = Number(req.query.offset);
+  const offset = Number.isInteger(requestedOffset) ? Math.min(Math.max(requestedOffset, 0), 1_000_000) : 0;
+  const limit = 100;
+  try {
+    const totals = db.prepare(`
+      SELECT COALESCE(SUM(searches_count), 0) AS total_searches, COUNT(*) AS unique_queries
+      FROM site_search_queries
+    `).get() as { total_searches: number; unique_queries: number };
+    const popularQueries = db.prepare(`
+      SELECT query_text, searches_count, last_searched_at
+      FROM site_search_queries
+      ORDER BY searches_count DESC, last_searched_at DESC
+      LIMIT 10
+    `).all();
+    const queries = db.prepare(`
+      SELECT query_text, searches_count, first_searched_at, last_searched_at
+      FROM site_search_queries
+      ORDER BY searches_count DESC, last_searched_at DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+    return res.json({
+      ...totals,
+      popular_queries: popularQueries,
+      queries,
+      offset,
+      limit,
+      has_more: offset + queries.length < totals.unique_queries,
+    });
+  } catch (error) {
+    console.error('[Admin Search Analytics Error]', error);
+    return res.status(500).json({ error: 'Не удалось загрузить статистику поиска' });
   }
 });
 
@@ -1715,7 +1907,7 @@ app.get('/api/products', (req, res) => {
       : 'all';
     const sort = ['popular', 'price_asc', 'price_desc', 'newest'].includes(String(req.query.sort))
       ? String(req.query.sort)
-      : 'newest';
+      : 'popular';
     const requestedLimit = Number(req.query.limit);
     const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 24;
     const requestedOffset = Number(req.query.offset);
@@ -1727,9 +1919,20 @@ app.get('/api/products', (req, res) => {
     let where = "p.status = 'active'";
     const params: Array<string | number> = [];
     if (search) {
-      where += ' AND (p.title LIKE ? OR p.base_sku LIKE ? OR p.description LIKE ? OR p.specifications LIKE ?)';
-      const term = `%${search}%`;
-      params.push(term, term, term, term);
+      const variants = getSearchCaseVariants(search);
+      const termPatterns = variants.map((variant) => `%${variant}%`);
+      where += ` AND (
+        ${variants.map(() => 'p.title LIKE ?').join(' OR ')}
+        OR p.base_sku LIKE ?
+        OR ${variants.map(() => 'p.description LIKE ?').join(' OR ')}
+        OR ${variants.map(() => 'p.specifications LIKE ?').join(' OR ')}
+      )`;
+      params.push(
+        ...termPatterns,
+        `%${search}%`,
+        ...termPatterns,
+        ...termPatterns,
+      );
     }
     if (categoryId !== null) {
       where += ' AND (p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))';
@@ -1748,7 +1951,7 @@ app.get('/api/products', (req, res) => {
           : 'p.id DESC';
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
-             p.main_image, p.images, p.video_url, p.youtube_url, p.specifications, p.created_at,
+             p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.specifications, p.created_at,
              c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
@@ -1813,6 +2016,7 @@ app.get('/api/products', (req, res) => {
       enriched.push({
         ...p,
         delivery_type: p.delivery_type || 'order',
+        video_urls: normalizeVideoUrls(p.video_urls, p.youtube_url || p.video_url || ''),
         youtube_url: p.youtube_url || p.video_url || '',
         video_url: p.youtube_url || p.video_url || '',
         min_price_tjs: minPrice,
@@ -1853,7 +2057,7 @@ app.get('/api/products/:id/related', (req, res) => {
 
     const selectFields = `
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status,
-             p.delivery_type, p.main_image, p.images, p.video_url, p.youtube_url,
+             p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url,
              c.name AS category_name,
              COALESCE((
                SELECT MIN(v.price_tjs)
@@ -1881,6 +2085,7 @@ app.get('/api/products/:id/related', (req, res) => {
           ...candidate,
           variants: getRelatedVariants.all(candidate.id),
           delivery_type: candidate.delivery_type || 'order',
+          video_urls: normalizeVideoUrls(candidate.video_urls, candidate.youtube_url || candidate.video_url || ''),
           youtube_url: candidate.youtube_url || candidate.video_url || '',
           video_url: candidate.youtube_url || candidate.video_url || '',
         });
@@ -2304,6 +2509,7 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
       enriched.push({
         ...p,
         delivery_type: p.delivery_type || 'order',
+        video_urls: normalizeVideoUrls(p.video_urls, p.youtube_url || p.video_url || ''),
         youtube_url: p.youtube_url || p.video_url || '',
         video_url: p.youtube_url || p.video_url || '',
         specifications: parsedSpecs,
@@ -2328,6 +2534,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       main_image = '',
       images = '',
       video_url = '',
+      video_urls = [],
       youtube_url = '',
       specifications = [],
       variants = [],
@@ -2338,16 +2545,24 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     }
 
     const cleanTitle = title.trim();
-    const cleanDesc = (description || '').trim();
+    let cleanDesc = (description || '').trim();
     const cleanDelivery = delivery_type === 'stock' ? 'stock' : 'order';
     const cleanStatus = status === 'draft' ? 'draft' : 'active';
-    const cleanVideo = (typeof youtube_url === 'string' && youtube_url.trim())
+    const requestedVideo = (typeof youtube_url === 'string' && youtube_url.trim())
       ? youtube_url.trim()
       : (typeof video_url === 'string' ? video_url.trim() : '');
+    const cleanVideos = normalizeVideoUrls(video_urls, requestedVideo);
+    const cleanVideo = cleanVideos[0] || requestedVideo;
 
     // ИИ-определение категории через Gemini 3.8 Flash
     const aiCategory = await resolveCategoryWithAi(cleanTitle);
     const categoryId = resolveCategoryId(aiCategory);
+    cleanDesc = appendSearchKeywords(
+      cleanDesc,
+      cleanTitle,
+      aiCategory,
+      Array.isArray(specifications) ? specifications : [],
+    );
 
     // Нормализация спецификаций/характеристик
     let cleanSpecs = '';
@@ -2378,9 +2593,9 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     const baseSku = generateBaseSku(categoryId);
 
     const insertProd = db.prepare(`
-      INSERT INTO products (title, description, category_id, base_sku, status, delivery_type, main_image, images, video_url, youtube_url, specifications)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(cleanTitle, cleanDesc, categoryId, baseSku, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, cleanVideo, cleanSpecs);
+      INSERT INTO products (title, description, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(cleanTitle, cleanDesc, categoryId, baseSku, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs);
 
     const productId = Number(insertProd.lastInsertRowid);
 
@@ -2468,6 +2683,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       main_image = '',
       images = '',
       video_url = '',
+      video_urls = [],
       youtube_url = '',
       default_weight_kg,
       specifications,
@@ -2479,16 +2695,24 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     }
 
     const cleanTitle = title.trim();
-    const cleanDesc = (description || '').trim();
+    let cleanDesc = (description || '').trim();
     const cleanDelivery = delivery_type === 'stock' ? 'stock' : 'order';
     const cleanStatus = status === 'draft' ? 'draft' : 'active';
-    const cleanVideo = (typeof youtube_url === 'string' && youtube_url.trim())
+    const requestedVideo = (typeof youtube_url === 'string' && youtube_url.trim())
       ? youtube_url.trim()
       : (typeof video_url === 'string' ? video_url.trim() : '');
+    const cleanVideos = normalizeVideoUrls(video_urls, requestedVideo);
+    const cleanVideo = cleanVideos[0] || requestedVideo;
 
     // ИИ-определение точной категории через Gemini 3.8 Flash
     const aiCategory = await resolveCategoryWithAi(cleanTitle);
     const categoryId = resolveCategoryId(aiCategory);
+    cleanDesc = appendSearchKeywords(
+      cleanDesc,
+      cleanTitle,
+      aiCategory,
+      Array.isArray(specifications) ? specifications : [],
+    );
 
     // Нормализация спецификаций
     let cleanSpecs: string | null = null;
@@ -2520,10 +2744,10 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     // Обновляем карточку товара
     db.prepare(`
       UPDATE products
-      SET title = ?, description = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, youtube_url = ?,
+      SET title = ?, description = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, video_urls = ?, youtube_url = ?,
           specifications = CASE WHEN ? IS NOT NULL THEN ? ELSE specifications END
       WHERE id = ?
-    `).run(cleanTitle, cleanDesc, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, cleanVideo, cleanSpecs, cleanSpecs, id);
+    `).run(cleanTitle, cleanDesc, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs, cleanSpecs, id);
 
     // Если передан полный обновленный массив вариантов: синхронизируем матрицу
     if (Array.isArray(variants) && variants.length > 0) {
@@ -2630,6 +2854,7 @@ app.post('/api/add-product', async (req, res) => {
       status = 'active',
       delivery_type = 'order',
       youtube_url = '',
+      video_urls = [],
     } = req.body;
 
     const fullRawText = (raw_html_text || raw_text || '').trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
@@ -2655,6 +2880,12 @@ app.post('/api/add-product', async (req, res) => {
     }
     const cleanVideoUrl = typeof video_url === 'string' ? video_url.trim() : '';
     const cleanYoutubeUrl = typeof youtube_url === 'string' && youtube_url.trim() ? youtube_url.trim() : cleanVideoUrl;
+    const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
+    const importedVideos = normalizeVideoUrls(video_urls, cleanYoutubeUrl)
+      .concat(normalizeVideoUrls(structuredMedia.videoUrls))
+      .filter((url, index, urls) => urls.indexOf(url) === index)
+      .slice(0, 12);
+    const primaryVideoUrl = importedVideos[0] || cleanVideoUrl;
     const finalDeliveryType = delivery_type === 'stock' ? 'stock' : 'order';
 
     console.log('[API Import] Запрос на импорт товара. Длина текста:', fullRawText.length, 'Карт картинок:', visualSkuMap.length);
@@ -2736,6 +2967,7 @@ app.post('/api/add-product', async (req, res) => {
 
     // Привязываем категорию
     finalCategory = normalizeSubcategoryName(finalCategory, `${finalTitle} ${fullRawText}`);
+    finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
     const categoryId = resolveCategoryId(finalCategory);
 
     // Генерируем уникальный артикул базового товара
@@ -2759,9 +2991,9 @@ app.post('/api/add-product', async (req, res) => {
     // Сохраняем товар в базу со всеми фото, видео и характеристиками
     const specsJson = JSON.stringify(specificationsToProcess);
     const prodInsert = db.prepare(`
-      INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, youtube_url, specifications)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(finalTitle, finalDesc, original_link, categoryId, baseSku, status, finalDeliveryType, mainImage, allImages, cleanVideoUrl, cleanYoutubeUrl, specsJson);
+      INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(finalTitle, finalDesc, original_link, categoryId, baseSku, status, finalDeliveryType, mainImage, allImages, primaryVideoUrl, JSON.stringify(importedVideos), primaryVideoUrl, specsJson);
 
     const productId = Number(prodInsert.lastInsertRowid);
 
@@ -2918,6 +3150,12 @@ app.post('/api/parse-product-html', async (req, res) => {
 
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
     finalDesc = cleanBannedWordsAndPhrases(finalDesc);
+    finalDesc = appendSearchKeywords(
+      finalDesc,
+      finalTitle,
+      analysis.category_name,
+      combinedSpecs,
+    );
 
     const finalProduct = {
       title: finalTitle,
@@ -2929,6 +3167,7 @@ app.post('/api/parse-product-html', async (req, res) => {
       images: imagesList,
       main_image: mainImg,
       video_url: structured.videoUrl || '',
+      video_urls: structured.videoUrls,
       original_link: original_link || '',
       delivery_type: delivery_type === 'stock' ? 'stock' : 'order',
       status: status || 'active',
@@ -2943,8 +3182,8 @@ app.post('/api/parse-product-html', async (req, res) => {
       const specsJson = JSON.stringify(combinedSpecs);
 
       const prodInsert = db.prepare(`
-        INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, youtube_url, specifications)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         finalProduct.title,
         finalProduct.description,
@@ -2956,6 +3195,7 @@ app.post('/api/parse-product-html', async (req, res) => {
         mainImg,
         allImagesStr,
         finalProduct.video_url,
+        JSON.stringify(finalProduct.video_urls),
         finalProduct.video_url,
         specsJson
       );
@@ -3039,17 +3279,38 @@ app.get('/api/categories', (_req, res) => {
     const rootCats = (db.prepare('SELECT id, name FROM categories WHERE parent_id IS NULL').all() as Array<{ id: number; name: string }>)
       .sort((a, b) => (rootOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER) - (rootOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER));
     const getSubs = db.prepare('SELECT id, name FROM categories WHERE parent_id = ? ORDER BY name ASC');
+    const productCounts = new Map(
+      (db.prepare(`
+        SELECT category_id, COUNT(*) AS product_count
+        FROM products
+        WHERE status = 'active' AND category_id IS NOT NULL
+        GROUP BY category_id
+      `).all() as Array<{ category_id: number; product_count: number }>)
+        .map((row) => [row.category_id, row.product_count]),
+    );
 
     const tree: any[] = [];
     for (const root of rootCats) {
-      const subcategories = getSubs.all(root.id);
+      const subcategories = (getSubs.all(root.id) as Array<{ id: number; name: string }>).map((category) => ({
+        ...category,
+        product_count: productCounts.get(category.id) || 0,
+      }));
       tree.push({
         ...root,
+        product_count: (productCounts.get(root.id) || 0)
+          + subcategories.reduce((count, category) => count + category.product_count, 0),
         subcategories,
       });
     }
 
-    const all = db.prepare('SELECT id, name, parent_id FROM categories ORDER BY name ASC').all();
+    const all = (db.prepare('SELECT id, name, parent_id FROM categories ORDER BY name ASC').all() as Array<{
+      id: number;
+      name: string;
+      parent_id: number | null;
+    }>).map((category) => ({
+      ...category,
+      product_count: productCounts.get(category.id) || 0,
+    }));
     return res.json({ tree, all });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -3358,6 +3619,7 @@ app.post('/api/search-by-image', async (req, res) => {
         ...p,
         score,
         delivery_type: p.delivery_type || 'order',
+        video_urls: normalizeVideoUrls(p.video_urls, p.youtube_url || p.video_url || ''),
         youtube_url: p.youtube_url || p.video_url || '',
         video_url: p.youtube_url || p.video_url || '',
         min_price_tjs: minPrice === Infinity ? 0 : minPrice,

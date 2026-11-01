@@ -10,7 +10,7 @@ interface CartDrawerProps {
   items: CartItem[];
   products: Product[];
   onUpdateQuantity: (id: string, delta: number) => void;
-  onChangeVariant: (itemId: string, variant: NonNullable<Product['variants']>[number]) => void;
+  onAddVariant: (itemId: string, variant: NonNullable<Product['variants']>[number]) => void;
   onRemoveItem: (id: string) => void;
   onClearCart: () => void;
   onOpenRules: () => void;
@@ -23,7 +23,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   items,
   products,
   onUpdateQuantity,
-  onChangeVariant,
+  onAddVariant,
   onRemoveItem,
   onClearCart,
   onOpenRules,
@@ -41,28 +41,18 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   const copy = {
     ru: {
-      position: 'Позиция',
-      product: 'Товар',
-      sku: 'Артикул',
-      color: 'Цвет',
-      size: 'Размер',
-      quantity: 'Количество',
-      price: 'Цена',
       total: 'ИТОГО К ОПЛАТЕ',
-      greeting: 'Здравствуйте! Оформляю заказ',
-      deliveryOrder: 'Доставка: 18–30 дней — согласие подтверждено',
+      greeting: 'Ассаламу Алайкум!',
+      deliveryOrder: 'Доставка: 12–35 дней',
       deliveryStock: 'Доставка: в наличии на складе, 1 день',
-      rulesAgreed: 'С правилами сервиса ознакомлен и согласен.',
-      orderIn: 'в магазине',
-      lineTotal: 'Сумма',
       standard: 'Стандарт',
       oneSize: 'Единый размер',
       customer: 'Клиент',
       phone: 'Телефон',
       address: 'Адрес',
-      deliveryTitle: 'ВНИМАНИЕ! ДОСТАВКА ТОВАРА ЗАЙМЁТ 18–30 ДНЕЙ',
-      deliveryQuestion: 'Вы согласны со сроками доставки?',
-      deliveryDescription: 'Товар выкупается под заказ, проходит контроль качества и отправляется в Таджикистан.',
+      deliveryTitle: 'СРОК ДОСТАВКИ: ОТ 12 ДО 35 ДНЕЙ',
+      deliveryQuestion: 'Вы согласны с ориентировочным сроком доставки?',
+      deliveryDescription: 'Доставку из Китая до пункта приёма M.Savdo выполняют наши карго-партнёры. В редких случаях возможны задержки по независящим от M.Savdo причинам.',
       detailsLabel: 'Контактные данные для связи по заказу:',
       namePlaceholder: 'Ваше имя',
       phonePlaceholder: '+992 00 000 0000',
@@ -74,36 +64,28 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       confirm: 'ПОДТВЕРДИТЬ И ПЕРЕЙТИ В WHATSAPP',
       submitting: 'Регистрация…',
       deliveryTime: 'Срок доставки:',
-      preOrderTime: 'доставка 18–30 дней',
+      preOrderTime: 'доставка 12–35 дней',
       stockTime: 'в наличии · 1 день',
       agreeRequired: 'Отметьте согласие для активации кнопки заказа',
       clearCart: 'Очистить корзину',
       manager: 'Менеджер',
       chooseVariant: 'Цвет / размер',
+      addVariantHint: 'Выберите ещё один вариант — он добавится отдельной позицией.',
+      orderLabel: 'Заказ',
     },
     tg: {
-      position: 'Мавқеъ',
-      product: 'Мол',
-      sku: 'Рамз',
-      color: 'Ранг',
-      size: 'Андоза',
-      quantity: 'Миқдор',
-      price: 'Нарх',
       total: 'ҲАМАГӢ БАРОИ ПАРДОХТ',
-      greeting: 'Салом! Фармоиш медиҳам',
-      deliveryOrder: 'Расонидан: 18–30 рӯз — розигӣ тасдиқ шуд',
+      greeting: 'Ассаламу Алайкум!',
+      deliveryOrder: 'Расонидан: 12–35 рӯз',
       deliveryStock: 'Расонидан: дар анбор, 1 рӯз',
-      rulesAgreed: 'Бо қоидаҳои хизматрасонӣ шинос шудам ва розӣ ҳастам.',
-      orderIn: 'дар мағозаи',
-      lineTotal: 'Ҷамъ',
       standard: 'Стандарт',
       oneSize: 'Андозаи ягона',
       customer: 'Муштарӣ',
       phone: 'Телефон',
       address: 'Суроға',
-      deliveryTitle: 'ДИҚҚАТ! РАСОНИДАН 18–30 РӮЗРО МЕГИРАД',
-      deliveryQuestion: 'Оё шумо бо муҳлати расонидан розӣ ҳастед?',
-      deliveryDescription: 'Мол тибқи фармоиш харида, санҷида ва ба Тоҷикистон фиристода мешавад.',
+      deliveryTitle: 'МУҲЛАТИ РАСОНИДАН: АЗ 12 ТО 35 РӮЗ',
+      deliveryQuestion: 'Оё шумо бо муҳлати тахминии расонидан розӣ ҳастед?',
+      deliveryDescription: 'Расонидани мол аз Чин то нуқтаи қабули M.Savdo аз ҷониби ширкатҳои каргои ҳамкор анҷом дода мешавад. Дар ҳолатҳои кам бо сабабҳои ба M.Savdo вобаста набуда таъхир мешавад.',
       detailsLabel: 'Маълумоти тамос барои фармоиш:',
       namePlaceholder: 'Номи шумо',
       phonePlaceholder: '+992 00 000 0000',
@@ -115,36 +97,28 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       confirm: 'ТАСДИҚ ВА ГУЗАШТАН БА WHATSAPP',
       submitting: 'Сабт шуда истодааст…',
       deliveryTime: 'Муҳлати расонидан:',
-      preOrderTime: 'расонидан 18–30 рӯз',
+      preOrderTime: 'расонидан 12–35 рӯз',
       stockTime: 'дар анбор · 1 рӯз',
       agreeRequired: 'Барои фармоиш розигиро тасдиқ кунед',
       clearCart: 'Холӣ кардани сабад',
       manager: 'Менеҷер',
       chooseVariant: 'Ранг / андоза',
+      addVariantHint: 'Варианти дигарро интихоб кунед — он ҳамчун мавқеи алоҳида илова мешавад.',
+      orderLabel: 'Фармоиш',
     },
     en: {
-      position: 'Item',
-      product: 'Product',
-      sku: 'SKU',
-      color: 'Color',
-      size: 'Size',
-      quantity: 'Quantity',
-      price: 'Price',
       total: 'TOTAL',
-      greeting: 'Hello! I would like to place order',
-      deliveryOrder: 'Delivery: 18–30 days — confirmed',
+      greeting: 'Ассаламу Алайкум!',
+      deliveryOrder: 'Delivery: 12–35 days',
       deliveryStock: 'Delivery: in stock, 1 day',
-      rulesAgreed: 'I have read and agree to the service rules.',
-      orderIn: 'at',
-      lineTotal: 'Total',
       standard: 'Standard',
       oneSize: 'One size',
       customer: 'Customer',
       phone: 'Phone',
       address: 'Address',
-      deliveryTitle: 'PLEASE NOTE: DELIVERY TAKES 18–30 DAYS',
-      deliveryQuestion: 'Do you agree to the delivery time?',
-      deliveryDescription: 'The item is sourced to order, quality-checked, and shipped to Tajikistan.',
+      deliveryTitle: 'ESTIMATED DELIVERY: 12–35 DAYS',
+      deliveryQuestion: 'Do you agree to the estimated delivery time?',
+      deliveryDescription: 'Our cargo partners transport items from China to the M.Savdo receiving point. Rare delays may occur for reasons beyond M.Savdo’s control.',
       detailsLabel: 'Contact details for your order:',
       namePlaceholder: 'Your name',
       phonePlaceholder: '+992 00 000 0000',
@@ -156,12 +130,14 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       confirm: 'CONFIRM AND CONTINUE TO WHATSAPP',
       submitting: 'Saving…',
       deliveryTime: 'Delivery time:',
-      preOrderTime: 'delivery in 18–30 days',
+      preOrderTime: 'delivery in 12–35 days',
       stockTime: 'in stock · 1 day',
       agreeRequired: 'Accept the rules to enable checkout',
       clearCart: 'Clear cart',
       manager: 'Manager',
       chooseVariant: 'Color / size',
+      addVariantHint: 'Choose another option to add it as a separate item.',
+      orderLabel: 'Order',
     },
   }[language];
 
@@ -169,7 +145,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   const totalSum = items.reduce((sum, item) => sum + item.price_tjs * item.quantity, 0);
 
-  // Проверка: есть ли товары с доставкой из Китая за 18–30 дней.
+  // Проверка: есть ли товары с доставкой из Китая за 12–35 дней.
   const hasPreOrderItems = items.some((item) => item.delivery_type !== 'stock');
   const phoneDigits = customerPhone.replace(/\D/g, '');
   const isPhoneValid = /^[+()\d\s.-]+$/.test(customerPhone.trim())
@@ -240,31 +216,30 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
     const itemsText = items.map((item, index) => {
       const lineTotal = item.price_tjs * item.quantity;
-      return [
-        `📦 ${copy.position} #${index + 1}:`,
-        `• ${copy.product}: ${item.title}`,
-        `• ${copy.sku}: ${item.variant_sku}`,
-        `• ${copy.color}: ${item.color || copy.standard}`,
-        `• ${copy.size}: ${item.size || copy.oneSize}`,
-        `• ${copy.quantity}: ${item.quantity}`,
-        `• ${copy.price}: ${item.price_tjs} TJS (${copy.lineTotal}: ${lineTotal} TJS)`,
-      ].join('\n');
+      const options = [item.color, item.size].filter(
+        (value) => value
+          && value !== copy.standard
+          && value !== copy.oneSize
+          && value !== 'Стандарт'
+          && value !== 'Standard'
+          && value !== 'One Size',
+      );
+      return `${index + 1}. ${item.title}${options.length ? ` (${options.join(' / ')})` : ''} × ${item.quantity} — ${lineTotal} TJS`;
     }).join('\n\n');
 
     const customerDetails = [
-      customerName ? `👤 ${copy.customer}: ${customerName}` : '',
-      `📞 ${copy.phone}: ${customerPhone.trim()}`,
-      customerAddress ? `📍 ${copy.address}: ${customerAddress}` : '',
+      customerName ? `${copy.customer}: ${customerName}` : '',
+      `${copy.phone}: ${customerPhone.trim()}`,
+      customerAddress ? `${copy.address}: ${customerAddress}` : '',
     ].filter(Boolean).join('\n');
 
     const message = [
-      `${copy.greeting} #${orderNumber} ${copy.orderIn} M.Savdo (@MSavdo.tj):`,
-      customerDetails ? `\n${customerDetails}\n` : '',
+      copy.greeting,
+      `${copy.orderLabel} #${orderNumber}`,
+      customerDetails,
       itemsText,
-      ``,
-      `💰 ${copy.total}: ${totalSum} TJS`,
-      `🚚 ${hasPreOrderItems ? copy.deliveryOrder : copy.deliveryStock}`,
-      `✓ ${copy.rulesAgreed}`,
+      `${copy.total}: ${totalSum} TJS`,
+      hasPreOrderItems ? copy.deliveryOrder : copy.deliveryStock,
     ].filter(Boolean).join('\n');
 
     const cleanPhone = whatsappPhone.replace(/[^0-9]/g, '');
@@ -334,7 +309,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                             value={item.variant_sku}
                             onChange={(event) => {
                               const variant = productVariants.find((candidate) => candidate.variant_sku === event.target.value);
-                              if (variant) onChangeVariant(item.id, variant);
+                              if (variant) onAddVariant(item.id, variant);
                             }}
                             className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-medium text-slate-700"
                           >
@@ -344,6 +319,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                               </option>
                             ))}
                           </select>
+                          <span className="mt-1 block text-[9px] text-slate-400">{copy.addVariantHint}</span>
                         </label>
                       )}
 

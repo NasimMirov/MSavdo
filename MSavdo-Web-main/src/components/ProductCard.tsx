@@ -91,7 +91,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       <div className="p-2.5 sm:p-4 flex-1 flex flex-col justify-between">
         <div>
           <div className="flex items-center justify-between gap-1 mb-0.5">
-            <div className="text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase tracking-wider truncate">
+            <div className="text-[8px] sm:text-[9px] font-semibold text-slate-600 uppercase tracking-wide truncate">
               {product.category_name || 'Каталог'}
             </div>
           </div>

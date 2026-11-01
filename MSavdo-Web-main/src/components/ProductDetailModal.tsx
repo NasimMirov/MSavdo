@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, ProductVariant, CartItem } from '../types';
-import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock } from 'lucide-react';
+import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 
@@ -62,6 +62,18 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
+  const [selectedQuantity, setSelectedQuantity] = useState(1);
+  const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
+  const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
+
+  const productVideos = useMemo(() => {
+    const storedVideos = Array.isArray(product?.video_urls) ? product.video_urls : [];
+    return [...new Set([
+      ...storedVideos,
+      product?.youtube_url || '',
+      product?.video_url || '',
+    ].map((video) => video.trim()).filter(Boolean))];
+  }, [product]);
 
   useEffect(() => {
     if (!product) {
@@ -185,7 +197,19 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     setSelectedGalleryImage(product.main_image || '');
     setMediaMode('photo');
     setAdded(false);
+    setSelectedQuantity(1);
+    setSelectedVideoIndex(0);
+    setIsPhotoZoomed(false);
   }, [product?.id]);
+
+  useEffect(() => {
+    if (!isPhotoZoomed) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsPhotoZoomed(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isPhotoZoomed]);
 
   if (!product) return null;
 
@@ -203,7 +227,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
       size: activeVariant.size || 'One Size',
       price_tjs: activeVariant.price_tjs,
       image: activeVariant.image_url || product.main_image,
-      quantity: 1,
+      quantity: selectedQuantity,
       stock: activeVariant.stock,
       delivery_type: product.delivery_type || 'order',
     };
@@ -223,6 +247,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   };
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-1.5 sm:p-4 bg-slate-900/70 backdrop-blur-md animate-fade-in">
       <div 
       className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full max-h-[98dvh] sm:max-h-[92vh] overflow-y-auto overscroll-contain shadow-2xl border border-slate-200/80 relative flex flex-col"
@@ -256,10 +281,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           {/* Левая колонка: Галерея, видео и изображения */}
           <div className="space-y-2 sm:space-y-3.5">
             {/* Переключатель Фото / Видео если есть видео */}
-            {(product.youtube_url || product.video_url) && (
-              <div className="flex gap-2 text-xs">
+            {productVideos.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 text-xs">
                 <button
-                  onClick={() => setMediaMode('photo')}
+                  onClick={() => {
+                    setMediaMode('photo');
+                    setIsPhotoZoomed(false);
+                  }}
                   className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
                     mediaMode === 'photo'
                       ? 'bg-slate-900 text-white shadow-xs'
@@ -268,17 +296,24 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 >
                   📷 {t('photo')} ({allGalleryImages.length})
                 </button>
-                <button
-                  onClick={() => setMediaMode('video')}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
-                    mediaMode === 'video'
-                      ? 'bg-emerald-600 text-white shadow-xs'
-                      : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
-                  }`}
-                >
-                  <span>▶</span>
-                  <span>{t('videoReview')}</span>
-                </button>
+                {productVideos.map((_, videoIndex) => (
+                  <button
+                    key={`video-${videoIndex}`}
+                    onClick={() => {
+                      setSelectedVideoIndex(videoIndex);
+                      setMediaMode('video');
+                      setIsPhotoZoomed(false);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                      mediaMode === 'video' && selectedVideoIndex === videoIndex
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+                    }`}
+                  >
+                    <span>▶</span>
+                    <span>{t('videoReview')} {productVideos.length > 1 ? videoIndex + 1 : ''}</span>
+                  </button>
+                ))}
               </div>
             )}
 
@@ -301,9 +336,9 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 }
               }}
             >
-              {mediaMode === 'video' && (product.youtube_url || product.video_url) ? (
+              {mediaMode === 'video' && productVideos[selectedVideoIndex] ? (
                 (() => {
-                  const targetVideo = (product.youtube_url || product.video_url || '').trim();
+                  const targetVideo = productVideos[selectedVideoIndex];
                   const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/;
                   const match = targetVideo.match(regExp);
                   if (match && match[1]) {
@@ -333,8 +368,19 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   src={currentImage}
                   alt={product.title}
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover transition-all duration-300"
+                  onClick={() => setIsPhotoZoomed(true)}
+                  className="w-full h-full object-cover transition-all duration-300 cursor-zoom-in"
                 />
+              )}
+              {mediaMode === 'photo' && (
+                <button
+                  type="button"
+                  onClick={() => setIsPhotoZoomed(true)}
+                  aria-label={t('zoomPhoto')}
+                  className="absolute right-2 top-2 rounded-full bg-slate-950/70 p-2 text-white shadow-md transition hover:bg-slate-950"
+                >
+                  <ZoomIn className="h-4 w-4" />
+                </button>
               )}
 
               <div className="absolute top-2 left-2 bg-slate-900/75 text-white text-[9px] font-mono font-bold px-2 py-0.5 rounded-md shadow-xs">
@@ -349,7 +395,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               ) : (
                 <div className="absolute bottom-2 left-2 bg-[#f4c542]/95 text-slate-900 text-[9px] font-bold px-2 py-1 rounded-md shadow-xs flex items-center gap-1">
                   <Clock className="w-3 h-3" />
-                  <span>Доставка 18–30 дней</span>
+                  <span>Доставка 12–35 дней</span>
                 </div>
               )}
             </div>
@@ -365,6 +411,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       onClick={() => {
                         setSelectedGalleryImage(img);
                         setMediaMode('photo');
+                        setIsPhotoZoomed(false);
                       }}
                       className={`relative w-11 h-11 sm:w-14 sm:h-14 rounded-lg sm:rounded-xl overflow-hidden border-2 shrink-0 transition-all ${
                         isSelected
@@ -445,7 +492,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               ) : (
                 <div className="hidden md:flex mt-3 p-3 bg-[#fff7db] border border-[#ecd17c] rounded-2xl items-center gap-2.5 text-xs text-slate-800 shadow-xs">
                   <Clock className="w-4 h-4 shrink-0" />
-                  <span><strong>Доставка 18–30 дней</strong></span>
+                  <span><strong>Доставка 12–35 дней</strong></span>
                 </div>
               )}
 
@@ -532,8 +579,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     {t('description')}
                   </h4>
                 </div>
-                <div className="bg-gradient-to-br from-amber-50/40 via-slate-50 to-emerald-50/20 p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-xs">
-                  <div className="text-[11px] sm:text-sm text-slate-700 leading-relaxed font-normal whitespace-pre-line">
+                <div className="product-description-panel bg-gradient-to-br from-amber-50/40 via-slate-50 to-emerald-50/20 p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-xs">
+                  <div className="product-description-text text-[11px] sm:text-sm text-slate-700 leading-relaxed font-normal whitespace-pre-line">
                     {product.description || 'Качественные фабричные материалы, продуманная эргономика и надежность в повседневном использовании.'}
                   </div>
                 </div>
@@ -542,6 +589,28 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
             {/* Кнопка добавления в корзину */}
             <div className="sticky bottom-0 z-10 -mx-4 space-y-3 border-t border-slate-200/80 bg-white/95 px-4 pb-2 pt-3 backdrop-blur sm:static sm:mx-0 sm:bg-transparent sm:p-0">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs font-semibold text-slate-700">{t('quantity')}</span>
+                <div className="flex items-center rounded-lg border border-slate-200 bg-white">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedQuantity((quantity) => Math.max(1, quantity - 1))}
+                    aria-label={t('decreaseQuantity')}
+                    className="p-2 text-slate-600 hover:bg-slate-100"
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </button>
+                  <span className="min-w-8 text-center text-sm font-bold text-slate-900">{selectedQuantity}</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedQuantity((quantity) => Math.min(99, quantity + 1))}
+                    aria-label={t('increaseQuantity')}
+                    className="p-2 text-slate-600 hover:bg-slate-100"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
               <div className="flex items-center gap-2">
               <button
                 onClick={handleOrderNow}
@@ -644,5 +713,31 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
       </div>
     </div>
+    {isPhotoZoomed && mediaMode === 'photo' && (
+      <div
+        className="fixed inset-0 z-[70] flex items-center justify-center bg-black/95 p-3 sm:p-8"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t('zoomPhoto')}
+        onClick={() => setIsPhotoZoomed(false)}
+      >
+        <button
+          type="button"
+          onClick={() => setIsPhotoZoomed(false)}
+          aria-label={t('close')}
+          className="absolute right-3 top-3 rounded-full bg-white/15 p-2 text-white hover:bg-white/25"
+        >
+          <X className="h-5 w-5" />
+        </button>
+        <img
+          src={currentImage}
+          alt={product.title}
+          referrerPolicy="no-referrer"
+          onClick={(event) => event.stopPropagation()}
+          className="max-h-full max-w-full object-contain"
+        />
+      </div>
+    )}
+    </>
   );
 };

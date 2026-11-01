@@ -7,6 +7,7 @@
   const MODAL_ID = "msavdo-smart-import-modal";
   const MAX_TEXT_LENGTH = 6000;
   const MAX_IMAGES = 8;
+  const MAX_VIDEOS = 12;
   const EXCLUDED_IMAGE_TOKENS = ["logo", "avatar", "qrcode", "qr-code", "banner", "icon"];
 
   function getElementText(element) {
@@ -138,6 +139,75 @@
     return Array.from(imageUrls).slice(0, MAX_IMAGES);
   }
 
+  function normalizeVideoUrl(rawUrl) {
+    if (typeof rawUrl !== "string" || !rawUrl.trim()) return "";
+    const normalized = rawUrl
+      .replace(/\\u002F/gi, "/")
+      .replace(/\\\//g, "/")
+      .replace(/&amp;/gi, "&")
+      .trim();
+    try {
+      const url = new URL(normalized, document.baseURI);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+      if (/\.(?:jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url.href)) return "";
+      return url.href;
+    } catch {
+      return "";
+    }
+  }
+
+  function collectVideoUrls() {
+    const videoUrls = new Set();
+    const addUrl = (value) => {
+      const url = normalizeVideoUrl(value);
+      if (url) videoUrls.add(url);
+    };
+
+    for (const media of document.querySelectorAll("video, video source, [data-video-url]")) {
+      addUrl(media.currentSrc || media.getAttribute("src") || media.getAttribute("data-video-url") || media.getAttribute("data-src"));
+      if (videoUrls.size >= MAX_VIDEOS) return Array.from(videoUrls);
+    }
+
+    const visitVideoFields = (value, key = "", inVideoContext = false) => {
+      const isVideoContext = inVideoContext || /video|playurl|mediaurl/i.test(key);
+      if (typeof value === "string") {
+        const isUrlField = /url|src|link|address|play/i.test(key);
+        const looksLikeUrl = /^(?:https?:)?\/\//i.test(value) || /^\/[^/]/.test(value);
+        if (isVideoContext && (isUrlField || looksLikeUrl) && !/poster|image|cover/i.test(key)) addUrl(value);
+        return;
+      }
+      if (Array.isArray(value)) {
+        value.forEach((item) => visitVideoFields(item, key, isVideoContext));
+      } else if (value && typeof value === "object") {
+        Object.entries(value).forEach(([childKey, childValue]) => visitVideoFields(childValue, childKey, isVideoContext));
+      }
+    };
+
+    for (const script of document.querySelectorAll("script:not([src])")) {
+      if (videoUrls.size >= MAX_VIDEOS) break;
+      const scriptText = script.textContent || "";
+      if (scriptText.length > 250000 || !/video|playurl|mediaurl/i.test(scriptText)) continue;
+
+      const assignmentMatch = scriptText.match(/(?:window\.(?:context|__INIT_DATA__|runParams)|__INITIAL_DATA__)\s*=\s*(\{[\s\S]*\});?\s*$/);
+      const candidates = [assignmentMatch?.[1], scriptText.trim().startsWith("{") ? scriptText.trim() : ""];
+      for (const candidate of candidates) {
+        if (!candidate) continue;
+        try {
+          visitVideoFields(JSON.parse(candidate));
+          if (videoUrls.size >= MAX_VIDEOS) break;
+        } catch {
+          const matches = scriptText.matchAll(/(?:videoUrl|playUrl|video_url|videoAddress|mediaUrl)\s*["']?\s*[:=]\s*["']([^"'\s]+)["']/gi);
+          for (const match of matches) {
+            addUrl(match[1]);
+            if (videoUrls.size >= MAX_VIDEOS) break;
+          }
+        }
+      }
+    }
+
+    return Array.from(videoUrls).slice(0, MAX_VIDEOS);
+  }
+
   function getChineseLabel(element) {
     const candidates = [
       element.getAttribute("aria-label"),
@@ -198,6 +268,7 @@
       raw_title: document.title || "",
       price_cny: getBasePrice(rawText),
       images: collectImages(),
+      video_urls: collectVideoUrls(),
       original_link: window.location.href,
       visual_sku_map: collectVisualSkuMap().slice(0, MAX_IMAGES),
       use_gemini: true,
@@ -309,8 +380,8 @@
     try {
       payload = gatherProductData();
       summary.textContent = Number.isFinite(payload.price_cny)
-        ? `Цена: ¥${payload.price_cny} · Фото: ${payload.images.length} · Цветов с фото: ${payload.visual_sku_map.length} · Текст страницы: ${payload.raw_text.length} символов`
-        : `Цена в юанях не найдена · Фото: ${payload.images.length} · Текст страницы: ${payload.raw_text.length} символов`;
+        ? `Цена: ¥${payload.price_cny} · Фото: ${payload.images.length} · Видео: ${payload.video_urls.length} · Цветов с фото: ${payload.visual_sku_map.length} · Текст страницы: ${payload.raw_text.length} символов`
+        : `Цена в юанях не найдена · Фото: ${payload.images.length} · Видео: ${payload.video_urls.length} · Текст страницы: ${payload.raw_text.length} символов`;
       submitButton.disabled = !Number.isFinite(payload.price_cny);
       if (!Number.isFinite(payload.price_cny)) {
         status.style.color = "#b91c1c";

@@ -88,11 +88,19 @@ async function handleImportProduct(payload, sender) {
       ? payload.raw_html_text
       : null;
   const images = Array.isArray(payload?.images) ? payload.images : [];
+  const videoUrls = payload?.video_urls === undefined
+    ? []
+    : Array.isArray(payload.video_urls)
+      ? payload.video_urls
+      : null;
   if (
     !payload
     || typeof rawText !== "string"
     || rawText.length > 200000
     || images.length > 50
+    || !videoUrls
+    || videoUrls.length > 12
+    || videoUrls.some((url) => typeof url !== "string" || url.length > 2048)
     || !Number.isFinite(payload.price_cny)
   ) {
     return { success: false, error: "Данные товара неполные или превышают допустимый размер." };
@@ -106,7 +114,7 @@ async function handleImportProduct(payload, sender) {
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
-      body: JSON.stringify({ ...payload, raw_text: rawText, images })
+      body: JSON.stringify({ ...payload, raw_text: rawText, images, video_urls: videoUrls })
     });
 
     const contentType = response.headers.get("content-type") || "";
