@@ -64,6 +64,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [selectedQuantity, setSelectedQuantity] = useState(1);
+  const [isQuantityPickerOpen, setIsQuantityPickerOpen] = useState(false);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
   const [photoAspectRatio, setPhotoAspectRatio] = useState(1);
 
@@ -232,6 +233,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     setSelectedMediaIndex(0);
     setAdded(false);
     setSelectedQuantity(1);
+    setIsQuantityPickerOpen(false);
     setIsPhotoZoomed(false);
   }, [product?.id]);
 
@@ -286,10 +288,16 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   };
 
   const handleAddToCart = () => {
+    if (!isQuantityPickerOpen) {
+      setIsQuantityPickerOpen(true);
+      setAdded(false);
+      return;
+    }
     const cartItem = createCartItem();
     if (!cartItem) return;
     onAddToCart(cartItem);
     setAdded(true);
+    setIsQuantityPickerOpen(false);
     setTimeout(() => setAdded(false), 2000);
   };
 
@@ -300,7 +308,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
   return (
     <>
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-1.5 sm:p-4 bg-slate-900/70 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-1 sm:p-4 bg-slate-900/70 backdrop-blur-md animate-fade-in">
       <div 
       className="bg-white rounded-2xl sm:rounded-3xl max-w-4xl w-full max-h-[98dvh] sm:max-h-[92vh] overflow-y-auto overscroll-contain shadow-2xl border border-slate-200/80 relative flex flex-col"
         onClick={(e) => e.stopPropagation()}
@@ -329,10 +337,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           </button>
         </div>
 
-        <div className="p-3 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-6 lg:gap-10">
+        <div className="grid grid-cols-1 gap-2.5 p-2.5 md:grid-cols-2 sm:gap-5 sm:p-6 lg:gap-8">
           
           {/* Левая колонка: единая галерея изображений и видео */}
-          <div className="space-y-2 sm:space-y-3.5">
+          <div className="space-y-1.5 sm:space-y-3">
             {/* Главный блок показа */}
             <div
               style={{ aspectRatio: currentMedia?.type === 'video' ? '16 / 9' : photoAspectRatio }}
@@ -498,7 +506,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           </div>
 
           {/* Правая колонка: Конфигуратор товара */}
-          <div className="flex flex-col justify-between space-y-3 sm:space-y-6">
+          <div className="flex flex-col justify-between space-y-2.5 sm:space-y-5">
             <div>
               {/* Категория и коллекция */}
               <div className="flex items-center justify-between text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1 sm:mb-2">
@@ -514,7 +522,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               </h1>
 
               {/* Блок цены за выбранный вариант */}
-              <div className="mt-1.5 sm:mt-4 p-2.5 sm:p-5 bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200/90 rounded-xl sm:rounded-2xl flex items-center justify-between">
+              <div className="mt-1.5 sm:mt-3 p-2 sm:p-4 bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200/90 rounded-xl sm:rounded-2xl flex items-center justify-between">
                 <div>
                   <div className="text-[10px] sm:text-xs text-slate-500 font-medium">{t('finalPrice')}</div>
                   <div className="text-lg sm:text-3xl font-extrabold text-slate-900 font-mono mt-0.5">
@@ -642,48 +650,57 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
             </div>
 
             {/* Кнопка добавления в корзину */}
-            <div className="sticky bottom-0 z-10 -mx-4 space-y-3 border-t border-slate-200/80 bg-white/95 px-4 pb-2 pt-3 backdrop-blur sm:static sm:mx-0 sm:bg-transparent sm:p-0">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-semibold text-slate-700">{t('quantity')}</span>
-                <div className="flex items-center rounded-lg border border-slate-200 bg-white">
+            <div className="sticky bottom-0 z-10 -mx-3 space-y-2 border-t border-slate-200/80 bg-white/95 px-3 pb-1.5 pt-2 backdrop-blur sm:static sm:mx-0 sm:space-y-2.5 sm:bg-transparent sm:p-0">
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleOrderNow}
+              className="min-h-11 min-w-0 flex-1 truncate rounded-xl bg-[#f4c542] px-2 py-2.5 text-xs font-bold tracking-wide text-slate-950 shadow-sm transition hover:bg-[#eabd32] active:scale-[0.98] sm:px-4 sm:py-3 sm:text-sm"
+              >
+                {t('orderNow')} · {currentPriceTjs} TJS
+              </button>
+              <div
+                aria-hidden={!isQuantityPickerOpen}
+                className={`overflow-hidden transition-[max-width,opacity] duration-200 ease-out ${
+                  isQuantityPickerOpen ? 'max-w-24 opacity-100' : 'max-w-0 opacity-0'
+                }`}
+              >
+                <div className="flex w-24 shrink-0 items-center justify-between rounded-xl border border-slate-200 bg-white">
                   <button
                     type="button"
+                    tabIndex={isQuantityPickerOpen ? 0 : -1}
                     onClick={() => setSelectedQuantity((quantity) => Math.max(1, quantity - 1))}
                     aria-label={t('decreaseQuantity')}
-                    className="p-2 text-slate-600 hover:bg-slate-100"
+                    className="p-1.5 text-slate-600 transition hover:bg-slate-100"
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </button>
-                  <span className="min-w-8 text-center text-sm font-bold text-slate-900">{selectedQuantity}</span>
+                  <span className="min-w-5 text-center text-sm font-bold text-slate-900">{selectedQuantity}</span>
                   <button
                     type="button"
+                    tabIndex={isQuantityPickerOpen ? 0 : -1}
                     onClick={() => setSelectedQuantity((quantity) => Math.min(99, quantity + 1))}
                     aria-label={t('increaseQuantity')}
-                    className="p-2 text-slate-600 hover:bg-slate-100"
+                    className="p-1.5 text-slate-600 transition hover:bg-slate-100"
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-              <button
-                onClick={handleOrderNow}
-                className="flex-1 rounded-xl bg-[#f4c542] px-4 py-3.5 text-sm font-bold tracking-wide text-slate-950 shadow-sm transition hover:bg-[#eabd32] active:scale-[0.98]"
-              >
-                {t('orderNow')} · {currentPriceTjs} TJS
-              </button>
               <button
                 type="button"
                 onClick={handleAddToCart}
-                aria-label={t('addToCart')}
-                title={t('addToCart')}
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-800 transition hover:bg-slate-50"
+                aria-label={isQuantityPickerOpen ? `${t('addToCart')}: ${selectedQuantity}` : t('addToCart')}
+                title={isQuantityPickerOpen ? `${t('addToCart')}: ${selectedQuantity}` : t('addToCart')}
+                aria-expanded={isQuantityPickerOpen}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-800 transition hover:bg-slate-50 sm:h-12 sm:w-12"
               >
-                {added ? <Check className="h-5 w-5" /> : <ShoppingBasket className="h-5 w-5" />}
+                {added || isQuantityPickerOpen
+                  ? <Check className="h-5 w-5" />
+                  : <ShoppingBasket className="h-5 w-5" />}
               </button>
               </div>
 
-              <div className="text-[11px] text-slate-400 text-center flex items-center justify-center gap-1">
+              <div className="text-[10px] text-slate-400 text-center flex items-center justify-center gap-1 sm:text-[11px]">
                 <span>{t('modificationSku')}</span>
                 <span className="font-mono font-semibold text-slate-600">{activeVariant?.variant_sku}</span>
               </div>
