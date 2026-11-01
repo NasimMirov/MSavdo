@@ -33,6 +33,13 @@ const BRAND_LOGO_URL = '/msavdo-logo.jpg';
 
 function getCategoryIllustration(name: string): string {
   const category = name.toLocaleLowerCase('ru');
+  if (/коллекц/.test(category)) return '✨';
+  if (/бытовая техника и электроника для дома/.test(category)) return '🔌';
+  if (/игрушки, детские товары и хобби/.test(category)) return '🧸';
+  if (/одежда, обувь и аксессуары/.test(category)) return '🛍️';
+  if (/спорт, туризм и автотовары/.test(category)) return '⛺';
+  if (/товары для дома и интерьера/.test(category)) return '🏠';
+  if (/электроника и смарт-гаджеты/.test(category)) return '📱';
   if (/обув|кроссов|сандал|ботин|тапоч/.test(category)) return '👟';
   if (/одеж|футбол|худи|куртк|плать|брюк/.test(category)) return '👕';
   if (/дет|ребен|игруш|малыш|кукл/.test(category)) return '🧸';
@@ -89,12 +96,9 @@ export default function App() {
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'stock' | 'order'>('all');
   const [sortBy, setSortBy] = useState<'price_asc' | 'price_desc' | 'newest'>('newest');
+  const [expandedCategoryId, setExpandedCategoryId] = useState<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const viewedProductIds = useRef<Set<number>>(new Set());
-  const categoryOptions = useMemo(
-    () => categoriesTree.flatMap((category) => category.subcategories?.length ? category.subcategories : [category]),
-    [categoriesTree],
-  );
 
   // Открытие карточки товара с автоматическим счетчиком просмотров
   const handleOpenProduct = (p: Product) => {
@@ -405,35 +409,83 @@ export default function App() {
         {currentView === 'catalog' && (
           <div className="space-y-3 sm:space-y-6">
             
-            {/* Быстрые фильтры категорий (горизонтальный свайп на мобильных) */}
-            <div className="flex items-start gap-2 overflow-x-auto pb-1.5 scrollbar-none select-none snap-x">
-              <button
-                onClick={() => setSelectedCategoryId(null)}
-                className="flex w-[58px] shrink-0 snap-start flex-col items-center gap-1 text-center"
-              >
-                <span className={`flex h-11 w-11 items-center justify-center rounded-[17px] bg-gradient-to-br from-sky-200 to-sky-400 text-[27px] shadow-[0_3px_0_#5b9ab4,0_5px_9px_rgba(15,23,42,0.12)] ring-1 ring-white/70 transition-transform ${selectedCategoryId === null ? '-translate-y-0.5 ring-2 ring-slate-800/40' : ''}`}>
-                  <span className="drop-shadow-[0_2px_1px_rgba(0,0,0,0.2)]">🛍️</span>
-                </span>
-                <span className="w-full truncate text-[9px] font-bold text-slate-700">{t('allCategories')}</span>
-              </button>
+            {/* Compact category sections: icons belong to sections, not their subcategories. */}
+            <section aria-label={t('allCategories')} className="space-y-2">
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-none">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCategoryId(null);
+                    setExpandedCategoryId(null);
+                  }}
+                  aria-pressed={selectedCategoryId === null}
+                  className={`flex min-h-11 shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                    selectedCategoryId === null
+                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
+                  }`}
+                >
+                  <span className="text-xl leading-none" aria-hidden="true">🛍️</span>
+                  <span className="text-xs font-bold">{t('allCategories')}</span>
+                </button>
 
-              {categoryOptions.map((cat) => {
-                const isActive = selectedCategoryId === cat.id;
+                {categoriesTree.map((section) => {
+                  const isSelected = selectedCategoryId === section.id
+                    || section.subcategories?.some((category) => category.id === selectedCategoryId) === true;
+                  const isExpanded = expandedCategoryId === section.id;
+                  return (
+                    <button
+                      key={section.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCategoryId(section.id);
+                        setExpandedCategoryId(isExpanded ? null : section.id);
+                      }}
+                      aria-pressed={isSelected}
+                      title={section.name}
+                      className={`flex min-h-11 max-w-[220px] shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                        isSelected
+                          ? 'border-amber-500 bg-amber-100 text-slate-950 shadow-sm'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
+                      }`}
+                    >
+                      <span className="text-xl leading-none" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
+                      <span className="max-w-[170px] text-[11px] font-bold leading-tight">{section.name}</span>
+                      {section.subcategories && section.subcategories.length > 0 && (
+                        <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {expandedCategoryId !== null && (() => {
+                const section = categoriesTree.find((category) => category.id === expandedCategoryId);
+                if (!section?.subcategories?.length) return null;
                 return (
-                  <button
-                    key={cat.id}
-                    onClick={() => setSelectedCategoryId(cat.id)}
-                    title={cat.name}
-                    className="flex w-[58px] shrink-0 snap-start flex-col items-center gap-1 text-center"
-                  >
-                    <span className={`flex h-11 w-11 items-center justify-center rounded-[17px] bg-gradient-to-br from-sky-200 to-sky-400 text-[27px] shadow-[0_3px_0_#5b9ab4,0_5px_9px_rgba(15,23,42,0.12)] ring-1 ring-white/70 transition-transform ${isActive ? '-translate-y-0.5 ring-2 ring-slate-800/40' : ''}`}>
-                      <span className="drop-shadow-[0_2px_1px_rgba(0,0,0,0.2)]">{getCategoryIllustration(cat.name)}</span>
-                    </span>
-                    <span className="w-full truncate text-[9px] font-bold text-slate-700">{cat.name}</span>
-                  </button>
+                  <div className="flex gap-1.5 overflow-x-auto rounded-xl border border-slate-200 bg-white/80 p-1.5 scrollbar-none">
+                    {section.subcategories.map((category) => (
+                      <button
+                        key={category.id}
+                        type="button"
+                        onClick={() => setSelectedCategoryId(
+                          selectedCategoryId === category.id ? section.id : category.id,
+                        )}
+                        aria-pressed={selectedCategoryId === category.id}
+                        title={category.name}
+                        className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[10px] font-semibold transition-colors ${
+                          selectedCategoryId === category.id
+                            ? 'bg-slate-900 text-white'
+                            : 'bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-slate-900'
+                        }`}
+                      >
+                        {category.name}
+                      </button>
+                    ))}
+                  </div>
                 );
-              })}
-            </div>
+              })()}
+            </section>
 
             {/* Компактный единый фильтр доставки */}
             <div className="flex max-w-full items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none text-[10px] sm:text-xs font-semibold">
