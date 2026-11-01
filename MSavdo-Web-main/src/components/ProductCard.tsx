@@ -99,13 +99,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       </div>
 
       {/* Информация о товаре */}
-      <div className="flex flex-1 flex-col p-2 sm:p-3">
-        <div className="flex-1">
-          <div className="mb-1 text-[8px] font-bold uppercase tracking-[0.1em] text-slate-500 sm:mb-1.5 sm:text-[9px]">
+      <div className="flex flex-col px-2 pb-1.5 pt-2 sm:px-3 sm:pb-2 sm:pt-3">
+        <div>
+          <div className="mb-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-slate-500 sm:mb-1 sm:text-[9px]">
             <span className="line-clamp-1">{product.category_name || 'Каталог'}</span>
           </div>
 
-          <h3 className="min-h-[2.35rem] text-[12px] font-bold leading-[1.2] text-slate-900 line-clamp-2 transition-colors group-hover:text-amber-700 font-heading sm:min-h-[2.65rem] sm:text-sm">
+          <h3 className="text-[12px] font-bold leading-[1.2] text-slate-900 line-clamp-2 transition-colors group-hover:text-amber-700 font-heading sm:text-sm">
             <a
               href={productUrl}
               className="text-inherit no-underline"
@@ -116,7 +116,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </h3>
         </div>
 
-        <div className="mt-2.5 flex items-center justify-between gap-1.5 px-0.5 py-1 sm:mt-3 sm:px-1 sm:py-1.5">
+        <div className="mt-1.5 flex items-center justify-between gap-1.5 px-0.5 py-0.5 sm:mt-2 sm:px-1 sm:py-1">
           <div className="min-w-0">
             <div className="text-[7px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[8px]">{t('inSomoni')}</div>
             <div className="mt-0.5 whitespace-nowrap text-[17px] font-extrabold leading-none tracking-tight text-slate-950 sm:text-xl">
