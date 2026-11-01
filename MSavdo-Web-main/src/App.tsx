@@ -26,6 +26,9 @@ import {
   SlidersHorizontal,
   Sun,
   Moon,
+  Instagram,
+  Send,
+  Youtube,
 } from 'lucide-react';
 
 const BRAND_LOGO_URL = '/msavdo-logo.jpg';
@@ -80,6 +83,15 @@ export default function App() {
   const [categoriesTree, setCategoriesTree] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [whatsappPhone, setWhatsappPhone] = useState('992444431');
+  const [showWhatsAppHelp, setShowWhatsAppHelp] = useState(false);
+  const [dismissedWhatsAppHelp, setDismissedWhatsAppHelp] = useState(() => {
+    try {
+      return Boolean(sessionStorage.getItem('msavdo_whatsapp_help'));
+    } catch (error) {
+      console.warn('[WhatsApp Help] Не удалось прочитать состояние подсказки:', error);
+      return false;
+    }
+  });
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [searchHints, setSearchHints] = useState<{
     suggestions: string[];
@@ -99,6 +111,41 @@ export default function App() {
   const viewedProductIds = useRef<Set<number>>(new Set());
   const catalogRequestId = useRef(0);
   const isProductModalOpen = selectedProduct !== null;
+  const activeBrowseTime = useRef(0);
+  const canShowWhatsAppHelp = useRef(false);
+  canShowWhatsAppHelp.current = currentView === 'catalog' && !isCartOpen && !isProductModalOpen;
+
+  useEffect(() => {
+    if (dismissedWhatsAppHelp) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible' || !canShowWhatsAppHelp.current) return;
+      activeBrowseTime.current += 1000;
+      if (activeBrowseTime.current < 60000) return;
+
+      setShowWhatsAppHelp(true);
+      window.clearInterval(timer);
+      try {
+        sessionStorage.setItem('msavdo_whatsapp_help', 'shown');
+      } catch (error) {
+        console.warn('[WhatsApp Help] Не удалось сохранить показ подсказки:', error);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [dismissedWhatsAppHelp]);
+
+  const closeWhatsAppHelp = () => {
+    setShowWhatsAppHelp(false);
+    setDismissedWhatsAppHelp(true);
+    try {
+      sessionStorage.setItem('msavdo_whatsapp_help', 'dismissed');
+    } catch (error) {
+      console.warn('[WhatsApp Help] Не удалось сохранить закрытие подсказки:', error);
+    }
+  };
+
+  const whatsappHelpUrl = `https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+    `Ассаламу Алайкум! ${t('whatsappHelpPrompt')}`
+  )}`;
 
   // Открытие карточки товара с автоматическим счетчиком просмотров
   const handleOpenProduct = (p: Product) => {
@@ -120,10 +167,19 @@ export default function App() {
       '',
       window.location.href,
     );
-    const closeOnBack = () => setSelectedProduct(null);
+    const closeOnBack = (event: PopStateEvent) => {
+      if (!event.state?.msavdoProductModal) setSelectedProduct(null);
+    };
     window.addEventListener('popstate', closeOnBack);
     return () => {
       window.removeEventListener('popstate', closeOnBack);
+      const currentHistoryState = window.history.state;
+      if (currentHistoryState?.msavdoPhotoZoom) {
+        const nextHistoryState = { ...currentHistoryState };
+        delete nextHistoryState.msavdoPhotoZoom;
+        delete nextHistoryState.msavdoProductModal;
+        window.history.replaceState(nextHistoryState, '', window.location.href);
+      }
       if (window.history.state?.msavdoProductModal) window.history.back();
     };
   }, [isProductModalOpen]);
@@ -481,6 +537,32 @@ export default function App() {
   }, [products, searchQuery, selectedCategoryId, deliveryFilter, categoriesTree, sortBy]);
 
   const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const whatsAppHelpPopup = showWhatsAppHelp && !dismissedWhatsAppHelp && currentView === 'catalog'
+    && !isCartOpen && !isProductModalOpen ? (
+      <div className="relative w-64 rounded-2xl border border-emerald-100 bg-white p-3.5 text-left text-slate-800 shadow-xl ring-1 ring-black/5">
+        <button
+          type="button"
+          onClick={closeWhatsAppHelp}
+          aria-label={t('close')}
+          className="absolute right-2 top-2 rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+        <p className="pr-5 text-xs font-semibold leading-relaxed">{t('whatsappHelpPrompt')}</p>
+        <a
+          href={whatsappHelpUrl}
+          target="_blank"
+          rel="noreferrer"
+          onClick={closeWhatsAppHelp}
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white transition hover:bg-emerald-700"
+        >
+          <MessageCircle className="h-3.5 w-3.5" />
+          {t('whatsappHelpAction')}
+        </a>
+        <span className="absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r border-emerald-100 bg-white" />
+      </div>
+    ) : null;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-amber-400 selection:text-black font-sans pb-16 md:pb-0">
@@ -988,19 +1070,35 @@ export default function App() {
       {/* 4. МОБИЛЬНАЯ НИЖНЯЯ ПАНЕЛЬ НАВИГАЦИИ (ФИКСИРОВАННАЯ) */}
       {/* ======================================================== */}
       {currentView === 'catalog' && (
-        <button
-          type="button"
-          onClick={() => setIsCartOpen(true)}
-          aria-label={`${t('cart')}: ${totalCartCount}`}
-          className="fixed bottom-6 right-6 z-40 hidden h-12 w-12 items-center justify-center rounded-full bg-[#f4c542] text-slate-950 shadow-xl ring-1 ring-black/10 transition hover:scale-105 active:scale-95 md:flex"
-        >
-          <ShoppingBasket className="h-5 w-5" />
-          {totalCartCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-900 px-1 text-[10px] font-bold text-white">
-              {totalCartCount}
-            </span>
+        <>
+          <button
+            type="button"
+            onClick={() => setIsCartOpen(true)}
+            aria-label={`${t('cart')}: ${totalCartCount}`}
+            className="fixed bottom-6 right-6 z-40 hidden h-12 w-12 items-center justify-center rounded-full bg-[#f4c542] text-slate-950 shadow-xl ring-1 ring-black/10 transition hover:scale-105 active:scale-95 md:flex"
+          >
+            <ShoppingBasket className="h-5 w-5" />
+            {totalCartCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-900 px-1 text-[10px] font-bold text-white">
+                {totalCartCount}
+              </span>
+            )}
+          </button>
+          <a
+            href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Ассаламу Алайкум!')}`}
+            target="_blank"
+            rel="noreferrer"
+            aria-label={t('whatsapp')}
+            className="fixed bottom-6 left-6 z-40 hidden h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-white shadow-xl ring-1 ring-black/10 transition hover:scale-105 hover:bg-emerald-700 active:scale-95 md:flex"
+          >
+            <MessageCircle className="h-5 w-5" />
+          </a>
+          {whatsAppHelpPopup && (
+            <div className="fixed bottom-20 left-4 z-50 hidden md:block">
+              {whatsAppHelpPopup}
+            </div>
           )}
-        </button>
+        </>
       )}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-black text-white border-t border-zinc-800 px-4 py-2 flex items-center justify-around shadow-2xl">
         <button
@@ -1028,15 +1126,22 @@ export default function App() {
           <span className="text-[10px] font-bold">{t('search')}</span>
         </button>
 
-        <a
-          href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Ассаламу Алайкум!')}`}
-          target="_blank"
-          rel="noreferrer"
-          className="flex flex-col items-center gap-1 text-emerald-400"
-        >
-          <MessageCircle className="w-4 h-4" />
-          <span className="text-[10px] font-bold">{t('whatsapp')}</span>
-        </a>
+        <div className="relative flex flex-col items-center gap-1">
+          {whatsAppHelpPopup && (
+            <div className="absolute bottom-[calc(100%+0.75rem)] left-1/2 z-50 -translate-x-1/2">
+              {whatsAppHelpPopup}
+            </div>
+          )}
+          <a
+            href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent('Ассаламу Алайкум!')}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex flex-col items-center gap-1 text-emerald-400"
+          >
+            <MessageCircle className="w-4 h-4" />
+            <span className="text-[10px] font-bold">{t('whatsapp')}</span>
+          </a>
+        </div>
 
         <button
           onClick={() => setIsCartOpen(true)}
@@ -1057,7 +1162,7 @@ export default function App() {
       {/* ======================================================== */}
       {/* 5. ФУТЕР (ПРЕМИАЛЬНЫЙ ЖЕЛТО-ЧЕРНЫЙ БРЕНДИНГ + СКРЫТЫЙ СЛУЖЕБНЫЙ ВХОД) */}
       {/* ======================================================== */}
-      <footer className="bg-black text-white border-t border-zinc-800 mt-16 py-8">
+      <footer className="bg-black text-white border-t border-zinc-800 mt-16 pt-8 pb-24 md:pb-8">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-zinc-400">
           
           <div className="flex items-center gap-3">
@@ -1072,7 +1177,8 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-5">
+          <div className="flex flex-col items-center gap-4 sm:items-end">
+            <div className="flex items-center gap-5">
             <button 
               onClick={() => setCurrentView('rules')} 
               className="hover:text-amber-400 transition-colors"
@@ -1096,6 +1202,39 @@ export default function App() {
             >
               <Lock className="w-3.5 h-3.5" />
             </button>
+            </div>
+            <nav aria-label="Социальные сети M.Savdo" className="flex items-center gap-3">
+              <a
+                href="https://t.me/MSavdoTJ"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="M.Savdo в Telegram"
+                title="Telegram"
+                className="rounded-full border border-zinc-700 p-2 text-zinc-300 transition hover:border-sky-400 hover:text-sky-400"
+              >
+                <Send className="h-4 w-4" />
+              </a>
+              <a
+                href="https://instagram.com/MSavdo.tj"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="M.Savdo в Instagram"
+                title="Instagram"
+                className="rounded-full border border-zinc-700 p-2 text-zinc-300 transition hover:border-pink-400 hover:text-pink-400"
+              >
+                <Instagram className="h-4 w-4" />
+              </a>
+              <a
+                href="https://www.youtube.com/@MSavdoTJ"
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="M.Savdo на YouTube"
+                title="YouTube"
+                className="rounded-full border border-zinc-700 p-2 text-zinc-300 transition hover:border-red-500 hover:text-red-500"
+              >
+                <Youtube className="h-4 w-4" />
+              </a>
+            </nav>
           </div>
 
         </div>

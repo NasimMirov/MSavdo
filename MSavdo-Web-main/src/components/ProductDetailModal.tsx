@@ -151,7 +151,28 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   );
   const [selectedMediaIndex, setSelectedMediaIndex] = useState(0);
   const galleryTouchStart = useRef<{ x: number; y: number } | null>(null);
+  const zoomTouchStart = useRef<{ x: number; y: number } | null>(null);
   const edgeSwipeStart = useRef<{ x: number; y: number } | null>(null);
+
+  const openPhotoZoom = () => {
+    if (!window.history.state?.msavdoPhotoZoom) {
+      const currentState = window.history.state;
+      window.history.pushState(
+        { ...(typeof currentState === 'object' && currentState !== null ? currentState : {}), msavdoPhotoZoom: true },
+        '',
+        window.location.href,
+      );
+    }
+    setIsPhotoZoomed(true);
+  };
+
+  const closePhotoZoom = () => {
+    if (window.history.state?.msavdoPhotoZoom) {
+      window.history.back();
+    } else {
+      setIsPhotoZoomed(false);
+    }
+  };
 
   const moveMedia = (direction: -1 | 1) => {
     if (mediaSlides.length < 2) return;
@@ -208,13 +229,32 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     setIsPhotoZoomed(false);
   }, [product?.id]);
 
+  const moveZoomedPhoto = (direction: -1 | 1) => {
+    if (allGalleryImages.length < 2) return;
+    const currentPhotoIndex = allGalleryImages.indexOf(currentMedia?.src || currentImage);
+    const nextPhotoIndex = (Math.max(currentPhotoIndex, 0) + direction + allGalleryImages.length) % allGalleryImages.length;
+    const nextMediaIndex = mediaSlides.findIndex(
+      (slide) => slide.type === 'photo' && slide.src === allGalleryImages[nextPhotoIndex]
+    );
+    if (nextMediaIndex >= 0) setSelectedMediaIndex(nextMediaIndex);
+  };
+
   useEffect(() => {
     if (!isPhotoZoomed) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsPhotoZoomed(false);
+      if (event.key === 'Escape') closePhotoZoom();
+      if (event.key === 'ArrowLeft') moveZoomedPhoto(-1);
+      if (event.key === 'ArrowRight') moveZoomedPhoto(1);
+    };
+    const closeOnBack = (event: PopStateEvent) => {
+      if (!event.state?.msavdoPhotoZoom) setIsPhotoZoomed(false);
     };
     window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
+    window.addEventListener('popstate', closeOnBack);
+    return () => {
+      window.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('popstate', closeOnBack);
+    };
   }, [isPhotoZoomed]);
 
   if (!product) return null;
@@ -337,14 +377,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   src={currentMedia?.src || currentImage}
                   alt={product.title}
                   referrerPolicy="no-referrer"
-                  onClick={() => setIsPhotoZoomed(true)}
+                  onClick={openPhotoZoom}
                   className="w-full h-full object-cover transition-all duration-300 cursor-zoom-in"
                 />
               )}
               {currentMedia?.type !== 'video' && (
                 <button
                   type="button"
-                  onClick={() => setIsPhotoZoomed(true)}
+                  onClick={openPhotoZoom}
                   aria-label={t('zoomPhoto')}
                   className="absolute right-2 top-2 rounded-full bg-slate-950/70 p-2 text-white shadow-md transition hover:bg-slate-950"
                 >
@@ -359,7 +399,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               {product.delivery_type === 'stock' ? (
                 <div className="absolute bottom-2 left-2 bg-[#f4c542]/95 text-slate-900 text-[9px] font-bold px-2 py-1 rounded-md shadow-xs flex items-center gap-1">
                   <Truck className="w-3 h-3" />
-                  <span>В наличии · доставка 1 день</span>
+                  <span>В наличии</span>
                 </div>
               ) : (
                 <div className="absolute bottom-2 left-2 bg-[#f4c542]/95 text-slate-900 text-[9px] font-bold px-2 py-1 rounded-md shadow-xs flex items-center gap-1">
@@ -379,7 +419,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       key={`${slide.type}-${slide.src}`}
                       onClick={() => {
                         setSelectedMediaIndex(idx);
-                        setIsPhotoZoomed(false);
+                        closePhotoZoom();
                       }}
                       aria-label={slide.type === 'video'
                         ? `${t('videoReview')} ${productVideos.indexOf(slide.src) + 1}`
@@ -470,7 +510,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               {product.delivery_type === 'stock' ? (
                 <div className="hidden md:flex mt-3 p-3 bg-[#fff7db] border border-[#ecd17c] rounded-2xl items-center gap-2.5 text-xs text-slate-800 shadow-xs">
                   <Truck className="w-4 h-4 shrink-0" />
-                  <span><strong>В наличии · доставка 1 день</strong> — на складе в Душанбе</span>
+                  <span><strong>В наличии</strong> — на складе в Душанбе</span>
                 </div>
               ) : (
                 <div className="hidden md:flex mt-3 p-3 bg-[#fff7db] border border-[#ecd17c] rounded-2xl items-center gap-2.5 text-xs text-slate-800 shadow-xs">
@@ -702,11 +742,31 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-label={t('zoomPhoto')}
-        onClick={() => setIsPhotoZoomed(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closePhotoZoom();
+        }}
+        onTouchStart={(event) => {
+          const touch = event.touches[0];
+          zoomTouchStart.current = { x: touch.clientX, y: touch.clientY };
+        }}
+        onTouchEnd={(event) => {
+          const start = zoomTouchStart.current;
+          zoomTouchStart.current = null;
+          if (!start) return;
+          const touch = event.changedTouches[0];
+          const deltaX = touch.clientX - start.x;
+          const deltaY = touch.clientY - start.y;
+          if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY)) {
+            moveZoomedPhoto(deltaX < 0 ? 1 : -1);
+          }
+        }}
       >
         <button
           type="button"
-          onClick={() => setIsPhotoZoomed(false)}
+          onClick={(event) => {
+            event.stopPropagation();
+            closePhotoZoom();
+          }}
           aria-label={t('close')}
           className="absolute right-3 top-3 rounded-full bg-white/15 p-2 text-white hover:bg-white/25"
         >

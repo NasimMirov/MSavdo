@@ -1041,7 +1041,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           prev.map((item) => (item.id === p.id ? { ...item, delivery_type: newDelivery } : item))
         );
         onRefreshCatalog();
-        showNotice(`Доставка для ${p.base_sku}: ${newDelivery === 'stock' ? 'В наличии · 1 день' : 'Доставка 12–35 дней'}`);
+        showNotice(`Доставка для ${p.base_sku}: ${newDelivery === 'stock' ? 'В наличии' : 'Доставка 12–35 дней'}`);
       }
     } catch (err) {
       console.error('Ошибка смены доставки:', err);
@@ -1819,7 +1819,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               p.delivery_type === 'stock' ? 'bg-emerald-600 text-white' : 'bg-amber-400 text-black'
                             }`}
                           >
-                            {p.delivery_type === 'stock' ? 'В наличии · 1 день' : 'Доставка 12–35 дней'}
+                            {p.delivery_type === 'stock' ? 'В наличии' : 'Доставка 12–35 дней'}
                           </button>
                         </div>
                       </div>

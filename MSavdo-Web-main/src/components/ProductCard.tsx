@@ -30,6 +30,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     : `от ${minPrice} с.`;
 
   const isStock = product.delivery_type === 'stock';
+  const productSlug = product.title
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'product';
+  const productUrl = `/product/${product.id}/${encodeURIComponent(productSlug)}`;
 
   return (
     <article 
@@ -43,17 +50,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
 
         {product.main_image && !imageError ? (
-          <img
-            src={product.main_image}
-            alt={product.title}
-            referrerPolicy="no-referrer"
-            onLoad={() => setImageLoaded(true)}
-            onError={() => setImageError(true)}
-            className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out ${
-              imageLoaded ? 'opacity-100' : 'opacity-0'
-            }`}
-            loading="lazy"
-          />
+          <a href={productUrl} aria-label={product.title} className="contents">
+            <img
+              src={product.main_image}
+              alt={product.title}
+              referrerPolicy="no-referrer"
+              onLoad={() => setImageLoaded(true)}
+              onError={() => setImageError(true)}
+              className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out ${
+                imageLoaded ? 'opacity-100' : 'opacity-0'
+              }`}
+              loading="lazy"
+            />
+          </a>
         ) : (
           <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-4 text-center">
             <span className="text-xs font-semibold text-slate-400 font-heading">M.Savdo Gallery</span>
@@ -97,7 +106,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
 
           <h3 className="text-[11px] sm:text-sm font-bold text-slate-900 line-clamp-2 leading-snug font-heading group-hover:text-amber-600 transition-colors">
-            {product.title}
+            <a href={productUrl}>
+              {product.title}
+            </a>
           </h3>
         </div>
 

@@ -3693,6 +3693,238 @@ app.get('/api/extension-file', (req, res) => {
 // ==========================================
 // VITE DEV SERVER MIDDLEWARE
 // ==========================================
+const seoSiteUrl = (process.env.PUBLIC_SITE_URL || 'https://msavdo.shop').replace(/\/+$/, '');
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function makeProductSlug(title: string): string {
+  return title
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 80) || 'product';
+}
+
+function getPublicProductUrl(id: number, title: string): string {
+  return `${seoSiteUrl}/product/${id}/${makeProductSlug(title)}`;
+}
+
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain').send(
+    `User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${seoSiteUrl}/sitemap.xml\n`
+  );
+});
+
+const SEO_SITEMAP_PAGE_SIZE = 10000;
+
+app.get('/sitemap.xml', (_req, res) => {
+  try {
+    const total = (db.prepare("SELECT COUNT(*) AS count FROM products WHERE status = 'active'").get() as { count: number }).count;
+    const pageCount = Math.max(1, Math.ceil(total / SEO_SITEMAP_PAGE_SIZE));
+    const sitemapEntries = Array.from({ length: pageCount }, (_, index) =>
+      `<sitemap><loc>${escapeHtml(`${seoSiteUrl}/sitemap-products-${index + 1}.xml`)}</loc></sitemap>`
+    ).join('');
+
+    res.type('application/xml')
+      .set('Cache-Control', 'public, max-age=900')
+      .send(`<?xml version="1.0" encoding="UTF-8"?><sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${sitemapEntries}</sitemapindex>`);
+  } catch (error) {
+    console.error('[SEO Sitemap] Не удалось сформировать карту сайта:', error);
+    res.status(500).type('text/plain').send('Не удалось сформировать карту сайта');
+  }
+});
+
+app.get('/sitemap-products-:page.xml', (req, res) => {
+  try {
+    const page = Number(req.params.page);
+    if (!Number.isSafeInteger(page) || page < 1) {
+      return res.status(404).type('text/plain').send('Карта сайта не найдена');
+    }
+
+    const offset = (page - 1) * SEO_SITEMAP_PAGE_SIZE;
+    const products = db.prepare(`
+      SELECT id, title, created_at
+      FROM products
+      WHERE status = 'active'
+      ORDER BY id DESC
+      LIMIT ? OFFSET ?
+    `).all(SEO_SITEMAP_PAGE_SIZE, offset) as Array<{ id: number; title: string; created_at: string | null }>;
+    if (products.length === 0 && page !== 1) {
+      return res.status(404).type('text/plain').send('Карта сайта не найдена');
+    }
+
+    const productEntries = products.map((product) => {
+      const timestamp = product.created_at ? Date.parse(product.created_at) : NaN;
+      const lastModified = Number.isFinite(timestamp)
+        ? `<lastmod>${new Date(timestamp).toISOString().slice(0, 10)}</lastmod>`
+        : '';
+      return `<url><loc>${escapeHtml(getPublicProductUrl(product.id, product.title))}</loc>${lastModified}</url>`;
+    }).join('');
+    const homeEntry = page === 1 ? `<url><loc>${escapeHtml(`${seoSiteUrl}/`)}</loc></url>` : '';
+
+    return res.type('application/xml')
+      .set('Cache-Control', 'public, max-age=900')
+      .send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${homeEntry}${productEntries}</urlset>`);
+  } catch (error) {
+    console.error('[SEO Sitemap] Не удалось сформировать раздел карты сайта:', error);
+    return res.status(500).type('text/plain').send('Не удалось сформировать карту сайта');
+  }
+});
+
+app.get('/product/:id/:slug?', (req, res, next) => {
+  try {
+    const productId = Number(req.params.id);
+    if (!Number.isSafeInteger(productId) || productId <= 0) return next();
+
+    const product = db.prepare(`
+      SELECT p.id, p.title, p.description, p.base_sku, p.status, p.delivery_type,
+             p.main_image, p.images, p.specifications, p.created_at,
+             c.name AS category_name,
+             MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS min_price_tjs,
+             MAX(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS max_price_tjs,
+             COUNT(CASE WHEN v.price_tjs > 0 THEN 1 END) AS offer_count
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN product_variants v ON v.product_id = p.id
+      WHERE p.id = ? AND p.status = 'active'
+      GROUP BY p.id
+    `).get(productId) as {
+      id: number;
+      title: string;
+      description: string | null;
+      base_sku: string;
+      status: string;
+      delivery_type: string | null;
+      main_image: string | null;
+      images: string | null;
+      specifications: string | null;
+      created_at: string | null;
+      category_name: string | null;
+      min_price_tjs: number | null;
+      max_price_tjs: number | null;
+      offer_count: number;
+    } | undefined;
+
+    if (!product) {
+      return res.status(404).type('html').send(
+        '<!doctype html><html lang="ru"><meta charset="utf-8"><title>Товар не найден — M.Savdo</title><meta name="robots" content="noindex"><body><h1>Товар не найден</h1><a href="/">Перейти в каталог M.Savdo</a></body></html>'
+      );
+    }
+
+    const canonicalUrl = getPublicProductUrl(product.id, product.title);
+    if (req.originalUrl.split('?')[0] !== new URL(canonicalUrl).pathname) {
+      return res.redirect(301, canonicalUrl);
+    }
+
+    const description = String(product.description || '').replace(/\s+/g, ' ').trim().slice(0, 500)
+      || `${product.title}${product.category_name ? ` — ${product.category_name}` : ''}. Закажите с доставкой из Китая в Таджикистан через M.Savdo.`;
+    const imageList = [product.main_image, ...(product.images || '').split(',')]
+      .map((image) => image?.trim())
+      .filter((image): image is string => Boolean(image))
+      .map((image) => {
+        try {
+          return new URL(image, seoSiteUrl).href;
+        } catch {
+          return '';
+        }
+      })
+      .filter(Boolean)
+      .slice(0, 8);
+    let specifications: Array<{ name: string; value: string }> = [];
+    if (product.specifications) {
+      try {
+        const parsed = JSON.parse(product.specifications);
+        specifications = Array.isArray(parsed)
+          ? parsed
+          : Object.entries(parsed).map(([name, value]) => ({ name, value: String(value) }));
+      } catch {
+        specifications = product.specifications.split('\n').map((line) => {
+          const [name, ...parts] = line.split(/[:：]/);
+          return { name: name.trim(), value: parts.join(':').trim() };
+        }).filter((item) => item.name && item.value);
+      }
+    }
+    const price = Number(product.min_price_tjs) || 0;
+    const availability = product.delivery_type === 'stock'
+      ? 'https://schema.org/InStock'
+      : 'https://schema.org/PreOrder';
+    const structuredData = {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: product.title,
+      description,
+      sku: product.base_sku,
+      url: canonicalUrl,
+      ...(imageList.length ? { image: imageList } : {}),
+      ...(product.category_name ? { category: product.category_name } : {}),
+      ...(price > 0 ? {
+        offers: {
+          '@type': 'AggregateOffer',
+          priceCurrency: 'TJS',
+          lowPrice: price,
+          highPrice: Number(product.max_price_tjs) || price,
+          offerCount: Math.max(1, product.offer_count || 0),
+          availability,
+          url: canonicalUrl,
+          seller: {
+            '@type': 'Organization',
+            name: 'M.Savdo',
+            url: seoSiteUrl,
+          },
+        },
+      } : {}),
+    };
+    const breadcrumbData = {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Главная', item: `${seoSiteUrl}/` },
+        { '@type': 'ListItem', position: 2, name: product.title, item: canonicalUrl },
+      ],
+    };
+    const whatsappPhone = String(db.prepare("SELECT value FROM settings WHERE key = 'whatsapp_phone'").get()?.value || '992444431');
+    const whatsappUrl = `https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Ассаламу Алайкум! Меня интересует товар: ${product.title} ${canonicalUrl}`)}`;
+    const productImage = imageList[0] || `${seoSiteUrl}/og-banner.jpg`;
+    const priceLabel = price > 0
+      ? `${price}${product.max_price_tjs && product.max_price_tjs !== price ? `–${product.max_price_tjs}` : ''} сомони`
+      : 'Уточните цену';
+    const specsHtml = specifications.slice(0, 30)
+      .map((spec) => `<li><strong>${escapeHtml(spec.name)}:</strong> ${escapeHtml(spec.value)}</li>`)
+      .join('');
+    const galleryHtml = imageList.map((image) => `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`).join('');
+    const safeStructuredData = JSON.stringify([structuredData, breadcrumbData]).replace(/</g, '\\u003c');
+
+    res.set('Cache-Control', 'public, max-age=300');
+    return res.type('html').send(`<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(product.title)} — купить с доставкой | M.Savdo</title>
+<meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(canonicalUrl)}">
+<meta property="og:type" content="product"><meta property="og:title" content="${escapeHtml(product.title)}">
+<meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonicalUrl)}">
+<meta property="og:image" content="${escapeHtml(productImage)}"><meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">${safeStructuredData}</script>
+<style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.6 Arial,sans-serif}.wrap{max-width:980px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-weight:800;color:#111;text-decoration:none}.product{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:24px;padding:24px;border-radius:20px;background:#fff;box-shadow:0 6px 30px #0f172a12}.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start}.gallery img{width:100%;aspect-ratio:1;object-fit:contain;background:#f1f5f9;border-radius:12px}.details h1{line-height:1.25}.price{font-size:24px;font-weight:800}.button{display:inline-block;margin:10px 8px 0 0;padding:11px 16px;border-radius:10px;background:#059669;color:white;text-decoration:none;font-weight:700}.button.secondary{background:#111827}.specs{padding-left:20px}@media(max-width:680px){.product{grid-template-columns:1fr;padding:16px}.gallery{grid-template-columns:1fr 1fr}.wrap{padding:12px}}</style></head>
+<body><main class="wrap"><nav class="top"><a class="brand" href="/">M.Savdo</a><a href="/">Каталог товаров</a></nav>
+<article class="product"><div class="gallery">${galleryHtml || '<p>Фото товара скоро появится</p>'}</div>
+<section class="details"><p>${escapeHtml(product.category_name || 'Каталог M.Savdo')}</p><h1>${escapeHtml(product.title)}</h1>
+<p class="price">${escapeHtml(priceLabel)}</p><p>${escapeHtml(description)}</p>
+${specsHtml ? `<h2>Характеристики</h2><ul class="specs">${specsHtml}</ul>` : ''}
+<p>Артикул: ${escapeHtml(product.base_sku)}</p><a class="button" href="${escapeHtml(whatsappUrl)}" target="_blank" rel="noopener noreferrer">Уточнить и заказать в WhatsApp</a>
+<a class="button secondary" href="/">Открыть каталог M.Savdo</a></section></article></main></body></html>`);
+  } catch (error) {
+    console.error('[SEO Product Page] Не удалось сформировать страницу товара:', error);
+    return res.status(500).type('text/plain').send('Не удалось загрузить страницу товара');
+  }
+});
+
 async function startServer() {
   const distPath = path.join(__dirname, 'dist');
   if (process.env.NODE_ENV === 'production' && fs.existsSync(distPath)) {
