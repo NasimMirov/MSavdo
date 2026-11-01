@@ -1,8 +1,8 @@
 import { Product } from '../types';
 
-type ShareResult = 'shared' | 'copied' | 'cancelled';
+export type ShareResult = 'shared' | 'copied' | 'cancelled';
 
-function getProductUrl(product: Product): string {
+export function getProductUrl(product: Product): string {
   const slug = product.title
     .normalize('NFC')
     .toLowerCase()

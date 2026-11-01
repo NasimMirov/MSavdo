@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, ProductVariant, CartItem } from '../types';
-import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play, Share2 } from 'lucide-react';
+import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
-import { shareProduct } from '../utils/productSharing';
+import { ProductShareButton } from './ProductShareButton';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -65,7 +65,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [selectedQuantity, setSelectedQuantity] = useState(1);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
-  const [shareCopied, setShareCopied] = useState(false);
 
   const productVideos = useMemo(() => {
     const storedVideos = Array.isArray(product?.video_urls) ? product.video_urls : [];
@@ -229,7 +228,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     setAdded(false);
     setSelectedQuantity(1);
     setIsPhotoZoomed(false);
-    setShareCopied(false);
   }, [product?.id]);
 
   const moveZoomedPhoto = (direction: -1 | 1) => {
@@ -295,18 +293,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     if (cartItem) onOrderNow(cartItem);
   };
 
-  const handleShare = async () => {
-    try {
-      const result = await shareProduct(product);
-      if (result === 'copied') {
-        setShareCopied(true);
-        window.setTimeout(() => setShareCopied(false), 2000);
-      }
-    } catch (error) {
-      console.error('[Product Share]', error);
-    }
-  };
-
   return (
     <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-1.5 sm:p-4 bg-slate-900/70 backdrop-blur-md animate-fade-in">
@@ -327,7 +313,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           if (deltaX > 80 && deltaX > Math.abs(deltaY)) onClose();
         }}
       >
-        <div className="sticky top-0 z-30 -mb-10 flex h-10 shrink-0 justify-end p-1.5 pointer-events-none">
+        <div className="sticky top-0 z-30 -mb-10 flex h-10 shrink-0 items-start justify-end gap-1.5 p-1.5 pointer-events-none">
+          <ProductShareButton product={product} className="pointer-events-auto" />
           <button
             onClick={onClose}
             className="pointer-events-auto rounded-full bg-white/95 p-2 text-slate-500 shadow-md transition-colors hover:bg-slate-100 hover:text-slate-900"
@@ -510,21 +497,9 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-start justify-between gap-2">
-                <h1 className="text-base sm:text-2xl font-bold text-slate-900 leading-snug font-heading">
-                  {product.title}
-                </h1>
-                <button
-                  type="button"
-                  onClick={handleShare}
-                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[10px] font-bold text-slate-700 shadow-sm transition hover:border-amber-400 hover:bg-amber-50 active:scale-95 sm:text-xs"
-                  aria-label={shareCopied ? 'Ссылка скопирована' : 'Поделиться товаром'}
-                  title={shareCopied ? 'Ссылка скопирована' : 'Поделиться'}
-                >
-                  {shareCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Share2 className="h-4 w-4" />}
-                  <span>{shareCopied ? 'Скопировано' : 'Поделиться'}</span>
-                </button>
-              </div>
+              <h1 className="text-base sm:text-2xl font-bold text-slate-900 leading-snug font-heading">
+                {product.title}
+              </h1>
 
               {/* Блок цены за выбранный вариант */}
               <div className="mt-1.5 sm:mt-4 p-2.5 sm:p-5 bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200/90 rounded-xl sm:rounded-2xl flex items-center justify-between">

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Product } from '../types';
-import { Eye, Truck, Clock, Share2, Check } from 'lucide-react';
+import { Eye, Truck, Clock } from 'lucide-react';
 import { useI18n } from '../i18n';
-import { shareProduct } from '../utils/productSharing';
+import { ProductShareButton } from './ProductShareButton';
 
 interface ProductCardProps {
   product: Product;
@@ -16,7 +16,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const { t } = useI18n();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
-  const [shareCopied, setShareCopied] = useState(false);
 
   // Цены по доступным вариантам
   const variants = product.variants || [];
@@ -34,19 +33,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     .replace(/^-|-$/g, '')
     .slice(0, 80) || 'product';
   const productUrl = `/product/${product.id}/${encodeURIComponent(productSlug)}`;
-
-  const handleShare = async (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    try {
-      const result = await shareProduct(product);
-      if (result === 'copied') {
-        setShareCopied(true);
-        window.setTimeout(() => setShareCopied(false), 2000);
-      }
-    } catch (error) {
-      console.error('[Product Share]', error);
-    }
-  };
 
   return (
     <article 
@@ -84,10 +70,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
         )}
 
-        {/* Артикул коллекции */}
-        <div className="absolute top-1.5 left-1.5 bg-white/95 text-slate-800 text-[7px] sm:text-[8px] font-mono font-bold px-1 py-0.5 rounded shadow-xs border border-slate-200/70">
-          {product.base_sku}
-        </div>
+        <ProductShareButton product={product} className="absolute left-2 top-2 z-20" />
 
         {/* Срок доставки */}
         {isStock ? (
@@ -102,15 +85,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={handleShare}
-          aria-label={shareCopied ? 'Ссылка скопирована' : `Поделиться: ${product.title}`}
-          title={shareCopied ? 'Ссылка скопирована' : 'Поделиться'}
-          className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-700 shadow-md transition hover:bg-amber-400 hover:text-slate-950 active:scale-95"
-        >
-          {shareCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Share2 className="h-4 w-4" />}
-        </button>
+        <div className="absolute bottom-2 right-2 rounded-md border border-slate-200/70 bg-white/95 px-1.5 py-0.5 text-[7px] font-mono font-bold text-slate-800 shadow-xs sm:text-[8px]">
+          {product.base_sku}
+        </div>
 
         {/* Быстрый выбор при наведении */}
         <div className="pointer-events-none absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -148,9 +125,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               <span className="ml-1 text-[9px] font-bold text-slate-500 sm:text-[10px]">с.</span>
             </div>
           </div>
-          <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[8px] font-semibold text-slate-500 shadow-sm sm:text-[9px]">
-            Открыть товар
-          </span>
         </div>
       </div>
     </article>
