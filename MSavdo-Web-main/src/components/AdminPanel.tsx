@@ -42,7 +42,7 @@ import {
 } from 'lucide-react';
 import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
-import { apiFetch } from '../api';
+import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 
 interface TelegramLoginResult {
@@ -152,8 +152,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     whatsapp_phone: '992444431',
     cny_tjs_rate: '1.45',
     delivery_per_kg_tjs: '30',
+    somon_district_id: '511',
+    somon_category_config: {} as Record<string, { rubric_id: string; attributes_json: string }>,
   });
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const hasSomonCategoryConfig = (categoryId: number | null) => {
+    if (!categoryId) return false;
+    const config = settings.somon_category_config[String(categoryId)];
+    if (!config || !/^\d+$/.test(config.rubric_id)) return false;
+    try {
+      const attributes = JSON.parse(config.attributes_json || '{}');
+      return attributes && typeof attributes === 'object' && !Array.isArray(attributes) && Object.keys(attributes).length > 0;
+    } catch {
+      return false;
+    }
+  };
 
   // Gemini AI тестер
   const [geminiTestInput, setGeminiTestInput] = useState('2026新款夏季透气飞织运动鞋男鞋情侣款轻便减震跑步鞋 黑色 41 42 43');
@@ -312,6 +325,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           whatsapp_phone: setData.whatsapp_phone || '992444431',
           cny_tjs_rate: setData.cny_tjs_rate || '1.45',
           delivery_per_kg_tjs: setData.delivery_per_kg_tjs || '30',
+          somon_district_id: setData.somon_district_id || '511',
+          somon_category_config: setData.somon_category_config || {},
         });
       }
 
@@ -530,6 +545,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setTimeout(() => setSettingsSaved(false), 2500);
         loadAdminData();
         onRefreshCatalog();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showNotice(data.error || 'Не удалось сохранить настройки');
       }
     } catch (err) {
       console.error('Ошибка сохранения настроек:', err);
@@ -2188,6 +2206,112 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 Международный формат Таджикистана без плюса (например: 992444431).
               </span>
             </div>
+
+            <section className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 space-y-3">
+              <div>
+                <h4 className="font-bold text-sky-950">Публикация товаров в Somon.tj</h4>
+                <p className="mt-1 text-[10px] leading-relaxed text-sky-900/80">
+                  XML-ленту нужно добавить в кабинете продавца Somon. В ленту попадут только опубликованные товары с настроенными рубрикой и обязательными атрибутами; Somon проверяет её по своему расписанию и может отправить объявления на модерацию.
+                </p>
+              </div>
+              <div>
+                <label className="mb-1 block font-bold text-slate-700">ID района Somon</label>
+                <input
+                  type="number"
+                  min="1"
+                  required
+                  value={settings.somon_district_id}
+                  onChange={(e) => setSettings({ ...settings, somon_district_id: e.target.value })}
+                  className="w-full rounded-xl border border-slate-300 p-3 text-sm font-mono font-bold"
+                />
+                <span className="text-[10px] text-slate-500">Душанбе — 511.</span>
+              </div>
+              <div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <label className="font-bold text-slate-700">ID рубрик Somon для категорий магазина</label>
+                  <a
+                    href="/business-xml-guide/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[10px] font-semibold text-sky-700 underline"
+                  >
+                    Официальный справочник рубрик
+                  </a>
+                </div>
+                <div className="space-y-2">
+                  {categories.flatMap((category) => [
+                    { id: category.id, name: category.name },
+                    ...(category.subcategories || []).map((subcategory) => ({
+                      id: subcategory.id,
+                      name: `${category.name} / ${subcategory.name}`,
+                    })),
+                  ]).map((category) => (
+                    <div key={category.id} className="rounded-xl border border-sky-100 bg-white p-3 space-y-2">
+                      <label className="grid grid-cols-1 items-center gap-1 sm:grid-cols-[1fr_150px] sm:gap-3">
+                        <span className="text-[10px] text-slate-700">{category.name}</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={settings.somon_category_config[String(category.id)]?.rubric_id || ''}
+                          onChange={(e) => setSettings({
+                            ...settings,
+                            somon_category_config: {
+                              ...settings.somon_category_config,
+                              [String(category.id)]: {
+                                rubric_id: e.target.value,
+                                attributes_json: settings.somon_category_config[String(category.id)]?.attributes_json || '{}',
+                              },
+                            },
+                          })}
+                          placeholder="ID рубрики"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                        />
+                      </label>
+                      <textarea
+                        rows={2}
+                        value={settings.somon_category_config[String(category.id)]?.attributes_json || '{}'}
+                        onChange={(e) => setSettings({
+                          ...settings,
+                          somon_category_config: {
+                            ...settings.somon_category_config,
+                            [String(category.id)]: {
+                              rubric_id: settings.somon_category_config[String(category.id)]?.rubric_id || '',
+                              attributes_json: e.target.value,
+                            },
+                          },
+                        })}
+                        aria-label={`Атрибуты Somon для ${category.name}`}
+                        className="w-full rounded-lg border border-slate-300 bg-white p-2 font-mono text-[10px]"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                  В JSON задайте все обязательные поля рубрики. Значение `spec:Цвет` берётся из характеристики товара «Цвет», `const:2` передаёт постоянное значение. `condition` выгружается отдельным полем Somon. Пример: {'{"brand":"spec:Бренд","condition":"const:2"}'}.
+                </p>
+              </div>
+              <p className="text-[10px] text-slate-600">
+                Активных товаров с рубрикой и настроенными атрибутами: {adminProducts.filter((product) =>
+                  product.status === 'active' &&
+                  hasSomonCategoryConfig(product.category_id)
+                ).length}
+                {' · '}без полной настройки: {adminProducts.filter((product) =>
+                  product.status === 'active' &&
+                  !hasSomonCategoryConfig(product.category_id)
+                ).length}
+              </p>
+              <div className="rounded-xl bg-white/80 p-3">
+                <div className="mb-1 text-[10px] font-bold text-slate-700">Адрес XML-ленты</div>
+                <a
+                  href={apiUrl('/somon-feed.xml')}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="break-all text-[11px] font-semibold text-sky-700 underline"
+                >
+                  {apiUrl('/somon-feed.xml')}
+                </a>
+              </div>
+            </section>
 
             {/* Гибкая процентная выручка */}
             <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2">

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, ProductVariant, CartItem } from '../types';
-import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn } from 'lucide-react';
+import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 
@@ -395,6 +395,23 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               <div className="absolute top-2 left-2 bg-slate-900/75 text-white text-[9px] font-mono font-bold px-2 py-0.5 rounded-md shadow-xs">
                 {activeVariant?.variant_sku || product.base_sku}
               </div>
+
+              {productVideos.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const firstVideoIndex = mediaSlides.findIndex((slide) => slide.type === 'video');
+                    if (firstVideoIndex >= 0) setSelectedMediaIndex(firstVideoIndex);
+                    setIsPhotoZoomed(false);
+                  }}
+                  aria-label={`${t('videoReview')}${productVideos.length > 1 ? ` · ${productVideos.length}` : ''}`}
+                  className="absolute right-2 top-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-md transition hover:bg-emerald-700 active:scale-95"
+                >
+                  <Play className="h-3 w-3 fill-current" />
+                  <span>{t('videoReview')}</span>
+                  {productVideos.length > 1 && <span>· {productVideos.length}</span>}
+                </button>
+              )}
 
               {product.delivery_type === 'stock' ? (
                 <div className="absolute bottom-2 left-2 bg-[#f4c542]/95 text-slate-900 text-[9px] font-bold px-2 py-1 rounded-md shadow-xs flex items-center gap-1">

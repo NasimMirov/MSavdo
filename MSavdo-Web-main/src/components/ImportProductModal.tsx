@@ -257,7 +257,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
       }
 
       if (saveDirectly && data.saved) {
-        setSuccessMsg(`✓ Товар «${data.product.title}» успешно проанализирован по всем 3 правилам и добавлен в каталог M.Savdo!`);
+        setSuccessMsg(`✓ Товар «${data.product.title}» сохранён как скрытый черновик. Опубликуйте его в админ-панели, чтобы он появился в каталоге.`);
         setTimeout(() => {
           onSuccess();
           onClose();
@@ -293,13 +293,12 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
           images: parsedPreview.images?.join(',') || '',
           original_link: productLink.trim() || parsedPreview.original_link || '',
           delivery_type: deliveryType,
-          status: 'active',
         }),
       });
 
       const data = await res.json();
       if (res.ok && data.status === 'success') {
-        setSuccessMsg(`✓ Товар «${data.product?.title || parsedPreview.title}» сохранен в витрину!`);
+        setSuccessMsg(`✓ Товар «${data.product?.title || parsedPreview.title}» сохранён как скрытый черновик. Опубликуйте его в админ-панели, чтобы он появился в каталоге.`);
         setTimeout(() => {
           onSuccess();
           onClose();
@@ -674,7 +673,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                     className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all flex items-center justify-center gap-1.5"
                   >
                     <Check className="w-4 h-4" />
-                    <span>Подтвердить и добавить в каталог M.Savdo</span>
+                    <span>Сохранить скрытым черновиком</span>
                   </button>
                 </div>
               )}

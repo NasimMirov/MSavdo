@@ -2915,7 +2915,6 @@ app.post('/api/add-product', async (req, res) => {
       weight_kg = 0.5,
       variants: manualVariants = [],
       specifications: manualSpecs = null,
-      status = 'active',
       delivery_type = 'order',
       youtube_url = '',
       video_urls = [],
@@ -2951,6 +2950,7 @@ app.post('/api/add-product', async (req, res) => {
       .slice(0, 12);
     const primaryVideoUrl = importedVideos[0] || cleanVideoUrl;
     const finalDeliveryType = delivery_type === 'stock' ? 'stock' : 'order';
+    const importedProductStatus = 'draft';
 
     console.log('[API Import] Запрос на импорт товара. Длина текста:', fullRawText.length, 'Карт картинок:', visualSkuMap.length);
 
@@ -3057,7 +3057,7 @@ app.post('/api/add-product', async (req, res) => {
     const prodInsert = db.prepare(`
       INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(finalTitle, finalDesc, original_link, categoryId, baseSku, status, finalDeliveryType, mainImage, allImages, primaryVideoUrl, JSON.stringify(importedVideos), primaryVideoUrl, specsJson);
+    `).run(finalTitle, finalDesc, original_link, categoryId, baseSku, importedProductStatus, finalDeliveryType, mainImage, allImages, primaryVideoUrl, JSON.stringify(importedVideos), primaryVideoUrl, specsJson);
 
     const productId = Number(prodInsert.lastInsertRowid);
 
@@ -3106,13 +3106,14 @@ app.post('/api/add-product', async (req, res) => {
 
     return res.status(201).json({
       status: 'success',
-      message: 'Товар успешно импортирован',
+      message: 'Товар импортирован как скрытый черновик. Опубликуйте его в админ-панели, чтобы он появился в каталоге.',
       product: {
         id: productId,
         base_sku: baseSku,
         title: finalTitle,
         category_id: categoryId,
         category_name: finalCategory,
+        status: importedProductStatus,
         weight_kg: finalWeight,
         delivery_type: finalDeliveryType,
         youtube_url: cleanYoutubeUrl,
@@ -3139,7 +3140,6 @@ app.post('/api/parse-product-html', async (req, res) => {
       weight_kg = 0.5,
       save_to_catalog = false,
       delivery_type = 'order',
-      status = 'active',
     } = req.body;
 
     if (!html_code || typeof html_code !== 'string' || html_code.trim().length < 10) {
@@ -3234,7 +3234,7 @@ app.post('/api/parse-product-html', async (req, res) => {
       video_urls: structured.videoUrls,
       original_link: original_link || '',
       delivery_type: delivery_type === 'stock' ? 'stock' : 'order',
-      status: status || 'active',
+      status: 'draft',
     };
 
     // Если запрошено прямое сохранение в каталог
@@ -3463,17 +3463,89 @@ app.get('/api/settings', (_req, res) => {
 });
 
 app.get('/api/admin/settings', requireAdmin, (_req, res) => {
+  let somonCategoryConfig: Record<string, { rubric_id: string; attributes_json: string }> = {};
+  try {
+    const storedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
+    if (storedConfig && typeof storedConfig === 'object' && !Array.isArray(storedConfig)) {
+      somonCategoryConfig = Object.fromEntries(
+        Object.entries(storedConfig).flatMap(([categoryId, config]) => {
+          if (!/^\d+$/.test(categoryId) || !config || typeof config !== 'object' || Array.isArray(config)) return [];
+          const entry = config as { rubric_id?: unknown; attributes?: unknown };
+          if (!/^\d+$/.test(String(entry.rubric_id ?? ''))) return [];
+          const attributes = entry.attributes && typeof entry.attributes === 'object' && !Array.isArray(entry.attributes)
+            ? entry.attributes
+            : {};
+          return [[categoryId, {
+            rubric_id: String(entry.rubric_id),
+            attributes_json: JSON.stringify(attributes, null, 2),
+          }]];
+        })
+      );
+    }
+  } catch (error) {
+    console.error('[Somon Settings] Не удалось прочитать настройки категорий:', error);
+  }
   return res.json({
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
     delivery_per_kg_tjs: '30',
     cny_tjs_rate: '1.45',
+    somon_district_id: getSetting('somon_district_id', '511'),
+    somon_category_config: somonCategoryConfig,
   });
 });
 
 app.post('/api/admin/settings', requireAdmin, (req, res) => {
   try {
-    const { whatsapp_phone } = req.body;
+    const { whatsapp_phone, somon_district_id, somon_category_config } = req.body;
     if (whatsapp_phone) setSetting('whatsapp_phone', String(whatsapp_phone).trim());
+    if (somon_district_id !== undefined) {
+      const districtId = String(somon_district_id).trim();
+      if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
+        return res.status(400).json({ error: 'ID района Somon должен быть положительным числом' });
+      }
+      setSetting('somon_district_id', districtId);
+    }
+    if (somon_category_config !== undefined) {
+      if (!somon_category_config || typeof somon_category_config !== 'object' || Array.isArray(somon_category_config)) {
+        return res.status(400).json({ error: 'Укажите корректные настройки категорий Somon' });
+      }
+      const categoryConfig: Record<string, { rubric_id: string; attributes: Record<string, string> }> = {};
+      for (const [categoryId, config] of Object.entries(somon_category_config)) {
+        const categoryKey = String(categoryId);
+        if (!/^\d+$/.test(categoryKey) || Number(categoryKey) <= 0 || !config || typeof config !== 'object' || Array.isArray(config)) {
+          return res.status(400).json({ error: 'Настройки категорий Somon имеют неверный формат' });
+        }
+        const entry = config as { rubric_id?: unknown; attributes_json?: unknown };
+        const rubricId = String(entry.rubric_id ?? '').trim();
+        if (rubricId && (!/^\d+$/.test(rubricId) || !Number.isSafeInteger(Number(rubricId)) || Number(rubricId) <= 0)) {
+          return res.status(400).json({ error: 'ID рубрик Somon должны быть числами' });
+        }
+        let attributes: unknown = {};
+        try {
+          attributes = typeof entry.attributes_json === 'string'
+            ? JSON.parse(entry.attributes_json || '{}')
+            : {};
+        } catch {
+          return res.status(400).json({ error: `Проверьте JSON атрибутов категории ${categoryKey}` });
+        }
+        if (!attributes || typeof attributes !== 'object' || Array.isArray(attributes)) {
+          return res.status(400).json({ error: `Атрибуты категории ${categoryKey} должны быть JSON-объектом` });
+        }
+        const validatedAttributes: Record<string, string> = {};
+        for (const [slug, source] of Object.entries(attributes)) {
+          const sourceValue = String(source ?? '').trim();
+          if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(slug)) {
+            return res.status(400).json({ error: `Недопустимый slug атрибута Somon: ${slug}` });
+          }
+          if (!sourceValue || (!sourceValue.startsWith('spec:') && !sourceValue.startsWith('const:'))) {
+            return res.status(400).json({ error: `Для ${slug} укажите spec:Название характеристики или const:значение` });
+          }
+          validatedAttributes[slug] = sourceValue;
+        }
+        if (rubricId) categoryConfig[categoryKey] = { rubric_id: rubricId, attributes: validatedAttributes };
+      }
+      setSetting('somon_category_config', JSON.stringify(categoryConfig));
+    }
 
     // Keep stored prices consistent with the fixed pricing formula.
     const allVariants = db.prepare('SELECT id, price_cny, weight_kg FROM product_variants').all() as Array<{ id: number; price_cny: number; weight_kg: number }>;
@@ -3483,7 +3555,7 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
       updateV.run(newTjs, v.id);
     }
 
-    return res.json({ success: true, message: 'Контакт сохранён, цены вариантов пересчитаны по фиксированной формуле' });
+    return res.json({ success: true, message: 'Настройки сохранены, цены вариантов пересчитаны по фиксированной формуле' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -3796,6 +3868,179 @@ function getPublicImageUrls(mainImage: string | null, images: string | null, lim
   }
   return [...imageUrls];
 }
+
+function escapeXml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function parseSomonSpecifications(rawSpecifications: string | null): Record<string, string> {
+  if (!rawSpecifications) return {};
+  try {
+    const parsed = JSON.parse(rawSpecifications);
+    if (Array.isArray(parsed)) {
+      return Object.fromEntries(parsed
+        .filter((entry) => entry && typeof entry.name === 'string')
+        .map((entry) => [entry.name.trim(), String(entry.value ?? '').trim()])
+        .filter(([name, value]) => name && value));
+    }
+    if (parsed && typeof parsed === 'object') {
+      return Object.fromEntries(Object.entries(parsed)
+        .map(([name, value]) => [name.trim(), String(value ?? '').trim()])
+        .filter(([name, value]) => name && value));
+    }
+  } catch {
+    return Object.fromEntries(rawSpecifications.split('\n').flatMap((line) => {
+      const [name, ...parts] = line.split(/[:：]/);
+      const value = parts.join(':').trim();
+      return name?.trim() && value ? [[name.trim(), value]] : [];
+    }));
+  }
+  return {};
+}
+
+function cleanSomonTitle(title: string): string {
+  const stopWords = new Set([
+    'продаю', 'продаем', 'продам', 'прадаю', 'продается', 'прадается', 'продаеться',
+    'прадам', 'срочно', 'срочна', 'сдам', 'сдаю', 'сдаются', 'сдается', 'очень',
+    'недорого', 'дорого', 'требуется',
+  ]);
+  return title
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/(?:¥|￥)\s*\d+(?:[.,]\d+)?/g, ' ')
+    .replace(/\d+(?:[.,]\d+)?\s*(?:tjs|cny|сомони?|юан(?:ь|я|ей)?)/giu, ' ')
+    .replace(/цена\s*:?\s*\d+(?:[.,]\d+)?/giu, ' ')
+    .replace(/не\s+дорого/gi, ' ')
+    .replace(/[^\p{L}\p{N}\s-]/gu, ' ')
+    .split(/\s+/)
+    .filter((word) => word && !stopWords.has(word.toLocaleLowerCase('ru')))
+    .filter((word, index, words) => index === 0 || word.toLocaleLowerCase('ru') !== words[index - 1].toLocaleLowerCase('ru'))
+    .join(' ')
+    .trim()
+    .slice(0, 70);
+}
+
+app.get('/somon-feed.xml', (_req, res) => {
+  try {
+    const parsedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
+    const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
+      ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
+      : {};
+    const districtId = getSetting('somon_district_id', '511');
+    if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
+      throw new Error('В настройках Somon указан некорректный ID района');
+    }
+
+    const products = db.prepare(`
+      SELECT p.id, p.title, p.description, p.category_id, p.main_image, p.images,
+             p.specifications,
+             MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs
+      FROM products p
+      LEFT JOIN product_variants v ON v.product_id = p.id
+      WHERE p.status = 'active'
+      GROUP BY p.id
+      ORDER BY p.id
+    `).all() as Array<{
+      id: number;
+      title: string;
+      description: string | null;
+      category_id: number | null;
+      main_image: string | null;
+      images: string | null;
+      specifications: string | null;
+      price_tjs: number | null;
+    }>;
+
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const items: string[] = [];
+    for (const product of products) {
+      if (!product.category_id || !Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) continue;
+      const categoryConfig = storedConfig[String(product.category_id)];
+      const rubricId = String(categoryConfig?.rubric_id ?? '');
+      const attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
+        ? categoryConfig.attributes as Record<string, unknown>
+        : {};
+      if (!/^\d+$/.test(rubricId) || !Object.keys(attributes).length) continue;
+
+      const specifications = parseSomonSpecifications(product.specifications);
+      const xmlAttributes: string[] = [];
+      const xmlFields: string[] = [];
+      let hasAllAttributeValues = true;
+      for (const [slug, source] of Object.entries(attributes)) {
+        if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(slug) || typeof source !== 'string') {
+          hasAllAttributeValues = false;
+          break;
+        }
+        let value = '';
+        if (source.startsWith('const:')) {
+          value = source.slice('const:'.length).trim();
+        } else if (source.startsWith('spec:')) {
+          const specName = source.slice('spec:'.length).trim();
+          const matchingEntry = Object.entries(specifications).find(([name]) =>
+            name.toLocaleLowerCase('ru') === specName.toLocaleLowerCase('ru')
+          );
+          value = matchingEntry?.[1] || '';
+        }
+        if (!value) {
+          hasAllAttributeValues = false;
+          break;
+        }
+        if (slug === 'condition') {
+          xmlFields.push(`<condition>${escapeXml(value)}</condition>`);
+        } else {
+          xmlAttributes.push(`<${slug}>${escapeXml(value)}</${slug}>`);
+        }
+      }
+      if (!hasAllAttributeValues) continue;
+
+      const title = cleanSomonTitle(product.title);
+      if (!title) continue;
+      const description = String(product.description || product.title)
+        .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 10000) || title;
+      const images = getPublicImageUrls(product.main_image, product.images, 32)
+        .filter((image) => !/\.(?:gif|webp|svg|avif|bmp|tiff?)$/i.test(new URL(image).pathname))
+        .slice(0, 16);
+      const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
+      const itemUrl = getPublicProductUrl(product.id, product.title);
+      items.push(`
+    <list-item>
+      <last_update>${escapeXml(timestamp)}</last_update>
+      <external_id>${product.id}</external_id>
+      <images>${imageXml}</images>
+      <status>active</status>
+      <rubric>${rubricId}</rubric>
+      <district>${districtId}</district>
+      <description>${escapeXml(description)}</description>
+      <price>${Number(product.price_tjs).toFixed(2)}</price>
+      <phone_hide>0</phone_hide>
+      <negotiable_price>0</negotiable_price>
+      <exchange>0</exchange>
+      ${xmlFields.join('')}
+      <attrs>${xmlAttributes.join('')}</attrs>
+      <geometry></geometry>
+      <title>${escapeXml(title)}</title>
+      <chosen_phone></chosen_phone>
+      <item_link><![CDATA[${itemUrl.replace(/\]\]>/g, ']]]]><![CDATA[>')}]]></item_link>
+    </list-item>`);
+    }
+
+    return res
+      .type('application/xml')
+      .set('Cache-Control', 'public, max-age=300')
+      .send(`<?xml version="1.0" encoding="utf-8"?><root>${items.join('')}</root>`);
+  } catch (error) {
+    console.error('[Somon Feed] Не удалось сформировать XML-ленту:', error);
+    return res.status(500).type('text/plain').send('Не удалось сформировать XML-ленту Somon');
+  }
+});
 
 function makeSearchDescription(description: string | null, title: string, category: string | null): string {
   const cleanDescription = String(description || '')
