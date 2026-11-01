@@ -6,9 +6,14 @@ import { getProductUrl, shareProduct } from '../utils/productSharing';
 interface ProductShareButtonProps {
   product: Product;
   className?: string;
+  menuAlignment?: 'left' | 'right';
 }
 
-export const ProductShareButton: React.FC<ProductShareButtonProps> = ({ product, className = '' }) => {
+export const ProductShareButton: React.FC<ProductShareButtonProps> = ({
+  product,
+  className = '',
+  menuAlignment = 'left',
+}) => {
   const [isOpen, setIsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -66,7 +71,7 @@ export const ProductShareButton: React.FC<ProductShareButtonProps> = ({ product,
         {copied ? <Check className="h-4 w-4 text-emerald-600" /> : <Share2 className="h-4 w-4" />}
       </button>
       {isOpen && (
-        <div className="absolute left-0 top-full z-[60] mt-1.5 min-w-44 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-xl">
+        <div className={`absolute ${menuAlignment === 'right' ? 'right-0' : 'left-0'} top-full z-[60] mt-1.5 min-w-44 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 text-left shadow-xl`}>
           <a
             href={whatsappUrl}
             target="_blank"

@@ -298,6 +298,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     onAddToCart(cartItem);
     setAdded(true);
     setIsQuantityPickerOpen(false);
+    setSelectedQuantity(1);
     setTimeout(() => setAdded(false), 2000);
   };
 
@@ -327,7 +328,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
         }}
       >
         <div className="sticky top-0 z-30 -mb-10 flex h-10 shrink-0 items-start justify-end gap-1.5 p-1.5 pointer-events-none">
-          <ProductShareButton product={product} className="pointer-events-auto" />
+          <ProductShareButton product={product} className="pointer-events-auto" menuAlignment="right" />
           <button
             onClick={onClose}
             className="pointer-events-auto rounded-full bg-white/95 p-2 text-slate-500 shadow-md transition-colors hover:bg-slate-100 hover:text-slate-900"
@@ -506,7 +507,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           </div>
 
           {/* Правая колонка: Конфигуратор товара */}
-          <div className="flex flex-col justify-between space-y-2.5 sm:space-y-5">
+          <div className="flex flex-col justify-between space-y-2 sm:space-y-4">
             <div>
               {/* Категория и коллекция */}
               <div className="flex items-center justify-between text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1 sm:mb-2">
@@ -522,7 +523,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               </h1>
 
               {/* Блок цены за выбранный вариант */}
-              <div className="mt-1.5 sm:mt-3 p-2 sm:p-4 bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200/90 rounded-xl sm:rounded-2xl flex items-center justify-between">
+              <div className="mt-1 sm:mt-2.5 p-2 sm:p-3.5 bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200/90 rounded-xl sm:rounded-2xl flex items-center justify-between">
                 <div>
                   <div className="text-[10px] sm:text-xs text-slate-500 font-medium">{t('finalPrice')}</div>
                   <div className="text-lg sm:text-3xl font-extrabold text-slate-900 font-mono mt-0.5">
@@ -547,12 +548,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
               {/* Авторитетный инфо-блок доставки */}
               {product.delivery_type === 'stock' ? (
-                <div className="hidden md:flex mt-3 p-3 bg-[#fff7db] border border-[#ecd17c] rounded-2xl items-center gap-2.5 text-xs text-slate-800 shadow-xs">
+                <div className="hidden md:flex mt-2.5 p-2.5 bg-[#fff7db] border border-[#ecd17c] rounded-xl items-center gap-2 text-xs text-slate-800 shadow-xs">
                   <Truck className="w-4 h-4 shrink-0" />
                   <span><strong>В наличии</strong> — на складе в Душанбе</span>
                 </div>
               ) : (
-                <div className="hidden md:flex mt-3 p-3 bg-[#fff7db] border border-[#ecd17c] rounded-2xl items-center gap-2.5 text-xs text-slate-800 shadow-xs">
+                <div className="hidden md:flex mt-2.5 p-2.5 bg-[#fff7db] border border-[#ecd17c] rounded-xl items-center gap-2 text-xs text-slate-800 shadow-xs">
                   <Clock className="w-4 h-4 shrink-0" />
                   <span><strong>Доставка 12–35 дней</strong></span>
                 </div>
@@ -560,7 +561,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
               {/* 1. КОНФИГУРАТОР ЦВЕТА (Круглые иконки / плашки) */}
               {availableColors.length > 0 && availableColors[0].name !== 'Стандарт' && (
-                <div className="mt-3 sm:mt-6 space-y-1.5 sm:space-y-2.5">
+                <div className="mt-2.5 space-y-1 sm:mt-4 sm:space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-slate-900">
                       {t('selectedColor')} <span className="font-medium text-emerald-800">{selectedColor}</span>
@@ -568,7 +569,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     <span className="text-slate-400 text-[11px]">{availableColors.length} вар.</span>
                   </div>
 
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2.5">
+                  <div className="flex flex-wrap gap-1 sm:gap-1.5">
                     {availableColors.map((col) => {
                       const isSelected = selectedColor === col.name;
                       return (
@@ -576,7 +577,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                           key={col.name}
                           type="button"
                           onClick={() => setSelectedColor(col.name)}
-                          className={`group relative flex items-center gap-1.5 sm:gap-2 px-2 py-1.5 sm:px-3 sm:py-2 rounded-lg sm:rounded-xl text-[10px] sm:text-xs font-semibold transition-all duration-150 ${
+                          className={`group relative flex items-center gap-1 px-1.5 py-1 sm:gap-1.5 sm:px-2 sm:py-1.5 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-semibold transition-all duration-150 ${
                             isSelected
                               ? 'bg-slate-900 text-white ring-1 ring-emerald-600 shadow-sm'
                               : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
@@ -587,10 +588,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                               src={col.img}
                               alt=""
                               referrerPolicy="no-referrer"
-                              className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg object-cover border border-white/60 shadow-sm"
+                              className="w-7 h-7 sm:w-8 sm:h-8 rounded-md object-cover border border-white/60 shadow-sm"
                             />
                           ) : (
-                            <span className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-gradient-to-tr from-slate-700 to-slate-400 border border-white/50" />
+                            <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-md bg-gradient-to-tr from-slate-700 to-slate-400 border border-white/50" />
                           )}
                           <span>{col.name}</span>
                           {isSelected && <Check className="w-3.5 h-3.5 ml-0.5" />}
@@ -603,7 +604,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
               {/* 2. КОНФИГУРАТОР РАЗМЕРА (Плитки) */}
               {availableSizesForColor.length > 0 && availableSizesForColor[0] !== 'One Size' && (
-                <div className="mt-3 sm:mt-5 space-y-1.5 sm:space-y-2.5">
+                <div className="mt-2.5 space-y-1 sm:mt-4 sm:space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-slate-900">
                       {t('selectedSize')} <span className="font-medium text-emerald-800">{selectedSize}</span>
@@ -611,7 +612,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     <span className="text-slate-400 text-[11px]">Таблица размеров</span>
                   </div>
 
-                  <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                  <div className="flex flex-wrap gap-1 sm:gap-1.5">
                     {availableSizesForColor.map((size) => {
                       const isSelected = selectedSize === size;
                       return (
@@ -619,7 +620,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                           key={size}
                           type="button"
                           onClick={() => setSelectedSize(size)}
-                          className={`min-w-9 h-8 sm:min-w-12 sm:h-11 px-2 sm:px-3.5 flex items-center justify-center rounded-lg sm:rounded-xl text-[10px] sm:text-xs font-bold font-mono transition-all duration-150 ${
+                          className={`min-w-8 h-7 sm:min-w-10 sm:h-9 px-1.5 sm:px-2.5 flex items-center justify-center rounded-md sm:rounded-lg text-[10px] sm:text-xs font-bold font-mono transition-all duration-150 ${
                             isSelected
                               ? 'bg-emerald-600 text-white shadow-md ring-1 ring-emerald-600 ring-offset-1'
                               : 'bg-slate-50 border border-slate-200 text-slate-700 hover:bg-slate-100 hover:border-slate-300'
@@ -634,14 +635,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               )}
 
               {/* Описание товара (Требование 8) */}
-              <div className="mt-3 sm:mt-6 pt-3 sm:pt-4 border-t border-slate-100">
-                <div className="flex items-center gap-1.5 mb-2">
+              <div className="mt-2.5 border-t border-slate-100 pt-2.5 sm:mt-4 sm:pt-3">
+                <div className="mb-1.5 flex items-center gap-1.5">
                   <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
                   <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900 font-heading">
                     {t('description')}
                   </h4>
                 </div>
-                <div className="product-description-panel bg-gradient-to-br from-amber-50/40 via-slate-50 to-emerald-50/20 p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-xs">
+                <div className="product-description-panel bg-gradient-to-br from-amber-50/40 via-slate-50 to-emerald-50/20 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-xs">
                   <div className="product-description-text text-[11px] sm:text-sm text-slate-700 leading-relaxed font-normal whitespace-pre-line">
                     {product.description || 'Качественные фабричные материалы, продуманная эргономика и надежность в повседневном использовании.'}
                   </div>
@@ -694,16 +695,22 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 aria-expanded={isQuantityPickerOpen}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-800 transition hover:bg-slate-50 sm:h-12 sm:w-12"
               >
-                {added || isQuantityPickerOpen
+                {added
                   ? <Check className="h-5 w-5" />
                   : <ShoppingBasket className="h-5 w-5" />}
               </button>
               </div>
 
-              <div className="text-[10px] text-slate-400 text-center flex items-center justify-center gap-1 sm:text-[11px]">
-                <span>{t('modificationSku')}</span>
-                <span className="font-mono font-semibold text-slate-600">{activeVariant?.variant_sku}</span>
-              </div>
+              {added && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-800"
+                >
+                  <Check className="h-4 w-4" />
+                  <span>{t('addedToCart')}</span>
+                </div>
+              )}
             </div>
 
             <section id="related-products" className="scroll-mt-24 px-4 pb-8 sm:px-8" aria-label={t('similarProducts')}>
