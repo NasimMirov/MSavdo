@@ -4042,13 +4042,51 @@ app.get('/somon-feed.xml', (_req, res) => {
   }
 });
 
-function makeSearchDescription(description: string | null, title: string, category: string | null): string {
-  const cleanDescription = String(description || '')
+function cleanSearchText(value: string | null): string {
+  return String(value || '')
     .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
     .replace(/<[^>]*>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return (cleanDescription || `${title}${category ? ` — ${category}` : ''}. Закажите с доставкой из Китая в Таджикистан через M.Savdo.`)
+}
+
+function makeSearchTitle(title: string): string {
+  const cleanTitle = cleanSearchText(title) || 'Товар';
+  const prefix = 'Купить ';
+  const suffix = ' в Таджикистане | M.Savdo';
+  const maxLength = 70;
+  const titleLimit = maxLength - prefix.length - suffix.length;
+  const compactTitle = Array.from(cleanTitle).length > titleLimit
+    ? `${Array.from(cleanTitle).slice(0, titleLimit - 1).join('').trimEnd()}…`
+    : cleanTitle;
+  return `${prefix}${compactTitle}${suffix}`;
+}
+
+function makeSearchDescription(
+  description: string | null,
+  title: string,
+  category: string | null,
+  minPrice: number,
+  maxPrice: number,
+  deliveryType: string | null,
+): string {
+  const cleanTitle = Array.from(cleanSearchText(title) || 'товар').slice(0, 110).join('');
+  const cleanCategory = Array.from(cleanSearchText(category)).slice(0, 35).join('');
+  const categoryLabel = cleanCategory ? ` (${cleanCategory})` : '';
+  const priceLabel = minPrice > 0
+    ? `Цена ${minPrice}${maxPrice > minPrice ? `–${maxPrice}` : ''} сомони.`
+    : 'Цену уточняйте онлайн.';
+  const deliveryLabel = 'Доставка из Китая в Таджикистан — 18–30 дней.';
+  const availabilityLabel = deliveryType === 'stock'
+    ? 'Также в наличии в Душанбе.'
+    : 'Закажите онлайн.';
+  const details = cleanSearchText(description);
+  const detailsLabel = details && details.toLocaleLowerCase('ru') !== cleanTitle.toLocaleLowerCase('ru')
+    ? ` ${Array.from(details).slice(0, 70).join('').trim()}`
+    : '';
+  return `Купить ${cleanTitle}${categoryLabel} в Таджикистане на M.Savdo. ${priceLabel} Недорого, хорошее качество. ${deliveryLabel} ${availabilityLabel}${detailsLabel}`
+    .replace(/\s+/g, ' ')
+    .trim()
     .slice(0, 320);
 }
 
@@ -4168,7 +4206,15 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       return res.redirect(301, canonicalUrl);
     }
 
-    const description = makeSearchDescription(product.description, product.title, product.category_name);
+    const description = makeSearchDescription(
+      product.description,
+      product.title,
+      product.category_name,
+      Number(product.min_price_tjs) || 0,
+      Number(product.max_price_tjs) || 0,
+      product.delivery_type,
+    );
+    const searchTitle = makeSearchTitle(product.title);
     const imageList = getPublicImageUrls(product.main_image, product.images);
     let specifications: Array<{ name: string; value: string }> = [];
     if (product.specifications) {
@@ -4242,11 +4288,12 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     res.set('Cache-Control', 'public, max-age=300').set('Vary', 'User-Agent');
     return res.type('html').send(`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(product.title)} — купить с доставкой | M.Savdo</title>
+<title>${escapeHtml(searchTitle)}</title>
 <meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(canonicalUrl)}">
-<meta property="og:type" content="product"><meta property="og:title" content="${escapeHtml(product.title)}">
+<meta property="og:type" content="product"><meta property="og:title" content="${escapeHtml(searchTitle)}">
 <meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonicalUrl)}">
 <meta property="og:image" content="${escapeHtml(productImage)}"><meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${escapeHtml(searchTitle)}"><meta name="twitter:description" content="${escapeHtml(description)}">
 <script type="application/ld+json">${safeStructuredData}</script>
 <style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.6 Arial,sans-serif}.wrap{max-width:980px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-weight:800;color:#111;text-decoration:none}.product{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:24px;padding:24px;border-radius:20px;background:#fff;box-shadow:0 6px 30px #0f172a12}.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start}.gallery img{width:100%;aspect-ratio:1;object-fit:contain;background:#f1f5f9;border-radius:12px}.details h1{line-height:1.25}.price{font-size:24px;font-weight:800}.button{display:inline-block;margin:10px 8px 0 0;padding:11px 16px;border-radius:10px;background:#059669;color:white;text-decoration:none;font-weight:700}.button.secondary{background:#111827}.specs{padding-left:20px}@media(max-width:680px){.product{grid-template-columns:1fr;padding:16px}.gallery{grid-template-columns:1fr 1fr}.wrap{padding:12px}}</style></head>
 <body><main class="wrap"><nav class="top"><a class="brand" href="/">M.Savdo</a><a href="/">Каталог товаров</a></nav>
