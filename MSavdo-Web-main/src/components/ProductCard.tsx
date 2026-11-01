@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Product } from '../types';
-import { ShoppingBasket, Eye, Truck, Clock } from 'lucide-react';
+import { Eye, Truck, Clock, Share2, Check } from 'lucide-react';
 import { useI18n } from '../i18n';
+import { shareProduct } from '../utils/productSharing';
 
 interface ProductCardProps {
   product: Product;
   onSelect: (product: Product) => void;
-  onAddToCart: (product: Product) => void;
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({
@@ -16,6 +16,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const { t } = useI18n();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   // Цены по доступным вариантам
   const variants = product.variants || [];
@@ -25,10 +26,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const minPrice = prices.length > 0 ? Math.min(...prices) : (product.min_price_tjs || 0);
   const maxPrice = prices.length > 0 ? Math.max(...prices) : (product.max_price_tjs || 0);
 
-  const priceDisplay = minPrice === maxPrice || maxPrice === 0 
-    ? `${minPrice} с.` 
-    : `от ${minPrice} с.`;
-
   const isStock = product.delivery_type === 'stock';
   const productSlug = product.title
     .normalize('NFC')
@@ -37,6 +34,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     .replace(/^-|-$/g, '')
     .slice(0, 80) || 'product';
   const productUrl = `/product/${product.id}/${encodeURIComponent(productSlug)}`;
+
+  const handleShare = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    try {
+      const result = await shareProduct(product);
+      if (result === 'copied') {
+        setShareCopied(true);
+        window.setTimeout(() => setShareCopied(false), 2000);
+      }
+    } catch (error) {
+      console.error('[Product Share]', error);
+    }
+  };
 
   return (
     <article 
@@ -92,8 +102,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
         )}
 
+        <button
+          type="button"
+          onClick={handleShare}
+          aria-label={shareCopied ? 'Ссылка скопирована' : `Поделиться: ${product.title}`}
+          title={shareCopied ? 'Ссылка скопирована' : 'Поделиться'}
+          className="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-700 shadow-md transition hover:bg-amber-400 hover:text-slate-950 active:scale-95"
+        >
+          {shareCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Share2 className="h-4 w-4" />}
+        </button>
+
         {/* Быстрый выбор при наведении */}
-        <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+        <div className="pointer-events-none absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
           <div className="bg-amber-400 text-black text-xs font-bold px-3.5 py-1.5 rounded-xl shadow-lg flex items-center gap-1.5 transform translate-y-2 group-hover:translate-y-0 transition-transform">
             <Eye className="w-3.5 h-3.5" />
             <span>Выбрать</span>
@@ -102,15 +122,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       </div>
 
       {/* Информация о товаре */}
-      <div className="p-2.5 sm:p-4 flex-1 flex flex-col justify-between">
-        <div>
-          <div className="flex items-center justify-between gap-1 mb-0.5">
-            <div className="text-[8px] sm:text-[9px] font-semibold text-slate-600 uppercase tracking-wide truncate">
-              {product.category_name || 'Каталог'}
-            </div>
+      <div className="flex flex-1 flex-col p-2.5 sm:p-4">
+        <div className="flex-1">
+          <div className="mb-1.5 text-[8px] font-bold uppercase tracking-[0.12em] text-slate-500 sm:text-[9px]">
+            <span className="line-clamp-1">{product.category_name || 'Каталог'}</span>
           </div>
 
-          <h3 className="text-[11px] sm:text-sm font-bold text-slate-900 line-clamp-2 leading-snug font-heading group-hover:text-amber-600 transition-colors">
+          <h3 className="min-h-[2.5rem] text-[11px] font-bold leading-snug text-slate-900 line-clamp-2 transition-colors group-hover:text-amber-600 font-heading sm:min-h-[3rem] sm:text-sm">
             <a
               href={productUrl}
               className="text-inherit no-underline"
@@ -121,26 +139,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </h3>
         </div>
 
-        {/* Цена и кнопка */}
-        <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-          <div>
-            <div className="text-[9px] text-slate-400 font-medium">{t('inSomoni')}</div>
-            <div className="text-sm sm:text-base font-extrabold text-slate-900 font-mono tracking-tight">
-              {priceDisplay}
+        <div className="mt-3 flex items-end justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50/80 px-2.5 py-2 sm:px-3">
+          <div className="min-w-0">
+            <div className="text-[8px] font-medium text-slate-500 sm:text-[9px]">{t('inSomoni')}</div>
+            <div className="mt-0.5 whitespace-nowrap text-base font-extrabold leading-none tracking-tight text-slate-950 sm:text-lg">
+              {maxPrice > minPrice && <span className="mr-1 text-[10px] font-semibold text-slate-500 sm:text-xs">от</span>}
+              {minPrice}
+              <span className="ml-1 text-[9px] font-bold text-slate-500 sm:text-[10px]">с.</span>
             </div>
           </div>
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelect(product);
-            }}
-            className="p-2 sm:px-3 sm:py-1.5 bg-black hover:bg-amber-400 hover:text-black text-amber-400 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1 active:scale-95 border border-amber-400/30"
-            title={t('chooseProduct')}
-          >
-            <ShoppingBasket className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{t('chooseProduct')}</span>
-          </button>
+          <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[8px] font-semibold text-slate-500 shadow-sm sm:text-[9px]">
+            Открыть товар
+          </span>
         </div>
       </div>
     </article>

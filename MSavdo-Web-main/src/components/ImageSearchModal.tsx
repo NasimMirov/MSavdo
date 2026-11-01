@@ -17,8 +17,11 @@ import {
   Eye,
   Truck,
   Clock,
-  Layers
+  Layers,
+  Share2,
+  Check
 } from 'lucide-react';
+import { shareProduct } from '../utils/productSharing';
 
 interface ImageSearchModalProps {
   isOpen: boolean;
@@ -56,6 +59,7 @@ export const ImageSearchModal: React.FC<ImageSearchModalProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const streamRef = useRef<MediaStream | null>(null);
+  const [shareCopiedProductId, setShareCopiedProductId] = useState<number | null>(null);
 
   // Stop camera stream safely
   const stopCamera = useCallback(() => {
@@ -546,6 +550,28 @@ export const ImageSearchModal: React.FC<ImageSearchModalProps> = ({
                                 <span className="min-w-0 leading-tight">Доставка 12–35 дней</span>
                               </div>
                             )}
+                            <button
+                              type="button"
+                              onClick={async (event) => {
+                                event.stopPropagation();
+                                try {
+                                  const result = await shareProduct(p);
+                                  if (result === 'copied') {
+                                    setShareCopiedProductId(p.id);
+                                    window.setTimeout(() => setShareCopiedProductId(null), 2000);
+                                  }
+                                } catch (error) {
+                                  console.error('[Product Share]', error);
+                                }
+                              }}
+                              aria-label={shareCopiedProductId === p.id ? 'Ссылка скопирована' : `Поделиться: ${p.title}`}
+                              title={shareCopiedProductId === p.id ? 'Ссылка скопирована' : 'Поделиться'}
+                              className="absolute right-1.5 top-1.5 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white/95 text-slate-700 shadow-md transition hover:bg-amber-400 hover:text-slate-950 active:scale-95"
+                            >
+                              {shareCopiedProductId === p.id
+                                ? <Check className="h-4 w-4 text-emerald-600" />
+                                : <Share2 className="h-4 w-4" />}
+                            </button>
                           </div>
 
                           <div>

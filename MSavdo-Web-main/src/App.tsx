@@ -911,7 +911,6 @@ export default function App() {
                       key={product.id}
                       product={product}
                       onSelect={(p) => handleOpenProduct(p)}
-                      onAddToCart={() => handleOpenProduct(product)}
                     />
                   ))}
                 </div>
@@ -940,7 +939,6 @@ export default function App() {
                         key={`related-${product.id}`}
                         product={product}
                         onSelect={handleOpenProduct}
-                        onAddToCart={() => handleOpenProduct(product)}
                       />
                     ))}
                 </div>
