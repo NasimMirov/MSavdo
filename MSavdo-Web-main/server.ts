@@ -3781,6 +3781,32 @@ function getPublicProductUrl(id: number, title: string): string {
   return `${seoSiteUrl}/product/${id}/${makeProductSlug(title)}`;
 }
 
+function getPublicImageUrls(mainImage: string | null, images: string | null, limit = 8): string[] {
+  const imageUrls = new Set<string>();
+  for (const rawImage of [mainImage, ...(images || '').split(',')]) {
+    const image = rawImage?.trim();
+    if (!image) continue;
+    try {
+      const url = new URL(image, seoSiteUrl);
+      if (url.protocol === 'http:' || url.protocol === 'https:') imageUrls.add(url.href);
+    } catch {
+      continue;
+    }
+    if (imageUrls.size >= limit) break;
+  }
+  return [...imageUrls];
+}
+
+function makeSearchDescription(description: string | null, title: string, category: string | null): string {
+  const cleanDescription = String(description || '')
+    .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (cleanDescription || `${title}${category ? ` — ${category}` : ''}. Закажите с доставкой из Китая в Таджикистан через M.Savdo.`)
+    .slice(0, 320);
+}
+
 app.get('/robots.txt', (_req, res) => {
   res.type('text/plain').send(
     `User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${seoSiteUrl}/sitemap.xml\n`
@@ -3815,12 +3841,18 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
 
     const offset = (page - 1) * SEO_SITEMAP_PAGE_SIZE;
     const products = db.prepare(`
-      SELECT id, title, created_at
+      SELECT id, title, created_at, main_image, images
       FROM products
       WHERE status = 'active'
       ORDER BY id DESC
       LIMIT ? OFFSET ?
-    `).all(SEO_SITEMAP_PAGE_SIZE, offset) as Array<{ id: number; title: string; created_at: string | null }>;
+    `).all(SEO_SITEMAP_PAGE_SIZE, offset) as Array<{
+      id: number;
+      title: string;
+      created_at: string | null;
+      main_image: string | null;
+      images: string | null;
+    }>;
     if (products.length === 0 && page !== 1) {
       return res.status(404).type('text/plain').send('Карта сайта не найдена');
     }
@@ -3830,13 +3862,16 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
       const lastModified = Number.isFinite(timestamp)
         ? `<lastmod>${new Date(timestamp).toISOString().slice(0, 10)}</lastmod>`
         : '';
-      return `<url><loc>${escapeHtml(getPublicProductUrl(product.id, product.title))}</loc>${lastModified}</url>`;
+      const imageEntries = getPublicImageUrls(product.main_image, product.images, 3)
+        .map((image) => `<image:image><image:loc>${escapeHtml(image)}</image:loc><image:title>${escapeHtml(product.title)}</image:title></image:image>`)
+        .join('');
+      return `<url><loc>${escapeHtml(getPublicProductUrl(product.id, product.title))}</loc>${lastModified}${imageEntries}</url>`;
     }).join('');
     const homeEntry = page === 1 ? `<url><loc>${escapeHtml(`${seoSiteUrl}/`)}</loc></url>` : '';
 
     return res.type('application/xml')
       .set('Cache-Control', 'public, max-age=900')
-      .send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${homeEntry}${productEntries}</urlset>`);
+      .send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">${homeEntry}${productEntries}</urlset>`);
   } catch (error) {
     console.error('[SEO Sitemap] Не удалось сформировать раздел карты сайта:', error);
     return res.status(500).type('text/plain').send('Не удалось сформировать карту сайта');
@@ -3888,20 +3923,8 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       return res.redirect(301, canonicalUrl);
     }
 
-    const description = String(product.description || '').replace(/\s+/g, ' ').trim().slice(0, 500)
-      || `${product.title}${product.category_name ? ` — ${product.category_name}` : ''}. Закажите с доставкой из Китая в Таджикистан через M.Savdo.`;
-    const imageList = [product.main_image, ...(product.images || '').split(',')]
-      .map((image) => image?.trim())
-      .filter((image): image is string => Boolean(image))
-      .map((image) => {
-        try {
-          return new URL(image, seoSiteUrl).href;
-        } catch {
-          return '';
-        }
-      })
-      .filter(Boolean)
-      .slice(0, 8);
+    const description = makeSearchDescription(product.description, product.title, product.category_name);
+    const imageList = getPublicImageUrls(product.main_image, product.images);
     let specifications: Array<{ name: string; value: string }> = [];
     if (product.specifications) {
       try {
