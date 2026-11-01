@@ -225,6 +225,41 @@ db.exec(`
   );
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS site_visitors (
+    visitor_hash TEXT PRIMARY KEY,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    device_info TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS site_daily_visitors (
+    visit_date TEXT NOT NULL,
+    visitor_hash TEXT NOT NULL,
+    PRIMARY KEY (visit_date, visitor_hash)
+  );
+  CREATE TABLE IF NOT EXISTS site_daily_stats (
+    visit_date TEXT PRIMARY KEY,
+    visits_count INTEGER NOT NULL DEFAULT 0,
+    unique_visitors_count INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS site_visit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    visitor_hash TEXT NOT NULL,
+    device_info TEXT NOT NULL,
+    visited_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS site_visit_totals (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    visits_count INTEGER NOT NULL DEFAULT 0,
+    unique_visitors_count INTEGER NOT NULL DEFAULT 0
+  );
+  INSERT OR IGNORE INTO site_visit_totals (id, visits_count, unique_visitors_count) VALUES (1, 0, 0);
+  CREATE INDEX IF NOT EXISTS idx_products_active_category_id ON products(status, category_id, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_products_active_popularity ON products(status, views_count DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_variants_product_id ON product_variants(product_id);
+  CREATE INDEX IF NOT EXISTS idx_site_visit_events_visited_at ON site_visit_events(visited_at DESC);
+`);
+
 const ordersColumns = db.prepare('PRAGMA table_info(orders)').all() as Array<{ name: string }>;
 if (!ordersColumns.some((column) => column.name === 'total_amount_tjs')) {
   db.exec('ALTER TABLE orders ADD COLUMN total_amount_tjs REAL NOT NULL DEFAULT 0;');
@@ -293,79 +328,176 @@ for (const existingOrder of existingOrdersForItems) {
   }
 }
 
-const ADMIN_PRODUCT_CATEGORIES = [
-  'Мужская коллекция',
-  'Женская коллекция',
-  'Премиальная обувь',
-  'Аудио и смарт-гаджеты',
-  'Игрушки и хобби',
-];
-
 const FIXED_CATEGORY_TREE = [
   {
-    name: 'Одежда, обувь и аксессуары',
+    name: 'Женская одежда',
     subcategories: [
-      'Мужская одежда',
-      'Женская одежда',
-      'Детская одежда',
-      'Мужская обувь',
+      'Платья и сарафаны',
+      'Женская верхняя одежда',
+      'Футболки, топы и боди',
+      'Женские блузки и рубашки',
+      'Женские свитеры, худи и трикотаж',
+      'Женские брюки, джинсы и леггинсы',
+      'Женские юбки и шорты',
+      'Женские костюмы, жакеты и комбинезоны',
+      'Мусульманская и восточная одежда',
+      'Одежда больших размеров и для беременных',
+    ],
+  },
+  {
+    name: 'Мужская одежда',
+    subcategories: [
+      'Мужская верхняя одежда',
+      'Мужские футболки, майки и поло',
+      'Мужские рубашки и сорочки',
+      'Мужские худи, толстовки и свитеры',
+      'Мужские брюки и джинсы',
+      'Мужские костюмы и пиджаки',
+      'Мужские шорты и бриджи',
+    ],
+  },
+  {
+    name: 'Нижнее белье и домашняя одежда',
+    subcategories: [
+      'Женское нижнее белье',
+      'Мужское нижнее белье',
+      'Термобелье',
+      'Пижамы и одежда для дома',
+      'Носки, гольфы и колготки',
+      'Купальники и пляжная мода',
+    ],
+  },
+  {
+    name: 'Обувь',
+    subcategories: [
       'Женская обувь',
+      'Мужская обувь',
       'Детская обувь',
-      'Сумки и рюкзаки',
-      'Часы и украшения',
+      'Домашняя и пляжная обувь',
+      'Аксессуары и уход за обувью',
     ],
   },
   {
-    name: 'Электроника и смарт-гаджеты',
+    name: 'Сумки, рюкзаки и чемоданы',
     subcategories: [
-      'Смартфоны и телефоны',
-      'Наушники и аудио',
-      'Смарт-часы и браслеты',
-      'Компьютеры и ноутбуки',
-      'Аксессуары для гаджетов',
-      'Пауэрбанки и зарядки',
+      'Женские сумки',
+      'Мужские сумки',
+      'Рюкзаки',
+      'Чемоданы и дорожные сумки',
+      'Кошельки и мелкая кожгалантерея',
+      'Косметички и органайзеры',
     ],
   },
   {
-    name: 'Бытовая техника и электроника для дома',
+    name: 'Аксессуары, часы и украшения',
     subcategories: [
-      'Техника для кухни',
-      'Техника для дома',
-      'Красота и уход (фены, триммеры)',
-      'Освещение и ночники',
+      'Наручные часы',
+      'Очки и оптика',
+      'Головные уборы',
+      'Шарфы, платки и перчатки',
+      'Ремни, пояса и галстуки',
+      'Бижутерия и украшения',
+      'Зонты и защита от непогоды',
     ],
   },
   {
-    name: 'Товары для дома и интерьера',
+    name: 'Электроника и гаджеты',
     subcategories: [
-      'Посуда и кухонная утварь',
-      'Текстиль и декор',
-      'Организация хранения',
-      'Умный дом',
+      'Смартфоны и аксессуары',
+      'Наушники и аудиотехника',
+      'Смарт-часы и носимая электроника',
+      'Зарядные устройства, кабели и питание',
+      'Компьютеры, ноутбуки и периферия',
+      'Комплектующие и накопители данных',
+      'Фото-, видео-, ТВ и блогерская техника',
+      'Игровые приставки и гейминг',
+      'Умный дом и безопасность',
     ],
   },
   {
-    name: 'Игрушки, детские товары и хобби',
+    name: 'Бытовая техника',
     subcategories: [
-      'Игрушки на радиоуправлении',
-      'Развивающие игры',
-      'Детские гаджеты',
-      'Конструкторы',
-      'Товары для творчества',
+      'Техника для приготовления пищи',
+      'Техника для измельчения и смешивания',
+      'Техника для напитков',
+      'Уборка и уход за одеждой',
+      'Климатическая техника',
+      'Приборы для красоты и здоровья',
     ],
   },
   {
-    name: 'Спорт, туризм и автотовары',
+    name: 'Товары для дома и быта',
     subcategories: [
-      'Спортивная одежда и инвентарь',
-      'Фитнес-аксессуары',
-      'Товары для кемпинга и туризма',
-      'Автоэлектроника и аксессуары',
+      'Посуда для готовки и выпечки',
+      'Сервировка стола и хранение продуктов',
+      'Кухонные гаджеты и аксессуары',
+      'Домашний текстиль',
+      'Хранение и порядок в доме',
+      'Товары для ванной и туалета',
+      'Инвентарь для уборки и стирки',
+      'Хозяйственные мелочи',
     ],
   },
   {
-    name: 'Коллекции M.Savdo',
-    subcategories: ADMIN_PRODUCT_CATEGORIES,
+    name: 'Мебель, ремонт и декор интерьера',
+    subcategories: [
+      'Малая и корпусная мебель',
+      'Освещение и электрика',
+      'Декор и уют интерьера',
+      'Сантехника для кухни и ванной',
+      'Материалы для ремонта и фурнитура',
+    ],
+  },
+  {
+    name: 'Красота, уход и гигиена',
+    subcategories: [
+      'Макияж и аксессуары для визажа',
+      'Уход за кожей лица и тела',
+      'Маникюр и педикюр',
+      'Уход за волосами и парикмахерские товары',
+      'Массаж, релакс и личная гигиена',
+    ],
+  },
+  {
+    name: 'Детские товары и игрушки',
+    subcategories: [
+      'Одежда для новорожденных и малышей',
+      'Одежда для девочек и мальчиков',
+      'Товары для мам и ухода за младенцами',
+      'Игрушки и игры',
+    ],
+  },
+  {
+    name: 'Спорт, туризм и активный отдых',
+    subcategories: [
+      'Фитнес, йога и домашние тренажеры',
+      'Туризм, кемпинг и пикник',
+      'Рыбалка и охота',
+      'Командные игры и единоборства',
+      'Плавание, водный и зимний спорт',
+    ],
+  },
+  {
+    name: 'Транспорт: Вело, Мото, Электротранспорт, Квадроциклы, Трициклы и Авто',
+    subcategories: [
+      'Электротранспорт (персональный и городской)',
+      'Трициклы и коммерческий транспорт',
+      'Квадроциклы, багги и вездеходы (ATV / UTV)',
+      'Мотоциклы, скутеры и мопеды (бензиновые)',
+      'Мотоэкипировка, тюнинг и мотозапчасти',
+      'Велосипеды, самокаты и ролики',
+      'Автотовары и автоаксессуары',
+    ],
+  },
+  {
+    name: 'Канцелярия, хобби, праздники и зоотовары',
+    subcategories: [
+      'Школьная и офисная канцелярия',
+      'Рисование, творчество и рукоделие',
+      'Зоотовары',
+      'Товары для праздников и подарков',
+      'Музыкальные инструменты и аксессуары',
+    ],
   },
 ];
 
@@ -378,41 +510,79 @@ for (const root of FIXED_CATEGORY_TREE) {
 
 function determineSubcategoryRuleBased(productText: string): string {
   const lower = productText.toLowerCase();
-  if (/(радиоуправ|rc\b|дрон|квадрокоптер)/i.test(lower)) return 'Игрушки на радиоуправлении';
-  if (/(конструктор|lego|лего)/i.test(lower)) return 'Конструкторы';
-  if (/(развивающ|пазл|настольн.{0,8}игр)/i.test(lower)) return 'Развивающие игры';
-  if (/(товар.{0,8}для творч|рисован|лепк|рукодел|набор.{0,8}для творч)/i.test(lower)) return 'Товары для творчества';
-  if (/(детск.{0,12}(телефон|планшет|часы|гаджет)|детские часы)/i.test(lower)) return 'Детские гаджеты';
-  if (/(игрушк|кукл|машинк|детск.{0,8}(товар|игр))/i.test(lower)) return 'Развивающие игры';
-  if (/(смартфон|мобильн.{0,8}телефон|сотов.{0,8}телефон|iphone|айфон)/i.test(lower)) return 'Смартфоны и телефоны';
-  if (/(наушник|гарнитур|колонк|микрофон|аудио|динамик|headphone|earphone)/i.test(lower)) return 'Наушники и аудио';
-  if (/(смарт.?час|умн.{0,8}час|фитнес.?браслет|smartwatch)/i.test(lower)) return 'Смарт-часы и браслеты';
-  if (/(ноутбук|компьютер|моноблок|нетбук)/i.test(lower)) return 'Компьютеры и ноутбуки';
-  if (/(пауэрбанк|power.?bank|внешн.{0,8}аккумулятор|зарядн.{0,8}устройств|зарядка|адаптер питания)/i.test(lower)) return 'Пауэрбанки и зарядки';
-  if (/(чехол|защитн.{0,8}(стекло|пленка)|кабель|держатель.{0,8}(телефон|смартфон)|аксессуар.{0,12}гаджет)/i.test(lower)) return 'Аксессуары для гаджетов';
-  if (/(фен|триммер|эпилятор|бритв|машинк.{0,8}для стрижк|уход.{0,8}за лицом)/i.test(lower)) return 'Красота и уход (фены, триммеры)';
-  if (/(кухонн.{0,12}(техник|прибор)|мультиварк|блендер|чайник|кофевар|тостер)/i.test(lower)) return 'Техника для кухни';
-  if (/(освещен|ночник|ламп|светильник|люстр)/i.test(lower)) return 'Освещение и ночники';
-  if (/(бытов.{0,8}техник|пылесос|увлажнител|очистител.{0,8}воздух|утюг)/i.test(lower)) return 'Техника для дома';
-  if (/(умн.{0,8}дом|датчик.{0,8}(движен|температур)|умн.{0,8}(розетк|выключател))/i.test(lower)) return 'Умный дом';
-  if (/(посуда|сковород|кастрюл|кухонн.{0,8}утвар|столовые прибор)/i.test(lower)) return 'Посуда и кухонная утварь';
-  if (/(хранени|органайзер|контейнер|коробк.{0,8}для)/i.test(lower)) return 'Организация хранения';
-  if (/(текстиль|плед|подушк|штор|покрывал|декор|интерьер)/i.test(lower)) return 'Текстиль и декор';
-  if (/(авто|автомобил|видеорегистратор|автомобильн)/i.test(lower)) return 'Автоэлектроника и аксессуары';
-  if (/(кемпинг|туризм|палатк|спальн.{0,8}мешок|походн|рыбалк)/i.test(lower)) return 'Товары для кемпинга и туризма';
-  if (/(фитнес|гантел|эспандер|скакалк|йога)/i.test(lower)) return 'Фитнес-аксессуары';
-  if (/(спортивн|спорт|тренировочн)/i.test(lower)) return 'Спортивная одежда и инвентарь';
+  if (/(квадроцикл|багги|вездеход|atv|utv)/i.test(lower)) return 'Квадроциклы, багги и вездеходы (ATV / UTV)';
+  if (/(электросамокат|электровелосипед|электроскутер|электротранспорт)/i.test(lower)) return 'Электротранспорт (персональный и городской)';
+  if (/(мотоэкип|мотозапчаст|мототюнинг|мотошлем|мотоперчат)/i.test(lower)) return 'Мотоэкипировка, тюнинг и мотозапчасти';
+  if (/(мотоцикл|мопед|скутер|питбайк|эндуро)/i.test(lower)) return 'Мотоциклы, скутеры и мопеды (бензиновые)';
+  if (/(велосипед|самокат|ролик)/i.test(lower)) return 'Велосипеды, самокаты и ролики';
+  if (/(авто|автомобил|видеорегистратор|автомобильн)/i.test(lower)) return 'Автотовары и автоаксессуары';
+  if (/(трицикл|грузовой транспорт|коммерческий транспорт)/i.test(lower)) return 'Трициклы и коммерческий транспорт';
+  if (/(радиоуправ|rc\b|дрон|квадрокоптер|конструктор|lego|лего|развивающ|пазл|настольн.{0,8}игр|игрушк|кукл|машинк)/i.test(lower)) return 'Игрушки и игры';
+  if (/(кошка|собак|зоотовар|для животных|кормушк.{0,8}(птиц|рыб))/i.test(lower)) return 'Зоотовары';
+  if (/(канцеляр|тетрад|блокнот|ежедневник|ручк.{0,8}(шариков|пишущ)|школьн.{0,8}(товар|принадлеж))/i.test(lower)) return 'Школьная и офисная канцелярия';
+  if (/(рисован|лепк|рукодел|товар.{0,8}для творч|набор.{0,8}для творч)/i.test(lower)) return 'Рисование, творчество и рукоделие';
+  if (/(праздник|подарочн|новогодн|декорац.{0,8}(праздник|шар)|музыкальн.{0,8}(инструмент|гитар)|гитар|синтезатор)/i.test(lower)) return 'Товары для праздников и подарков';
+  if (/(детск.{0,12}(телефон|планшет|часы|гаджет)|детские часы|новорожден|младен|для мам|детск.{0,8}(товар|игр|одежд))/i.test(lower)) return 'Одежда для девочек и мальчиков';
+  if (/(женск.{0,10}(нижн.{0,8}бель|бюстгальтер)|бюстгальтер|лифчик|трусы жен|купальник)/i.test(lower)) return 'Женское нижнее белье';
+  if (/(мужск.{0,10}(нижн.{0,8}бель|трусы)|боксеры муж)/i.test(lower)) return 'Мужское нижнее белье';
+  if (/(термобель)/i.test(lower)) return 'Термобелье';
+  if (/(пижам|домашн.{0,8}одежд)/i.test(lower)) return 'Пижамы и одежда для дома';
+  if (/(носки|гольфы|колготк)/i.test(lower)) return 'Носки, гольфы и колготки';
+  if (/(смартфон|мобильн.{0,8}телефон|сотов.{0,8}телефон|iphone|айфон)/i.test(lower)) return 'Смартфоны и аксессуары';
+  if (/(наушник|гарнитур|колонк|микрофон|аудио|динамик|headphone|earphone)/i.test(lower)) return 'Наушники и аудиотехника';
+  if (/(смарт.?час|умн.{0,8}час|фитнес.?браслет|smartwatch)/i.test(lower)) return 'Смарт-часы и носимая электроника';
+  if (/(часы|watch)/i.test(lower)) return 'Наручные часы';
+  if (/(ноутбук|компьютер|моноблок|нетбук|клавиатур|мышь компьютер)/i.test(lower)) return 'Компьютеры, ноутбуки и периферия';
+  if (/(пауэрбанк|power.?bank|внешн.{0,8}аккумулятор|зарядн.{0,8}устройств|зарядка|кабель|адаптер питания)/i.test(lower)) return 'Зарядные устройства, кабели и питание';
+  if (/(приставк|гейминг|игров.{0,8}(консол|приставк)|видеоигр)/i.test(lower)) return 'Игровые приставки и гейминг';
+  if (/(фото|видео|камера|телевизор|блогер|проектор)/i.test(lower)) return 'Фото-, видео-, ТВ и блогерская техника';
+  if (/(умн.{0,8}дом|датчик.{0,8}(движен|температур)|умн.{0,8}(розетк|выключател)|камера наблюден)/i.test(lower)) return 'Умный дом и безопасность';
+  if (/(комплектующ|видеокарт|процессор|накопител|ssd|жесткий диск)/i.test(lower)) return 'Комплектующие и накопители данных';
+  if (/(чехол|защитн.{0,8}(стекло|пленка)|держатель.{0,8}(телефон|смартфон)|аксессуар.{0,12}гаджет)/i.test(lower)) return 'Смартфоны и аксессуары';
+  if (/(техника для приготов|аэрогрил|фритюрниц|мультиварк|скороварк|рисоварк|духовк|плитк)/i.test(lower)) return 'Техника для приготовления пищи';
+  if (/(блендер|измельчител|миксер|комбайн)/i.test(lower)) return 'Техника для измельчения и смешивания';
+  if (/(чайник|кофевар|кофемашин|термопот|соковыжимал)/i.test(lower)) return 'Техника для напитков';
+  if (/(пылесос|утюг|парогенератор|стиральн|гладильн)/i.test(lower)) return 'Уборка и уход за одеждой';
+  if (/(увлажнител|очистител.{0,8}воздух|кондиционер|обогревател|вентилятор)/i.test(lower)) return 'Климатическая техника';
+  if (/(фен|триммер|эпилятор|бритв|машинк.{0,8}для стрижк)/i.test(lower)) return 'Приборы для красоты и здоровья';
+  if (/(посуда|сковород|кастрюл|кухонн.{0,8}утвар|столовые прибор|выпечк)/i.test(lower)) return 'Посуда для готовки и выпечки';
+  if (/(сервиров|хранени.{0,8}продукт|контейнер.{0,8}(пищ|продукт)|банка для)/i.test(lower)) return 'Сервировка стола и хранение продуктов';
+  if (/(кухонн.{0,8}(гаджет|аксессуар)|терка|овощерезк)/i.test(lower)) return 'Кухонные гаджеты и аксессуары';
+  if (/(текстиль|плед|подушк|штор|покрывал|постельн)/i.test(lower)) return 'Домашний текстиль';
+  if (/(хранени|органайзер|коробк.{0,8}для|вешалк|корзин.{0,8}для белья)/i.test(lower)) return 'Хранение и порядок в доме';
+  if (/(ванн|туалет|душев|зубн.{0,8}щетк)/i.test(lower)) return 'Товары для ванной и туалета';
+  if (/(швабр|уборк|стирк|моющ.{0,8}средств)/i.test(lower)) return 'Инвентарь для уборки и стирки';
+  if (/(светильник|ламп|люстр|освещен|ночник|электрик)/i.test(lower)) return 'Освещение и электрика';
+  if (/(мебел|кресло|стол|шкаф|диван|полк.{0,8}настенн)/i.test(lower)) return 'Малая и корпусная мебель';
+  if (/(сантехник|смесител|кран|раковин)/i.test(lower)) return 'Сантехника для кухни и ванной';
+  if (/(ремонт|фурнитур|инструмент|крепеж|строительн.{0,8}материал)/i.test(lower)) return 'Материалы для ремонта и фурнитура';
+  if (/(декор|интерьер|украшени.{0,8}дом|ваза)/i.test(lower)) return 'Декор и уют интерьера';
+  if (/(макияж|косметик|спонж|ресниц|помад)/i.test(lower)) return 'Макияж и аксессуары для визажа';
+  if (/(уход.{0,8}(кож|лиц)|крем|сыворотк)/i.test(lower)) return 'Уход за кожей лица и тела';
+  if (/(маникюр|педикюр|ногт)/i.test(lower)) return 'Маникюр и педикюр';
+  if (/(волос|парикмах|фен)/i.test(lower)) return 'Уход за волосами и парикмахерские товары';
+  if (/(массаж|релакс|гигиен)/i.test(lower)) return 'Массаж, релакс и личная гигиена';
   if (/(кроссов|кеды|ботин|туфл|сапог|сланц|сандал|обувь)/i.test(lower)) {
     if (/(детск|мальчик|девочк)/i.test(lower)) return 'Детская обувь';
     if (/(женск|женщин|девушк)/i.test(lower)) return 'Женская обувь';
     return 'Мужская обувь';
   }
-  if (/(сумк|рюкзак|кошелек|кошелёк|чемодан)/i.test(lower)) return 'Сумки и рюкзаки';
-  if (/(часы|украшени|браслет|кольцо|серьг|цепочк)/i.test(lower)) return 'Часы и украшения';
-  if (/(детск|мальчик|девочк)/i.test(lower)) return 'Детская одежда';
-  if (/(женск|женщин|девушк|платье|юбк|блузк|сарафан)/i.test(lower)) return 'Женская одежда';
-  if (/(спортивн|спорт|фитнес)/i.test(lower)) return 'Спортивная одежда и инвентарь';
-  return 'Мужская одежда';
+  if (/(сумк|рюкзак|кошелек|кошелёк|чемодан)/i.test(lower)) return 'Женские сумки';
+  if (/(очки|оптик)/i.test(lower)) return 'Очки и оптика';
+  if (/(кепк|бейсболк|шапк|панам|шляп|берет|козырек)/i.test(lower)) return 'Головные уборы';
+  if (/(шарф|платок|платк|перчатк|варежк|снуд|палантин)/i.test(lower)) return 'Шарфы, платки и перчатки';
+  if (/(ремень|пояс|галстук|подтяжк|запонк)/i.test(lower)) return 'Ремни, пояса и галстуки';
+  if (/(зонт|дождевик|пончо|веер)/i.test(lower)) return 'Зонты и защита от непогоды';
+  if (/(украшени|браслет|кольцо|серьг|цепочк|бижутер)/i.test(lower)) return 'Бижутерия и украшения';
+  if (/(рыбалк|охот)/i.test(lower)) return 'Рыбалка и охота';
+  if (/(туризм|кемпинг|палатк|спальн.{0,8}мешок|походн)/i.test(lower)) return 'Туризм, кемпинг и пикник';
+  if (/(фитнес|гантел|эспандер|скакалк|йога|тренажер)/i.test(lower)) return 'Фитнес, йога и домашние тренажеры';
+  if (/(спортивн|спорт|тренировочн|футбол|мяч)/i.test(lower)) return 'Командные игры и единоборства';
+  if (/(плаван|лыж|сноуборд|зимн.{0,8}спорт)/i.test(lower)) return 'Плавание, водный и зимний спорт';
+  if (/(женск|женщин|девушк|платье|юбк|блузк|сарафан)/i.test(lower)) return 'Платья и сарафаны';
+  if (/(детск|мальчик|девочк)/i.test(lower)) return 'Одежда для девочек и мальчиков';
+  if (/(мужск|мужчин)/i.test(lower)) return 'Мужские футболки, майки и поло';
+  return 'Мужские футболки, майки и поло';
 }
 
 function normalizeSubcategoryName(categoryName: string, productText: string = ''): string {
@@ -580,10 +750,10 @@ const countProducts = (db.prepare('SELECT COUNT(*) as count FROM products').get(
 if (countProducts === 0) {
   console.log('Наполнение базы профессиональными мульти-вариативными товарами...');
 
-  const hoodieCatId = getFixedSubcategoryId('Мужская одежда');
+  const hoodieCatId = getFixedSubcategoryId('Мужские футболки, майки и поло');
   const sneakersCatId = getFixedSubcategoryId('Мужская обувь');
-  const watchCatId = getFixedSubcategoryId('Смарт-часы и браслеты');
-  const audioCatId = getFixedSubcategoryId('Наушники и аудио');
+  const watchCatId = getFixedSubcategoryId('Смарт-часы и носимая электроника');
+  const audioCatId = getFixedSubcategoryId('Наушники и аудиотехника');
 
   const insertProd = db.prepare(`
     INSERT INTO products (title, description, original_link, category_id, base_sku, status, main_image)
@@ -1010,32 +1180,19 @@ function resolveCategoryId(categoryName: string): number {
 }
 
 function determineAdminCategoryFallback(title: string): string {
-  const lowerTitle = title.toLocaleLowerCase('ru');
-  if (/(игруш|хобби|конструктор|пазл|кукл|радиоуправ|дрон|квадрокоптер)/i.test(lowerTitle)) {
-    return 'Игрушки и хобби';
-  }
-  if (/(наушник|гарнитур|аудио|колонк|смарт.?час|гаджет|электрон|микрофон)/i.test(lowerTitle)) {
-    return 'Аудио и смарт-гаджеты';
-  }
-  if (/(обув|кроссов|кед|ботин|туфл|сапог|сандал|сланц)/i.test(lowerTitle)) {
-    return 'Премиальная обувь';
-  }
-  if (/(женск|женщин|девушк|плать|юбк|блузк)/i.test(lowerTitle)) {
-    return 'Женская коллекция';
-  }
-  return 'Мужская коллекция';
+  return determineSubcategoryRuleBased(title);
 }
 
 async function resolveCategoryWithAi(title: string): Promise<string> {
   const cleanTitle = (title || '').trim();
-  if (!cleanTitle) return 'Мужская коллекция';
+  if (!cleanTitle) return determineAdminCategoryFallback('');
 
   if (!aiClient) {
     return determineAdminCategoryFallback(cleanTitle);
   }
 
   try {
-    const prompt = `Определи категорию для товара. Выбери строго один вариант из списка: ${ADMIN_PRODUCT_CATEGORIES.join(', ')}. Верни только название.\nТовар: ${cleanTitle}`;
+    const prompt = `Определи категорию для товара. Выбери строго одну подкатегорию из списка и верни только ее название:\n${STRICT_ALLOWED_CATEGORIES.join('\n')}\nТовар: ${cleanTitle}`;
 
     const timeoutPromise = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error('AI Category Timeout')), 6000)
@@ -1047,7 +1204,7 @@ async function resolveCategoryWithAi(title: string): Promise<string> {
 
     const response = await Promise.race([generatePromise, timeoutPromise]);
     const rawCategory = response.text ? response.text.trim().replace(/["'`.]/g, '') : '';
-    for (const category of ADMIN_PRODUCT_CATEGORIES) {
+    for (const category of STRICT_ALLOWED_CATEGORIES) {
       if (rawCategory.toLocaleLowerCase('ru') === category.toLocaleLowerCase('ru')) {
         return category;
       }
@@ -1254,6 +1411,99 @@ function getRequestIp(req: express.Request): string {
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
+function getVisitorDeviceInfo(userAgent: string): string {
+  const os = /Android/i.test(userAgent)
+    ? 'Android'
+    : /iPhone|iPad|iPod/i.test(userAgent)
+      ? 'iOS'
+      : /Windows/i.test(userAgent)
+        ? 'Windows'
+        : /Mac OS|Macintosh/i.test(userAgent)
+          ? 'macOS'
+          : /Linux/i.test(userAgent)
+            ? 'Linux'
+            : 'Unknown OS';
+  const browser = /Edg\//i.test(userAgent)
+    ? 'Edge'
+    : /OPR\//i.test(userAgent)
+      ? 'Opera'
+      : /Firefox\//i.test(userAgent)
+        ? 'Firefox'
+        : /CriOS|Chrome\//i.test(userAgent)
+          ? 'Chrome'
+          : /Safari\//i.test(userAgent)
+            ? 'Safari'
+            : 'Unknown browser';
+  const device = /iPad|Tablet/i.test(userAgent)
+    ? 'Tablet'
+    : /Mobile|Android|iPhone|iPod/i.test(userAgent)
+      ? 'Mobile'
+      : 'Desktop';
+  return `${device} · ${os} · ${browser}`;
+}
+
+const siteVisitRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+let lastVisitCleanupDate = '';
+
+app.post('/api/visits', siteVisitRateLimiter, (req, res) => {
+  const now = new Date();
+  const visitedAt = now.toISOString();
+  const visitDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Dushanbe' }).format(now);
+  const visitorHash = crypto.createHmac('sha256', adminJwtSecret).update(getRequestIp(req)).digest('hex');
+  const requestUserAgent = req.get('user-agent');
+  const userAgent = requestUserAgent?.slice(0, 1000) || '';
+  const deviceInfo = getVisitorDeviceInfo(userAgent);
+
+  try {
+    db.exec('BEGIN IMMEDIATE;');
+    const newVisitor = db.prepare(`
+      INSERT OR IGNORE INTO site_visitors (visitor_hash, first_seen_at, last_seen_at, device_info)
+      VALUES (?, ?, ?, ?)
+    `).run(visitorHash, visitedAt, visitedAt, deviceInfo).changes === 1;
+    if (!newVisitor) {
+      db.prepare('UPDATE site_visitors SET last_seen_at = ?, device_info = ? WHERE visitor_hash = ?')
+        .run(visitedAt, deviceInfo, visitorHash);
+    }
+
+    const newDailyVisitor = db.prepare(
+      'INSERT OR IGNORE INTO site_daily_visitors (visit_date, visitor_hash) VALUES (?, ?)',
+    ).run(visitDate, visitorHash).changes === 1;
+    db.prepare(`
+      INSERT INTO site_daily_stats (visit_date, visits_count, unique_visitors_count)
+      VALUES (?, 1, ?)
+      ON CONFLICT(visit_date) DO UPDATE SET
+        visits_count = visits_count + 1,
+        unique_visitors_count = unique_visitors_count + excluded.unique_visitors_count
+    `).run(visitDate, newDailyVisitor ? 1 : 0);
+    db.prepare(`
+      UPDATE site_visit_totals
+      SET visits_count = visits_count + 1,
+          unique_visitors_count = unique_visitors_count + ?
+      WHERE id = 1
+    `).run(newVisitor ? 1 : 0);
+    db.prepare('INSERT INTO site_visit_events (visitor_hash, device_info, visited_at) VALUES (?, ?, ?)')
+      .run(visitorHash, deviceInfo, visitedAt);
+
+    if (lastVisitCleanupDate !== visitDate) {
+      const retentionDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      db.prepare('DELETE FROM site_visit_events WHERE visited_at < ?').run(retentionDate);
+      db.prepare('DELETE FROM site_daily_visitors WHERE visit_date < ?').run(visitDate.slice(0, 10));
+      lastVisitCleanupDate = visitDate;
+    }
+    db.exec('COMMIT;');
+    return res.status(204).end();
+  } catch (error) {
+    db.exec('ROLLBACK;');
+    console.error('[Site Visit Tracking Error]', error);
+    return res.status(500).json({ error: 'Не удалось сохранить статистику посещения' });
+  }
+});
+
 const telegramLoginRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 5,
@@ -1309,6 +1559,33 @@ app.use('/api/admin', (req, res, next) => {
   const requestPath = `${req.baseUrl}${req.path}`;
   if (req.method === 'POST' && publicAdminRoutes.has(requestPath)) return next();
   return requireAdmin(req, res, next);
+});
+
+app.get('/api/admin/visit-analytics', (req, res) => {
+  try {
+    const today = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Dushanbe' }).format(new Date());
+    const todayStats = db.prepare(
+      'SELECT visits_count, unique_visitors_count FROM site_daily_stats WHERE visit_date = ?',
+    ).get(today) as { visits_count: number; unique_visitors_count: number } | undefined;
+    const totals = db.prepare(
+      'SELECT visits_count, unique_visitors_count FROM site_visit_totals WHERE id = 1',
+    ).get() as { visits_count: number; unique_visitors_count: number };
+    const recentVisits = db.prepare(`
+      SELECT substr(visitor_hash, 1, 10) AS visitor_id, device_info, visited_at
+      FROM site_visit_events
+      ORDER BY id DESC
+      LIMIT 200
+    `).all();
+    return res.json({
+      today: todayStats || { visits_count: 0, unique_visitors_count: 0 },
+      all_time: totals,
+      recent_visits: recentVisits,
+      event_retention_days: 90,
+    });
+  } catch (error) {
+    console.error('[Site Visit Analytics Error]', error);
+    return res.status(500).json({ error: 'Не удалось загрузить статистику посещений' });
+  }
 });
 
 // ==========================================
@@ -1430,33 +1707,55 @@ app.post('/api/admin/logout', requireAdmin, (req, res) => {
 // 2. ПУБЛИЧНЫЙ КАТАЛОГ ДЛЯ КЛИЕНТОВ (ПОЛНАЯ ИЗОЛЯЦИЯ: НЕТ CNY, НЕТ 1688, НЕТ ССЫЛОК)
 app.get('/api/products', (req, res) => {
   try {
-    const { search, category_id, sort } = req.query;
+    const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 120) : '';
+    const categoryIdValue = typeof req.query.category_id === 'string' ? req.query.category_id : '';
+    const categoryId = categoryIdValue ? Number(categoryIdValue) : null;
+    const deliveryType = req.query.delivery_type === 'stock' || req.query.delivery_type === 'order'
+      ? req.query.delivery_type
+      : 'all';
+    const sort = ['popular', 'price_asc', 'price_desc', 'newest'].includes(String(req.query.sort))
+      ? String(req.query.sort)
+      : 'newest';
+    const requestedLimit = Number(req.query.limit);
+    const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 24;
+    const requestedOffset = Number(req.query.offset);
+    const offset = Number.isInteger(requestedOffset) ? Math.min(Math.max(requestedOffset, 0), 1_000_000) : 0;
+    if (categoryId !== null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
+      return res.status(400).json({ error: 'Некорректный ID категории' });
+    }
 
-    let query = `
-      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, 
-             p.main_image, p.images, p.video_url, p.youtube_url, p.specifications, p.created_at,
-             c.name as category_name
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.status = 'active'
-    `;
-    const params: any[] = [];
-
+    let where = "p.status = 'active'";
+    const params: Array<string | number> = [];
     if (search) {
-      query += ' AND (p.title LIKE ? OR p.base_sku LIKE ? OR p.description LIKE ? OR p.specifications LIKE ?)';
+      where += ' AND (p.title LIKE ? OR p.base_sku LIKE ? OR p.description LIKE ? OR p.specifications LIKE ?)';
       const term = `%${search}%`;
       params.push(term, term, term, term);
     }
-
-    if (category_id) {
-      const catId = Number(category_id);
-      query += ' AND (p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))';
-      params.push(catId, catId);
+    if (categoryId !== null) {
+      where += ' AND (p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))';
+      params.push(categoryId, categoryId);
     }
+    if (deliveryType === 'stock') where += " AND p.delivery_type = 'stock'";
+    if (deliveryType === 'order') where += " AND (p.delivery_type IS NULL OR p.delivery_type != 'stock')";
 
-    query += ' ORDER BY p.id DESC';
-
-    const products = db.prepare(query).all(...params) as any[];
+    const total = (db.prepare(`SELECT COUNT(*) AS count FROM products p WHERE ${where}`).get(...params) as { count: number }).count;
+    const orderBy = sort === 'popular'
+      ? 'p.views_count DESC, p.id DESC'
+      : sort === 'price_asc'
+        ? '(SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0) ASC, p.id DESC'
+        : sort === 'price_desc'
+          ? '(SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0) DESC, p.id DESC'
+          : 'p.id DESC';
+    const products = db.prepare(`
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
+             p.main_image, p.images, p.video_url, p.youtube_url, p.specifications, p.created_at,
+             c.name AS category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE ${where}
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as any[];
 
     // Прикрепляем варианты (строго без price_cny для защиты коммерческой тайны!)
     const getVariants = db.prepare(`
@@ -1523,14 +1822,13 @@ app.get('/api/products', (req, res) => {
       });
     }
 
-    // Если запрошена сортировка по цене
-    if (sort === 'price_asc') {
-      enriched.sort((a, b) => (a.min_price_tjs || 0) - (b.min_price_tjs || 0));
-    } else if (sort === 'price_desc') {
-      enriched.sort((a, b) => (b.min_price_tjs || 0) - (a.min_price_tjs || 0));
-    }
-
-    return res.json({ products: enriched });
+    return res.json({
+      products: enriched,
+      total,
+      limit,
+      offset,
+      has_more: offset + products.length < total,
+    });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -1674,6 +1972,14 @@ app.post('/api/orders', (req, res) => {
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Корзина пуста' });
     }
+    if (typeof customer_phone !== 'string') {
+      return res.status(400).json({ error: 'Укажите номер телефона для связи' });
+    }
+    const customerPhone = customer_phone.trim();
+    const phoneDigits = customerPhone.replace(/\D/g, '');
+    if (!/^[+()\d\s.-]+$/.test(customerPhone) || phoneDigits.length < 7 || phoneDigits.length > 15) {
+      return res.status(400).json({ error: 'Введите корректный номер телефона' });
+    }
 
     // Генерация человекочитаемого уникального номера заказа
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
@@ -1694,7 +2000,7 @@ app.post('/api/orders', (req, res) => {
       `).run(
         orderNumber,
         (customer_name || 'Клиент WhatsApp').trim(),
-        (customer_phone || '').trim(),
+        customerPhone,
         (customer_address || '').trim(),
         (customer_notes || '').trim(),
         Number(total_amount) || 0,
@@ -2355,7 +2661,7 @@ app.post('/api/add-product', async (req, res) => {
 
     let finalTitle = effectiveTitle;
     let finalDesc = inputDesc;
-    let finalCategory = 'Мужская коллекция';
+    let finalCategory = 'Мужские футболки, майки и поло';
     let finalWeight = initialWeight;
     let variantsToProcess: ParsedVariant[] = [];
     let specificationsToProcess: Array<{ name: string; value: string }> = [];
@@ -2727,7 +3033,11 @@ app.post('/api/parse-product-html', async (req, res) => {
 // 8.2. КАТЕГОРИИ (ДВУХУРОВНЕВОЕ ДЕРЕВО)
 app.get('/api/categories', (_req, res) => {
   try {
-    const rootCats = db.prepare('SELECT id, name FROM categories WHERE parent_id IS NULL ORDER BY name ASC').all() as Array<{ id: number; name: string }>;
+    const rootOrder = new Map<string, number>(FIXED_CATEGORY_TREE.map(
+      (category, index): [string, number] => [category.name, index],
+    ));
+    const rootCats = (db.prepare('SELECT id, name FROM categories WHERE parent_id IS NULL').all() as Array<{ id: number; name: string }>)
+      .sort((a, b) => (rootOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER) - (rootOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER));
     const getSubs = db.prepare('SELECT id, name FROM categories WHERE parent_id = ? ORDER BY name ASC');
 
     const tree: any[] = [];
@@ -2743,6 +3053,75 @@ app.get('/api/categories', (_req, res) => {
     return res.json({ tree, all });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/categories/:id/recommendations', (req, res) => {
+  try {
+    const categoryId = Number(req.params.id);
+    if (!Number.isInteger(categoryId) || categoryId <= 0) {
+      return res.status(400).json({ error: 'Некорректный ID категории' });
+    }
+
+    const selected = db.prepare(`
+      SELECT id, name, parent_id FROM categories WHERE id = ?
+    `).get(categoryId) as { id: number; name: string; parent_id: number | null } | undefined;
+    if (!selected) return res.status(404).json({ error: 'Категория не найдена' });
+
+    let relatedCategoryIds: number[];
+    if (selected.parent_id !== null) {
+      relatedCategoryIds = (db.prepare(
+        'SELECT id FROM categories WHERE parent_id = ? AND id != ?',
+      ).all(selected.parent_id, selected.id) as Array<{ id: number }>).map((category) => category.id);
+    } else {
+      const familyRoots = FIXED_CATEGORY_TREE.filter((root) => {
+        const name = root.name.toLocaleLowerCase('ru');
+        const selectedName = selected.name.toLocaleLowerCase('ru');
+        const isFashion = (value: string) => /одежд|белье|обувь|сумк|аксессуар/.test(value);
+        const isHomeTech = (value: string) => /электроник|техник|дом|мебель|ремонт|красот/.test(value);
+        const isActiveLeisure = (value: string) => /детск|игруш|спорт|туризм|транспорт|канцеляр|зоотовар/.test(value);
+        return (isFashion(name) && isFashion(selectedName))
+          || (isHomeTech(name) && isHomeTech(selectedName))
+          || (isActiveLeisure(name) && isActiveLeisure(selectedName));
+      }).map((root) => root.name);
+      const otherRootIds = (db.prepare(
+        `SELECT id FROM categories WHERE parent_id IS NULL AND name IN (${familyRoots.map(() => '?').join(',')}) AND id != ?`,
+      ).all(...familyRoots, selected.id) as Array<{ id: number }>).map((root) => root.id);
+      relatedCategoryIds = otherRootIds.length
+        ? (db.prepare(
+          `SELECT id FROM categories WHERE parent_id IN (${otherRootIds.map(() => '?').join(',')})`,
+        ).all(...otherRootIds) as Array<{ id: number }>).map((category) => category.id)
+        : [];
+    }
+
+    if (relatedCategoryIds.length === 0) return res.json({ products: [] });
+    const placeholders = relatedCategoryIds.map(() => '?').join(',');
+    const recommendations = db.prepare(`
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
+             p.main_image, p.images, p.video_url, p.youtube_url, p.created_at,
+             c.name AS category_name,
+             COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs,
+             COALESCE((SELECT MAX(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS max_price_tjs
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.status = 'active' AND p.category_id IN (${placeholders})
+      ORDER BY p.views_count DESC, p.id DESC
+      LIMIT 12
+    `).all(...relatedCategoryIds) as any[];
+    const getVariants = db.prepare(`
+      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
+      FROM product_variants WHERE product_id = ? ORDER BY id ASC
+    `);
+    for (const product of recommendations) {
+      product.variants = getVariants.all(product.id);
+      product.specifications = [];
+      product.video_url = product.youtube_url || product.video_url || '';
+      product.youtube_url = product.video_url;
+    }
+    return res.json({ products: recommendations });
+  } catch (error) {
+    console.error('[Category Recommendations Error]', error);
+    return res.status(500).json({ error: 'Не удалось загрузить похожие товары' });
   }
 });
 

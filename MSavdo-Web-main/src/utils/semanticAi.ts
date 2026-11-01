@@ -440,19 +440,19 @@ export function analyzeSemantically(
   );
 
   if (isRcOrDroneOrToy) {
-    category = 'Электроника и гаджеты';
+    category = 'Игрушки и игры';
     finalWeight = 0.35;
   } else if (isFootwear) {
-    category = 'Обувь и кроссовки';
+    category = fullText.includes('женск') || fullText.includes('女') ? 'Женская обувь' : 'Мужская обувь';
     finalWeight = 0.75;
   } else if (isApparel) {
-    category = fullText.includes('女') || fullText.includes('женск') ? 'Женская коллекция' : 'Мужская коллекция';
+    category = fullText.includes('女') || fullText.includes('женск') ? 'Платья и сарафаны' : 'Мужские футболки, майки и поло';
     finalWeight = 0.45;
   } else if (isInkOrCartridge || isOfficePaper) {
-    category = 'Офис, полиграфия и расходники';
+    category = 'Школьная и офисная канцелярия';
     finalWeight = isOfficePaper ? 2.4 : 0.35;
   } else {
-    category = 'Товары для дома и уюта';
+    category = 'Хозяйственные мелочи';
     finalWeight = weightKg || 0.5;
   }
 

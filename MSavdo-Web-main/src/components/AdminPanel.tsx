@@ -55,6 +55,13 @@ interface TelegramLoginConfig {
   nonce: string;
 }
 
+interface VisitAnalytics {
+  today: { visits_count: number; unique_visitors_count: number };
+  all_time: { visits_count: number; unique_visitors_count: number };
+  recent_visits: Array<{ visitor_id: string; device_info: string; visited_at: string }>;
+  event_retention_days: number;
+}
+
 declare global {
   interface Window {
     Telegram?: {
@@ -93,7 +100,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
-  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'gemini_ai' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -108,6 +115,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [orderStatusFilter, setOrderStatusFilter] = useState<string>('all');
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
+  const [visitAnalytics, setVisitAnalytics] = useState<VisitAnalytics | null>(null);
+  const [isLoadingVisits, setIsLoadingVisits] = useState(false);
 
   // Навигатор товаров: поиск, фильтры, сортировка и режим отображения
   const [navSearch, setNavSearch] = useState('');
@@ -325,6 +334,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       console.warn('Ошибка загрузки заказов:', e);
     } finally {
       setIsLoadingOrders(false);
+    }
+  };
+
+  const loadVisitAnalytics = async () => {
+    setIsLoadingVisits(true);
+    try {
+      const response = await adminFetch('/api/admin/visit-analytics');
+      if (!response.ok) throw new Error(`Analytics request failed: ${response.status}`);
+      setVisitAnalytics(await response.json() as VisitAnalytics);
+    } catch (error) {
+      console.error('[Admin Visit Analytics Error]', error);
+      showNotice('Не удалось загрузить статистику посещений');
+    } finally {
+      setIsLoadingVisits(false);
     }
   };
 
@@ -597,7 +620,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       delivery_type: p.delivery_type || 'order',
       status: p.status || 'active',
       category_id: p.category_id,
-      category_name: p.category_name || 'Мужская коллекция',
+      category_name: p.category_name || 'Мужские футболки, майки и поло',
       main_image: p.main_image || imgList[0] || '',
       images: imgList,
       video_url: p.video_url || '',
@@ -1218,6 +1241,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </button>
 
         <button
+          onClick={() => {
+            setActiveTab('visitors');
+            void loadVisitAnalytics();
+          }}
+          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
+            activeTab === 'visitors'
+              ? 'bg-slate-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <Eye className="w-4 h-4 text-sky-500" />
+          <span>Посещения</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('gemini_ai')}
           className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
             activeTab === 'gemini_ai'
@@ -1796,6 +1834,82 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           )}
 
         </div>
+      )}
+
+      {activeTab === 'visitors' && (
+        <section className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-bold text-slate-900">Посещения сайта</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Сохраняются обезличенный идентификатор IP и тип устройства; журнал событий хранится 90 дней.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => { void loadVisitAnalytics(); }}
+              disabled={isLoadingVisits}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-60"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isLoadingVisits ? 'animate-spin' : ''}`} />
+              Обновить
+            </button>
+          </div>
+
+          {isLoadingVisits && !visitAnalytics ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Загрузка посещений…</div>
+          ) : visitAnalytics ? (
+            <>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                {[
+                  { label: 'Визиты сегодня', value: visitAnalytics.today.visits_count },
+                  { label: 'Уникальные IP сегодня', value: visitAnalytics.today.unique_visitors_count },
+                  { label: 'Визиты за всё время', value: visitAnalytics.all_time.visits_count },
+                  { label: 'Уникальные IP за всё время', value: visitAnalytics.all_time.unique_visitors_count },
+                ].map((metric) => (
+                  <div key={metric.label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs">
+                    <p className="text-[11px] font-medium text-slate-500">{metric.label}</p>
+                    <p className="mt-1 font-mono text-2xl font-extrabold text-slate-900">{metric.value.toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                <h4 className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-900">
+                  Недавние посещения (до 200 записей)
+                </h4>
+                {visitAnalytics.recent_visits.length === 0 ? (
+                  <p className="p-5 text-sm text-slate-500">Посещений пока нет.</p>
+                ) : (
+                  <div className="max-h-[55vh] overflow-auto">
+                    <table className="w-full min-w-[560px] text-left text-xs">
+                      <thead className="sticky top-0 bg-slate-50 text-slate-500">
+                        <tr>
+                          <th className="px-4 py-2 font-semibold">Посетитель (анонимно)</th>
+                          <th className="px-4 py-2 font-semibold">Устройство и браузер</th>
+                          <th className="px-4 py-2 font-semibold">Время</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {visitAnalytics.recent_visits.map((visit, index) => (
+                          <tr key={`${visit.visitor_id}-${visit.visited_at}-${index}`}>
+                            <td className="px-4 py-2.5 font-mono text-slate-700">#{visit.visitor_id}</td>
+                            <td className="px-4 py-2.5 text-slate-700">{visit.device_info}</td>
+                            <td className="px-4 py-2.5 text-slate-600">
+                              {new Date(visit.visited_at).toLocaleString(
+                                language === 'tg' ? 'tg-TJ' : language === 'en' ? 'en-GB' : 'ru-RU',
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : null}
+        </section>
       )}
 
       {/* ========================================== */}

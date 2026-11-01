@@ -54,6 +54,7 @@ export interface CartItem {
   quantity: number;
   stock: number;
   delivery_type?: 'stock' | 'order';
+  variants?: ProductVariant[];
 }
 
 export interface OrderItem {

@@ -61,7 +61,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
 
         {/* Артикул коллекции */}
-        <div className="absolute top-2 left-2 bg-white/95 text-slate-800 text-[8px] sm:text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-md shadow-xs border border-slate-200/80">
+        <div className="absolute top-1.5 left-1.5 bg-white/95 text-slate-800 text-[7px] sm:text-[8px] font-mono font-bold px-1 py-0.5 rounded shadow-xs border border-slate-200/70">
           {product.base_sku}
         </div>
 

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { CartItem } from '../types';
-import { X, Trash2, Plus, Minus, Send, ShoppingBasket, ShieldAlert, Check, Clock, Truck } from 'lucide-react';
+import { CartItem, Product } from '../types';
+import { X, Trash2, Plus, Minus, Send, ShoppingBasket, ShieldAlert, Clock, Truck } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 
@@ -8,7 +8,9 @@ interface CartDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   items: CartItem[];
+  products: Product[];
   onUpdateQuantity: (id: string, delta: number) => void;
+  onChangeVariant: (itemId: string, variant: NonNullable<Product['variants']>[number]) => void;
   onRemoveItem: (id: string) => void;
   onClearCart: () => void;
   onOpenRules: () => void;
@@ -19,19 +21,149 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   isOpen,
   onClose,
   items,
+  products,
   onUpdateQuantity,
+  onChangeVariant,
   onRemoveItem,
   onClearCart,
   onOpenRules,
   whatsappPhone = '992444431',
 }) => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [agreedWithRules, setAgreedWithRules] = useState(false);
   const [showPreOrderModal, setShowPreOrderModal] = useState(false);
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+
+  const copy = {
+    ru: {
+      position: 'Позиция',
+      product: 'Товар',
+      sku: 'Артикул',
+      color: 'Цвет',
+      size: 'Размер',
+      quantity: 'Количество',
+      price: 'Цена',
+      total: 'ИТОГО К ОПЛАТЕ',
+      greeting: 'Здравствуйте! Оформляю заказ',
+      deliveryOrder: 'Доставка: 18–30 дней — согласие подтверждено',
+      deliveryStock: 'Доставка: в наличии на складе, 1 день',
+      rulesAgreed: 'С правилами сервиса ознакомлен и согласен.',
+      orderIn: 'в магазине',
+      lineTotal: 'Сумма',
+      standard: 'Стандарт',
+      oneSize: 'Единый размер',
+      customer: 'Клиент',
+      phone: 'Телефон',
+      address: 'Адрес',
+      deliveryTitle: 'ВНИМАНИЕ! ДОСТАВКА ТОВАРА ЗАЙМЁТ 18–30 ДНЕЙ',
+      deliveryQuestion: 'Вы согласны со сроками доставки?',
+      deliveryDescription: 'Товар выкупается под заказ, проходит контроль качества и отправляется в Таджикистан.',
+      detailsLabel: 'Контактные данные для связи по заказу:',
+      namePlaceholder: 'Ваше имя',
+      phonePlaceholder: '+992 00 000 0000',
+      addressPlaceholder: 'Адрес доставки (необязательно)',
+      phoneRequired: 'Укажите номер телефона.',
+      phoneInvalid: 'Введите корректный номер: от 7 до 15 цифр.',
+      orderFailed: 'Не удалось сохранить заказ. Попробуйте ещё раз.',
+      cancel: 'Отмена',
+      confirm: 'ПОДТВЕРДИТЬ И ПЕРЕЙТИ В WHATSAPP',
+      submitting: 'Регистрация…',
+      deliveryTime: 'Срок доставки:',
+      preOrderTime: 'доставка 18–30 дней',
+      stockTime: 'в наличии · 1 день',
+      agreeRequired: 'Отметьте согласие для активации кнопки заказа',
+      clearCart: 'Очистить корзину',
+      manager: 'Менеджер',
+      chooseVariant: 'Цвет / размер',
+    },
+    tg: {
+      position: 'Мавқеъ',
+      product: 'Мол',
+      sku: 'Рамз',
+      color: 'Ранг',
+      size: 'Андоза',
+      quantity: 'Миқдор',
+      price: 'Нарх',
+      total: 'ҲАМАГӢ БАРОИ ПАРДОХТ',
+      greeting: 'Салом! Фармоиш медиҳам',
+      deliveryOrder: 'Расонидан: 18–30 рӯз — розигӣ тасдиқ шуд',
+      deliveryStock: 'Расонидан: дар анбор, 1 рӯз',
+      rulesAgreed: 'Бо қоидаҳои хизматрасонӣ шинос шудам ва розӣ ҳастам.',
+      orderIn: 'дар мағозаи',
+      lineTotal: 'Ҷамъ',
+      standard: 'Стандарт',
+      oneSize: 'Андозаи ягона',
+      customer: 'Муштарӣ',
+      phone: 'Телефон',
+      address: 'Суроға',
+      deliveryTitle: 'ДИҚҚАТ! РАСОНИДАН 18–30 РӮЗРО МЕГИРАД',
+      deliveryQuestion: 'Оё шумо бо муҳлати расонидан розӣ ҳастед?',
+      deliveryDescription: 'Мол тибқи фармоиш харида, санҷида ва ба Тоҷикистон фиристода мешавад.',
+      detailsLabel: 'Маълумоти тамос барои фармоиш:',
+      namePlaceholder: 'Номи шумо',
+      phonePlaceholder: '+992 00 000 0000',
+      addressPlaceholder: 'Суроғаи расонидан (ихтиёрӣ)',
+      phoneRequired: 'Рақами телефонро ворид кунед.',
+      phoneInvalid: 'Рақами дурустро ворид кунед: аз 7 то 15 рақам.',
+      orderFailed: 'Фармоиш сабт нашуд. Дубора кӯшиш кунед.',
+      cancel: 'Бекор кардан',
+      confirm: 'ТАСДИҚ ВА ГУЗАШТАН БА WHATSAPP',
+      submitting: 'Сабт шуда истодааст…',
+      deliveryTime: 'Муҳлати расонидан:',
+      preOrderTime: 'расонидан 18–30 рӯз',
+      stockTime: 'дар анбор · 1 рӯз',
+      agreeRequired: 'Барои фармоиш розигиро тасдиқ кунед',
+      clearCart: 'Холӣ кардани сабад',
+      manager: 'Менеҷер',
+      chooseVariant: 'Ранг / андоза',
+    },
+    en: {
+      position: 'Item',
+      product: 'Product',
+      sku: 'SKU',
+      color: 'Color',
+      size: 'Size',
+      quantity: 'Quantity',
+      price: 'Price',
+      total: 'TOTAL',
+      greeting: 'Hello! I would like to place order',
+      deliveryOrder: 'Delivery: 18–30 days — confirmed',
+      deliveryStock: 'Delivery: in stock, 1 day',
+      rulesAgreed: 'I have read and agree to the service rules.',
+      orderIn: 'at',
+      lineTotal: 'Total',
+      standard: 'Standard',
+      oneSize: 'One size',
+      customer: 'Customer',
+      phone: 'Phone',
+      address: 'Address',
+      deliveryTitle: 'PLEASE NOTE: DELIVERY TAKES 18–30 DAYS',
+      deliveryQuestion: 'Do you agree to the delivery time?',
+      deliveryDescription: 'The item is sourced to order, quality-checked, and shipped to Tajikistan.',
+      detailsLabel: 'Contact details for your order:',
+      namePlaceholder: 'Your name',
+      phonePlaceholder: '+992 00 000 0000',
+      addressPlaceholder: 'Delivery address (optional)',
+      phoneRequired: 'Enter your phone number.',
+      phoneInvalid: 'Enter a valid number with 7–15 digits.',
+      orderFailed: 'Could not save your order. Please try again.',
+      cancel: 'Cancel',
+      confirm: 'CONFIRM AND CONTINUE TO WHATSAPP',
+      submitting: 'Saving…',
+      deliveryTime: 'Delivery time:',
+      preOrderTime: 'delivery in 18–30 days',
+      stockTime: 'in stock · 1 day',
+      agreeRequired: 'Accept the rules to enable checkout',
+      clearCart: 'Clear cart',
+      manager: 'Manager',
+      chooseVariant: 'Color / size',
+    },
+  }[language];
 
   if (!isOpen) return null;
 
@@ -39,23 +171,30 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   // Проверка: есть ли товары с доставкой из Китая за 18–30 дней.
   const hasPreOrderItems = items.some((item) => item.delivery_type !== 'stock');
+  const phoneDigits = customerPhone.replace(/\D/g, '');
+  const isPhoneValid = /^[+()\d\s.-]+$/.test(customerPhone.trim())
+    && phoneDigits.length >= 7
+    && phoneDigits.length <= 15;
 
-  // Шаг 1: Нажатие на кнопку оформления
   const handleInitiateCheckout = () => {
     if (!agreedWithRules || items.length === 0) return;
-
-    if (hasPreOrderItems) {
-      // Требование 5: Показать всплывающее окно с предупреждением большими буквами
-      setShowPreOrderModal(true);
-    } else {
-      executeCheckout();
-    }
+    setPhoneError('');
+    setSubmitError('');
+    setShowPreOrderModal(true);
   };
 
-  // Шаг 2: Регистрация заказа на сервере и переход в WhatsApp
   const executeCheckout = async () => {
+    if (!customerPhone.trim()) {
+      setPhoneError(copy.phoneRequired);
+      return;
+    }
+    if (!isPhoneValid) {
+      setPhoneError(copy.phoneInvalid);
+      return;
+    }
+    setSubmitError('');
     setIsSubmitting(true);
-    let orderNumber = `MS-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    let orderNumber = '';
 
     try {
       const res = await apiFetch('/api/orders', {
@@ -69,6 +208,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           delivery_type: hasPreOrderItems ? 'order' : 'stock',
           items: items.map((i) => ({
             product_id: i.product_id,
+            variant_id: i.variant_id,
             base_sku: i.base_sku,
             variant_sku: i.variant_sku,
             title: i.title,
@@ -80,50 +220,51 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           })),
         }),
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.order_number) {
-          orderNumber = data.order_number;
-        }
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `HTTP ${res.status}`);
       }
-    } catch (e) {
-      console.warn('[Cart] Ошибка локальной записи заказа:', e);
+      const data = await res.json();
+      if (typeof data?.order_number !== 'string' || !data.order_number) {
+        throw new Error('Сервер не вернул номер заказа');
+      }
+      orderNumber = data.order_number;
+    } catch (error) {
+      console.error('[Order Checkout Error]', error);
+      setSubmitError(copy.orderFailed);
+      return;
     } finally {
       setIsSubmitting(false);
-      setShowPreOrderModal(false);
     }
+    setShowPreOrderModal(false);
 
-    // Формирование текста заказа в WhatsApp строго с указанием Номера заказа, Названия, Цвета, Размера, Артикула SKU и цены в TJS
     const itemsText = items.map((item, index) => {
       const lineTotal = item.price_tjs * item.quantity;
       return [
-        `📦 Позиция #${index + 1}:`,
-        `• Товар: ${item.title}`,
-        `• Артикул: ${item.variant_sku}`,
-        `• Цвет: ${item.color || 'Стандарт'}`,
-        `• Размер: ${item.size || 'One Size'}`,
-        `• Количество: ${item.quantity} шт.`,
-        `• Цена: ${item.price_tjs} TJS (Сумма: ${lineTotal} TJS)`
+        `📦 ${copy.position} #${index + 1}:`,
+        `• ${copy.product}: ${item.title}`,
+        `• ${copy.sku}: ${item.variant_sku}`,
+        `• ${copy.color}: ${item.color || copy.standard}`,
+        `• ${copy.size}: ${item.size || copy.oneSize}`,
+        `• ${copy.quantity}: ${item.quantity}`,
+        `• ${copy.price}: ${item.price_tjs} TJS (${copy.lineTotal}: ${lineTotal} TJS)`,
       ].join('\n');
     }).join('\n\n');
 
     const customerDetails = [
-      customerName ? `👤 Клиент: ${customerName}` : '',
-      customerPhone ? `📞 Телефон: ${customerPhone}` : '',
-      customerAddress ? `📍 Адрес: ${customerAddress}` : '',
+      customerName ? `👤 ${copy.customer}: ${customerName}` : '',
+      `📞 ${copy.phone}: ${customerPhone.trim()}`,
+      customerAddress ? `📍 ${copy.address}: ${customerAddress}` : '',
     ].filter(Boolean).join('\n');
 
     const message = [
-      `Здравствуйте! Оформляю заказ #${orderNumber} в магазине M.Savdo (@MSavdo.tj):`,
+      `${copy.greeting} #${orderNumber} ${copy.orderIn} M.Savdo (@MSavdo.tj):`,
       customerDetails ? `\n${customerDetails}\n` : '',
       itemsText,
       ``,
-      `💰 ИТОГО К ОПЛАТЕ: ${totalSum} TJS`,
-      hasPreOrderItems
-        ? `🚚 Доставка: 18–30 дней — СОГЛАСИЕ ПОДТВЕРЖДЕНО`
-        : `🚚 Доставка: в наличии на складе, 1 день`,
-      `✓ С правилами сервиса (возврат строго на карту плательщика) ознакомлен и согласен.`
+      `💰 ${copy.total}: ${totalSum} TJS`,
+      `🚚 ${hasPreOrderItems ? copy.deliveryOrder : copy.deliveryStock}`,
+      `✓ ${copy.rulesAgreed}`,
     ].filter(Boolean).join('\n');
 
     const cleanPhone = whatsappPhone.replace(/[^0-9]/g, '');
@@ -166,7 +307,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-                {items.map((item) => (
+                {items.map((item) => {
+                  const productVariants = products.find((product) => product.id === item.product_id)?.variants
+                    || item.variants
+                    || [];
+                  return (
                   <div key={item.id} className="py-4 flex items-start gap-3">
                     <img
                       src={item.image || 'https://placehold.co/100x100?text=M.Savdo'}
@@ -181,6 +326,26 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       <h4 className="text-xs font-bold text-slate-900 line-clamp-1 leading-snug">
                         {item.title}
                       </h4>
+
+                      {productVariants.length > 1 && (
+                        <label className="mt-2 block">
+                          <span className="sr-only">{copy.chooseVariant}</span>
+                          <select
+                            value={item.variant_sku}
+                            onChange={(event) => {
+                              const variant = productVariants.find((candidate) => candidate.variant_sku === event.target.value);
+                              if (variant) onChangeVariant(item.id, variant);
+                            }}
+                            className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-medium text-slate-700"
+                          >
+                            {productVariants.map((variant) => (
+                              <option key={variant.variant_sku} value={variant.variant_sku}>
+                                {[variant.color, variant.size].filter(Boolean).join(' / ')} · {variant.price_tjs} TJS
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
 
                       {/* Параметры варианта: Цвет и Размер */}
                       <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-1 font-medium">
@@ -236,7 +401,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -253,8 +419,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               <div className="p-3 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-center gap-2.5 text-xs text-slate-800 shadow-xs">
                 <Truck className="w-4 h-4 text-amber-600 shrink-0" />
                 <span>
-                  <strong>🚚 Срок доставки:</strong>{' '}
-                  {hasPreOrderItems ? 'доставка 18–30 дней' : 'в наличии · 1 день'}
+                  <strong>🚚 {copy.deliveryTime}</strong>{' '}
+                  {hasPreOrderItems ? copy.preOrderTime : copy.stockTime}
                 </span>
               </div>
 
@@ -268,22 +434,22 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                     className="mt-0.5 w-4 h-4 text-emerald-600 border-slate-300 rounded focus:ring-emerald-500 cursor-pointer"
                   />
                   <span className="text-[11px] text-slate-800 leading-tight">
-                    Я ознакомлен и согласен с{' '}
+                    {language === 'ru' ? 'Я ознакомлен и согласен с ' : language === 'tg' ? 'Ман бо ' : 'I have read and agree to the '}
                     <button
                       type="button"
                       onClick={onOpenRules}
                       className="text-emerald-700 underline font-semibold hover:text-emerald-800"
                     >
-                      Правилами сервиса M.Savdo
-                    </button>{' '}
-                    (включая пункт 6: возврат строго на карту плательщика).
+                      {language === 'ru' ? 'Правилами сервиса M.Savdo' : language === 'tg' ? 'Қоидаҳои M.Savdo' : 'M.Savdo service rules'}
+                    </button>
+                    {language === 'ru' ? ' (включая пункт 6: возврат на карту плательщика).' : language === 'tg' ? ' (аз ҷумла банди 6: баргардонидан ба корти пардохткунанда).' : ' (including Section 6: refunds go to the original payment card).'}
                   </span>
                 </label>
 
                 {!agreedWithRules && (
                   <div className="flex items-center gap-1.5 text-[10px] text-amber-800 font-medium">
                     <ShieldAlert className="w-3 h-3 text-amber-600 shrink-0" />
-                    <span>Отметьте согласие для активации кнопки заказа</span>
+                    <span>{copy.agreeRequired}</span>
                   </div>
                 )}
               </div>
@@ -308,7 +474,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   onClick={onClearCart}
                   className="hover:text-red-600 transition-colors"
                 >
-                  Очистить корзину
+                  {copy.clearCart}
                 </button>
               </div>
             </div>
@@ -327,38 +493,62 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
 
             <div className="space-y-3">
-              <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight font-heading leading-snug">
-                ВНИМАНИЕ! ДОСТАВКА ТОВАРА ЗАЙМЁТ 18–30 ДНЕЙ
-              </h3>
-              <p className="text-base sm:text-lg font-extrabold text-amber-700">
-                Вы согласны со сроками доставки?
-              </p>
-              <p className="text-xs text-slate-500 leading-relaxed max-w-sm mx-auto">
-                Все товары выкупаются напрямую с фабрик Китая под ваш заказ, проходят контроль качества на складе консолидации и отправляются в Таджикистан.
-              </p>
+              {hasPreOrderItems && (
+                <>
+                  <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight font-heading leading-snug">
+                    {copy.deliveryTitle}
+                  </h3>
+                  <p className="text-base sm:text-lg font-extrabold text-amber-700">
+                    {copy.deliveryQuestion}
+                  </p>
+                  <p className="text-xs text-slate-500 leading-relaxed max-w-sm mx-auto">
+                    {copy.deliveryDescription}
+                  </p>
+                </>
+              )}
             </div>
 
             {/* Быстрые контактные данные покупателя */}
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left space-y-2.5">
               <label className="block text-[11px] font-bold text-slate-700">
-                Ваше имя и номер телефона (для отслеживания заказа):
+                {copy.detailsLabel}
               </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <input
                   type="text"
-                  placeholder="Ваше имя"
+                  placeholder={copy.namePlaceholder}
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                   className="w-full text-xs px-3 py-2.5 bg-white border border-slate-300 rounded-xl focus:border-amber-400 focus:outline-hidden"
                 />
                 <input
                   type="tel"
-                  placeholder="+992 00 000 0000"
+                  required
+                  inputMode="tel"
+                  autoComplete="tel"
+                  placeholder={copy.phonePlaceholder}
                   value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.target.value)}
+                  onChange={(e) => {
+                    setCustomerPhone(e.target.value);
+                    setPhoneError('');
+                  }}
                   className="w-full text-xs px-3 py-2.5 bg-white border border-slate-300 rounded-xl focus:border-amber-400 focus:outline-hidden font-mono"
                 />
               </div>
+              <input
+                type="text"
+                placeholder={copy.addressPlaceholder}
+                value={customerAddress}
+                onChange={(e) => setCustomerAddress(e.target.value)}
+                className="w-full text-xs px-3 py-2.5 bg-white border border-slate-300 rounded-xl focus:border-amber-400 focus:outline-hidden"
+              />
+              {!isPhoneValid && !phoneError && (
+                <p className="text-xs font-medium text-amber-700">
+                  {customerPhone.trim() ? copy.phoneInvalid : copy.phoneRequired}
+                </p>
+              )}
+              {phoneError && <p role="alert" className="text-xs font-semibold text-red-600">{phoneError}</p>}
+              {submitError && <p role="alert" className="text-xs font-semibold text-red-600">{submitError}</p>}
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3 pt-2">
@@ -367,15 +557,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 onClick={() => setShowPreOrderModal(false)}
                 className="w-full sm:w-1/3 py-3.5 px-4 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
               >
-                Отмена
+                {copy.cancel}
               </button>
               <button
                 type="button"
-                disabled={isSubmitting}
+                disabled={isSubmitting || !isPhoneValid}
                 onClick={executeCheckout}
                 className="w-full sm:w-2/3 py-3.5 px-6 rounded-xl font-black text-sm uppercase tracking-wider text-black bg-amber-400 hover:bg-amber-300 transition-all shadow-lg hover:shadow-amber-400/50 cursor-pointer flex items-center justify-center gap-2"
               >
-                {isSubmitting ? 'Регистрация...' : '✓ ДА, Я СОГЛАСЕН(НА)'}
+                {isSubmitting ? copy.submitting : `✓ ${copy.confirm}`}
               </button>
             </div>
 

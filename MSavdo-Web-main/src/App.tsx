@@ -26,41 +26,27 @@ import {
   SlidersHorizontal,
   Sun,
   Moon,
-  Languages,
 } from 'lucide-react';
 
 const BRAND_LOGO_URL = '/msavdo-logo.jpg';
 
 function getCategoryIllustration(name: string): string {
   const category = name.toLocaleLowerCase('ru');
-  if (/коллекц/.test(category)) return '✨';
-  if (/бытовая техника и электроника для дома/.test(category)) return '🔌';
-  if (/игрушки, детские товары и хобби/.test(category)) return '🧸';
-  if (/одежда, обувь и аксессуары/.test(category)) return '🛍️';
-  if (/спорт, туризм и автотовары/.test(category)) return '⛺';
-  if (/товары для дома и интерьера/.test(category)) return '🏠';
-  if (/электроника и смарт-гаджеты/.test(category)) return '📱';
-  if (/обув|кроссов|сандал|ботин|тапоч/.test(category)) return '👟';
-  if (/одеж|футбол|худи|куртк|плать|брюк/.test(category)) return '👕';
-  if (/дет|ребен|игруш|малыш|кукл/.test(category)) return '🧸';
-  if (/сумк|рюкзак/.test(category)) return '🎒';
-  if (/час|браслет|украш/.test(category)) return '⌚';
-  if (/телефон|смартфон/.test(category)) return '📱';
-  if (/науш|аудио|звук/.test(category)) return '🎧';
-  if (/компьют|ноутбук/.test(category)) return '💻';
-  if (/аксессуар|гаджет/.test(category)) return '🔌';
-  if (/пауэрбанк|заряд/.test(category)) return '🔋';
-  if (/кухн|посуда/.test(category)) return '🍳';
-  if (/красот|уход|фен/.test(category)) return '🪞';
-  if (/освещ|ночник|свет/.test(category)) return '💡';
-  if (/текстил|декор|интерьер/.test(category)) return '🛋️';
-  if (/хранен|организац/.test(category)) return '🧺';
-  if (/умный дом/.test(category)) return '🏠';
-  if (/игр|конструктор|хобби/.test(category)) return '🧩';
-  if (/творчеств/.test(category)) return '🎨';
-  if (/спорт|фитнес|тренир/.test(category)) return '⚽';
-  if (/туризм|кемпинг/.test(category)) return '⛺';
-  if (/авто/.test(category)) return '🚗';
+  if (/женская одежда/.test(category)) return '👗';
+  if (/мужская одежда/.test(category)) return '👔';
+  if (/нижнее белье/.test(category)) return '🩱';
+  if (/^обувь$/.test(category)) return '👟';
+  if (/сумки, рюкзаки/.test(category)) return '👜';
+  if (/аксессуары, часы/.test(category)) return '⌚';
+  if (/электроника и гаджеты/.test(category)) return '📱';
+  if (/бытовая техника/.test(category)) return '🔌';
+  if (/товары для дома/.test(category)) return '🏠';
+  if (/мебель, ремонт/.test(category)) return '🛋️';
+  if (/красота, уход/.test(category)) return '🪞';
+  if (/детские товары/.test(category)) return '🧸';
+  if (/спорт, туризм/.test(category)) return '⛺';
+  if (/транспорт:/.test(category)) return '🚲';
+  if (/канцелярия, хобби/.test(category)) return '🎨';
   return '🎁';
 }
 
@@ -87,6 +73,10 @@ export default function App() {
 
   // Данные каталога из API
   const [products, setProducts] = useState<Product[]>([]);
+  const [recommendedProducts, setRecommendedProducts] = useState<Product[]>([]);
+  const [totalProductCount, setTotalProductCount] = useState(0);
+  const [hasMoreProducts, setHasMoreProducts] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [categoriesTree, setCategoriesTree] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [whatsappPhone, setWhatsappPhone] = useState('992444431');
@@ -95,10 +85,14 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'stock' | 'order'>('all');
-  const [sortBy, setSortBy] = useState<'price_asc' | 'price_desc' | 'newest'>('newest');
+  const [sortBy, setSortBy] = useState<'popular' | 'price_asc' | 'price_desc' | 'newest'>('newest');
   const [expandedCategoryId, setExpandedCategoryId] = useState<number | null>(null);
+  const [isCategoryBrowserOpen, setIsCategoryBrowserOpen] = useState(false);
+  const [browsingCategoryId, setBrowsingCategoryId] = useState<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const viewedProductIds = useRef<Set<number>>(new Set());
+  const catalogRequestId = useRef(0);
+  const isProductModalOpen = selectedProduct !== null;
 
   // Открытие карточки товара с автоматическим счетчиком просмотров
   const handleOpenProduct = (p: Product) => {
@@ -110,6 +104,23 @@ export default function App() {
       });
     }
   };
+
+  useEffect(() => {
+    if (!isProductModalOpen) return;
+
+    const currentState = window.history.state;
+    window.history.pushState(
+      { ...(typeof currentState === 'object' && currentState !== null ? currentState : {}), msavdoProductModal: true },
+      '',
+      window.location.href,
+    );
+    const closeOnBack = () => setSelectedProduct(null);
+    window.addEventListener('popstate', closeOnBack);
+    return () => {
+      window.removeEventListener('popstate', closeOnBack);
+      if (window.history.state?.msavdoProductModal) window.history.back();
+    };
+  }, [isProductModalOpen]);
 
   // Корзина на клиенте
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -166,19 +177,46 @@ export default function App() {
     return res.json();
   };
 
+  const fetchProducts = async (append = false) => {
+    const requestId = ++catalogRequestId.current;
+    if (append) setIsLoadingMore(true);
+    else setIsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        limit: '24',
+        offset: append ? String(products.length) : '0',
+        sort: sortBy,
+      });
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      if (selectedCategoryId !== null) params.set('category_id', String(selectedCategoryId));
+      if (deliveryFilter !== 'all') params.set('delivery_type', deliveryFilter);
+
+      const data = await safeFetchJson(`/api/products?${params.toString()}`);
+      if (requestId !== catalogRequestId.current) return;
+      const page = Array.isArray(data?.products) ? data.products as Product[] : [];
+      setProducts((current) => append
+        ? [...current, ...page.filter((product) => !current.some((item) => item.id === product.id))]
+        : page);
+      setTotalProductCount(Number(data?.total) || 0);
+      setHasMoreProducts(Boolean(data?.has_more));
+    } catch (error) {
+      if (requestId === catalogRequestId.current) {
+        console.error('[Catalog Loading Error]', error);
+        addToast('error', t('catalogLoadError'), t('catalogLoadRetry'));
+      }
+    } finally {
+      if (requestId === catalogRequestId.current) {
+        setIsLoading(false);
+        setIsLoadingMore(false);
+      }
+    }
+  };
+
   // Загрузка каталога с глобальным перехватом ошибок и авто-повтором
   const fetchCatalog = async (retryCount = 0) => {
-    if (products.length === 0) {
-      setIsLoading(true);
-    }
     try {
-      // 1. Товары
-      const dataProducts = await safeFetchJson('/api/products');
-      if (Array.isArray(dataProducts?.products)) {
-        setProducts(dataProducts.products);
-      }
+      await fetchProducts();
 
-      // 2. Категории
       try {
         const dataCategories = await safeFetchJson('/api/categories');
         setCategoriesTree(dataCategories?.tree || dataCategories?.categories || []);
@@ -198,7 +236,6 @@ export default function App() {
     } catch (err: any) {
       console.warn(`[M.Savdo] Попытка ${retryCount + 1}/3 загрузки каталога:`, err?.message);
       if (retryCount < 2) {
-        // Автоматический повтор через 1.5 секунды, если сервер перезапускался
         setTimeout(() => fetchCatalog(retryCount + 1), 1500);
         return;
       }
@@ -224,18 +261,63 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    apiFetch('/api/visits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      keepalive: true,
+    }).catch((error) => console.error('[Site Visit Tracking Error]', error));
+  }, []);
+
+  const initialCatalogFilters = useRef(true);
+  useEffect(() => {
+    if (initialCatalogFilters.current) {
+      initialCatalogFilters.current = false;
+      return;
+    }
+    const timer = window.setTimeout(() => { void fetchProducts(); }, searchQuery ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, selectedCategoryId, deliveryFilter, sortBy]);
+
+  useEffect(() => {
+    if (selectedCategoryId === null) {
+      setRecommendedProducts([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    apiFetch(`/api/categories/${selectedCategoryId}/recommendations`, { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Recommendations request failed: ${response.status}`);
+        const data = await response.json();
+        setRecommendedProducts(Array.isArray(data?.products) ? data.products : []);
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('[Category Recommendations Error]', error);
+          setRecommendedProducts([]);
+        }
+      });
+    return () => controller.abort();
+  }, [selectedCategoryId]);
+
   // Добавление в корзину конкретного варианта
   const handleAddToCart = (item: CartItem) => {
+    const itemWithVariants = {
+      ...item,
+      variants: products.find((product) => product.id === item.product_id)?.variants || item.variants || [],
+    };
     setCart((prev) => {
-      const existing = prev.find((i) => i.id === item.id);
+      const existing = prev.find((i) => i.id === itemWithVariants.id);
       if (existing) {
         return prev.map((i) =>
-          i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i
+          i.id === itemWithVariants.id ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
-      return [...prev, item];
+      return [...prev, itemWithVariants];
     });
-    addToast('success', 'Товар добавлен в корзину', `${item.title} (${item.color}, ${item.size})`);
+    addToast('success', 'Товар добавлен в корзину', `${itemWithVariants.title} (${itemWithVariants.color}, ${itemWithVariants.size})`);
   };
 
   const handleUpdateQuantity = (id: string, delta: number) => {
@@ -250,6 +332,38 @@ export default function App() {
         })
         .filter(Boolean) as CartItem[]
     );
+  };
+
+  const handleChangeCartVariant = (
+    itemId: string,
+    variant: NonNullable<Product['variants']>[number],
+  ) => {
+    setCart((current) => {
+      const selectedItem = current.find((item) => item.id === itemId);
+      if (!selectedItem) return current;
+      const nextId = `${selectedItem.product_id}-${variant.variant_sku}`;
+      const duplicate = current.find((item) => item.id === nextId && item.id !== itemId);
+      if (duplicate) {
+        return current
+          .filter((item) => item.id !== itemId)
+          .map((item) => item.id === nextId
+            ? { ...item, quantity: item.quantity + selectedItem.quantity }
+            : item);
+      }
+      return current.map((item) => item.id === itemId
+        ? {
+          ...item,
+          id: nextId,
+          variant_id: variant.id,
+          variant_sku: variant.variant_sku,
+          color: variant.color,
+          size: variant.size,
+          price_tjs: variant.price_tjs,
+          stock: variant.stock,
+          image: variant.image_url || item.image,
+        }
+        : item);
+    });
   };
 
   const handleRemoveFromCart = (id: string) => {
@@ -313,7 +427,7 @@ export default function App() {
       {/* Строгая клиентская изоляция: никаких кнопок импорта или ссылок на Китай */}
       {/* ======================================================== */}
       <header className="sticky top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-[76px] flex items-center gap-2 sm:gap-6">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-16 sm:min-h-[76px] py-2 flex flex-wrap items-center gap-2 sm:gap-6">
           
           <div 
             onClick={() => {
@@ -334,7 +448,7 @@ export default function App() {
           </div>
 
           {currentView === 'catalog' && (
-            <div className="relative min-w-0 flex-1 max-w-3xl ml-auto">
+            <div className="relative order-3 basis-full min-w-0 flex-1 max-w-none md:order-none md:basis-auto md:max-w-3xl md:ml-auto">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
               <input
                 ref={searchInputRef}
@@ -357,23 +471,22 @@ export default function App() {
               )}
             </div>
           )}
-              <div className="ml-auto flex shrink-0 items-center gap-1">
+              <div className="ml-auto flex shrink-0 items-center gap-0.5">
                 <button
                   type="button"
                   onClick={toggleTheme}
                   aria-label={theme === 'light' ? t('darkTheme') : t('lightTheme')}
                   title={theme === 'light' ? t('darkTheme') : t('lightTheme')}
-                  className="flex h-9 w-9 items-center justify-center rounded-full text-slate-950 transition hover:bg-black/10"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-slate-950 transition hover:bg-black/10"
                 >
                   {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
                 </button>
-                <label className="relative flex h-9 items-center gap-1 rounded-full px-1 text-slate-950 hover:bg-black/10" aria-label={t('language')}>
-                  <Languages className="h-4 w-4" />
+                <label className="relative flex h-8 items-center rounded-full px-1 text-slate-950 hover:bg-black/10" aria-label={t('language')}>
                   <select
                     value={language}
                     onChange={(event) => setLanguage(event.target.value as typeof language)}
                     aria-label={t('language')}
-                    className="w-[42px] cursor-pointer appearance-none bg-transparent pr-1 text-[10px] font-black outline-none"
+                    className="w-[38px] cursor-pointer appearance-none bg-transparent text-[10px] font-black outline-none"
                   >
                     <option value="ru">RU</option>
                     <option value="tg">TJ</option>
@@ -419,14 +532,14 @@ export default function App() {
                     setExpandedCategoryId(null);
                   }}
                   aria-pressed={selectedCategoryId === null}
-                  className={`flex min-h-11 shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                  className={`flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
                     selectedCategoryId === null
                       ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
                       : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
                   }`}
                 >
-                  <span className="text-xl leading-none" aria-hidden="true">🛍️</span>
-                  <span className="text-xs font-bold">{t('allCategories')}</span>
+                  <span className="text-base leading-none" aria-hidden="true">🛍️</span>
+                  <span className="text-[11px] font-bold">{t('allCategories')}</span>
                 </button>
 
                 {categoriesTree.map((section) => {
@@ -443,16 +556,16 @@ export default function App() {
                       }}
                       aria-pressed={isSelected}
                       title={section.name}
-                      className={`flex min-h-11 max-w-[220px] shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors ${
+                      className={`flex min-h-9 max-w-[180px] shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
                         isSelected
                           ? 'border-amber-500 bg-amber-100 text-slate-950 shadow-sm'
                           : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
                       }`}
                     >
-                      <span className="text-xl leading-none" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
-                      <span className="max-w-[170px] text-[11px] font-bold leading-tight">{section.name}</span>
+                      <span className="text-base leading-none" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
+                      <span className="max-w-[145px] text-[10px] font-bold leading-tight">{section.name}</span>
                       {section.subcategories && section.subcategories.length > 0 && (
-                        <ChevronDown className={`h-3.5 w-3.5 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
                       )}
                     </button>
                   );
@@ -463,7 +576,7 @@ export default function App() {
                 const section = categoriesTree.find((category) => category.id === expandedCategoryId);
                 if (!section?.subcategories?.length) return null;
                 return (
-                  <div className="flex gap-1.5 overflow-x-auto rounded-xl border border-slate-200 bg-white/80 p-1.5 scrollbar-none">
+                  <div className="flex gap-1 overflow-x-auto py-0.5 scrollbar-none">
                     {section.subcategories.map((category) => (
                       <button
                         key={category.id}
@@ -473,7 +586,7 @@ export default function App() {
                         )}
                         aria-pressed={selectedCategoryId === category.id}
                         title={category.name}
-                        className={`shrink-0 rounded-lg px-2.5 py-1.5 text-[10px] font-semibold transition-colors ${
+                        className={`shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold transition-colors ${
                           selectedCategoryId === category.id
                             ? 'bg-slate-900 text-white'
                             : 'bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-slate-900'
@@ -513,7 +626,7 @@ export default function App() {
             <div className="flex items-center justify-between gap-2 pt-1 pb-1 border-b border-slate-200">
               <div className="text-[11px] sm:text-xs text-slate-500 font-medium flex items-center gap-1.5">
                 <span>{t('foundProducts')}</span>
-                <span className="font-bold text-slate-900 font-mono">{filteredProducts.length}</span>
+                <span className="font-bold text-slate-900 font-mono">{totalProductCount}</span>
               </div>
 
               <div className="relative flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm">
@@ -524,6 +637,7 @@ export default function App() {
                   onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
                   className="max-w-[155px] appearance-none bg-transparent pr-4 text-[10px] sm:text-xs font-semibold text-slate-700 outline-none"
                 >
+                  <option value="popular">{t('popular')}</option>
                   <option value="price_asc">{t('cheapest')}</option>
                   <option value="price_desc">{t('expensive')}</option>
                   <option value="newest">{t('newest')}</option>
@@ -577,10 +691,139 @@ export default function App() {
               )}
             </section>
 
+            {hasMoreProducts && (
+              <button
+                type="button"
+                onClick={() => { void fetchProducts(true); }}
+                disabled={isLoadingMore}
+                className="mx-auto flex min-h-10 items-center justify-center rounded-lg border border-slate-200 bg-white px-5 text-xs font-bold text-slate-700 transition hover:border-amber-400 disabled:opacity-60"
+              >
+                {isLoadingMore ? t('loadingMore') : t('loadMore')}
+              </button>
+            )}
+
+            {selectedCategoryId !== null && recommendedProducts.length > 0 && (
+              <section className="space-y-3 border-t border-slate-200 pt-4">
+                <h2 className="text-sm font-bold text-slate-900">{t('relatedBranchProducts')}</h2>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 sm:gap-6">
+                  {recommendedProducts
+                    .filter((product) => !products.some((current) => current.id === product.id))
+                    .map((product) => (
+                      <ProductCard
+                        key={`related-${product.id}`}
+                        product={product}
+                        onSelect={handleOpenProduct}
+                        onAddToCart={() => handleOpenProduct(product)}
+                      />
+                    ))}
+                </div>
+              </section>
+            )}
+
           </div>
         )}
 
       </main>
+
+      {isCategoryBrowserOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+          onClick={() => setIsCategoryBrowserOpen(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('categoryBrowse')}
+            className="flex max-h-[88dvh] w-full max-w-xl flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="flex items-center gap-3 border-b border-slate-200 p-4">
+              {browsingCategoryId !== null && (
+                <button
+                  type="button"
+                  onClick={() => setBrowsingCategoryId(null)}
+                  aria-label={t('backToCatalog')}
+                  className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
+                >
+                  <ChevronDown className="h-4 w-4 rotate-90" />
+                </button>
+              )}
+              <div className="min-w-0 flex-1">
+                <h2 className="font-heading text-base font-bold text-slate-900">
+                  {t('categoryBrowse')}
+                </h2>
+                <p className="truncate text-xs text-slate-500">
+                  {browsingCategoryId === null
+                    ? t('chooseCategory')
+                    : categoriesTree.find((category) => category.id === browsingCategoryId)?.name}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsCategoryBrowserOpen(false)}
+                aria-label={t('close')}
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </header>
+            <div className="overflow-y-auto overscroll-contain p-3">
+              {browsingCategoryId === null ? (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {categoriesTree.map((section) => (
+                    <button
+                      key={section.id}
+                      type="button"
+                      onClick={() => setBrowsingCategoryId(section.id)}
+                      className="flex min-h-14 items-center gap-3 rounded-xl border border-slate-200 px-3 py-2 text-left transition hover:border-amber-400 hover:bg-amber-50"
+                    >
+                      <span className="text-xl" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
+                      <span className="min-w-0 flex-1 text-xs font-bold text-slate-800">{section.name}</span>
+                      <ChevronDown className="h-4 w-4 -rotate-90 text-slate-400" />
+                    </button>
+                  ))}
+                </div>
+              ) : (() => {
+                const section = categoriesTree.find((category) => category.id === browsingCategoryId);
+                if (!section) return null;
+                return (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCategoryId(section.id);
+                        setIsCategoryBrowserOpen(false);
+                        setBrowsingCategoryId(null);
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="w-full rounded-xl bg-slate-900 px-4 py-3 text-left text-xs font-bold text-white"
+                    >
+                      {t('showSectionProducts')}
+                    </button>
+                    {section.subcategories?.map((category) => (
+                      <button
+                        key={category.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategoryId(category.id);
+                          setExpandedCategoryId(section.id);
+                          setIsCategoryBrowserOpen(false);
+                          setBrowsingCategoryId(null);
+                          window.scrollTo({ top: 0, behavior: 'smooth' });
+                        }}
+                        className="flex w-full items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 text-left text-xs font-semibold text-slate-700 transition hover:border-amber-400 hover:bg-amber-50"
+                      >
+                        <span>{category.name}</span>
+                        <ChevronDown className="h-3.5 w-3.5 -rotate-90 text-slate-400" />
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+          </section>
+        </div>
+      )}
 
       {/* ======================================================== */}
       {/* 3. МОДАЛЬНЫЕ ОКНА */}
@@ -604,7 +847,9 @@ export default function App() {
         isOpen={isCartOpen}
         onClose={() => setIsCartOpen(false)}
         items={cart}
+        products={products}
         onUpdateQuantity={handleUpdateQuantity}
+        onChangeVariant={handleChangeCartVariant}
         onRemoveItem={handleRemoveFromCart}
         onClearCart={handleClearCart}
         onOpenRules={() => {
@@ -648,7 +893,8 @@ export default function App() {
         <button
           onClick={() => {
             setCurrentView('catalog');
-            searchInputRef.current?.focus();
+            setBrowsingCategoryId(null);
+            setIsCategoryBrowserOpen(true);
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           className="flex flex-col items-center gap-1 text-zinc-400"
