@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Product } from '../types';
-import { ShoppingBag, Eye, Truck, Clock } from 'lucide-react';
+import { ShoppingBasket, Eye, Truck, Clock } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 interface ProductCardProps {
   product: Product;
@@ -12,13 +13,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   product,
   onSelect,
 }) => {
+  const { t } = useI18n();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
 
-  // Варианты и цвета
+  // Цены по доступным вариантам
   const variants = product.variants || [];
-  const uniqueColors = Array.from(new Set(variants.map(v => v.color).filter(Boolean)));
-  const uniqueSizes = Array.from(new Set(variants.map(v => v.size).filter(Boolean)));
 
   // Диапазон цен в TJS
   const prices = variants.map(v => v.price_tjs).filter(p => p > 0);
@@ -67,28 +67,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
         {/* Срок доставки */}
         {isStock ? (
-          <div className="absolute top-2 right-2 max-w-[75%] whitespace-normal break-words bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-1 rounded-md shadow-xs border border-black/5 flex items-center gap-1">
-            <Truck className="w-3 h-3 shrink-0" />
-            <span className="min-w-0 leading-tight">В наличии · 1 день</span>
+          <div className="absolute top-2 right-2 max-w-[72%] whitespace-nowrap bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-0.5">
+            <Truck className="w-2.5 h-2.5 shrink-0" />
+            <span className="min-w-0 leading-tight">{t('inStockOneDay')}</span>
           </div>
         ) : (
-          <div className="absolute top-2 right-2 max-w-[75%] whitespace-normal break-words bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-1 rounded-md shadow-xs border border-black/5 flex items-center gap-1">
-            <Clock className="w-3 h-3 shrink-0" />
-            <span className="min-w-0 leading-tight">Доставка 18–30 дней</span>
-          </div>
-        )}
-
-        {/* Индикатор вариантов */}
-        {uniqueColors.length > 0 && (
-          <div className="absolute bottom-2.5 left-2.5 bg-black/80 backdrop-blur-md text-slate-100 text-[9px] sm:text-[10px] font-medium px-2 py-0.5 rounded-md shadow-xs flex items-center gap-1.5 border border-slate-700">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-            <span>{uniqueColors.length} {uniqueColors.length === 1 ? 'цвет' : uniqueColors.length < 5 ? 'цвета' : 'цветов'}</span>
-            {uniqueSizes.length > 0 && uniqueSizes[0] !== 'One Size' && (
-              <>
-                <span className="text-slate-500">·</span>
-                <span>{uniqueSizes.length} разм.</span>
-              </>
-            )}
+          <div className="absolute top-2 right-2 max-w-[72%] whitespace-nowrap bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-0.5">
+            <Clock className="w-2.5 h-2.5 shrink-0" />
+            <span className="min-w-0 leading-tight">{t('delivery18to30')}</span>
           </div>
         )}
 
@@ -102,29 +88,23 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       </div>
 
       {/* Информация о товаре */}
-      <div className="p-3 sm:p-4 flex-1 flex flex-col justify-between">
+      <div className="p-2.5 sm:p-4 flex-1 flex flex-col justify-between">
         <div>
-          <div className="flex items-center justify-between gap-1 mb-1">
-            <div className="text-[10px] font-bold text-amber-600 uppercase tracking-wider truncate">
+          <div className="flex items-center justify-between gap-1 mb-0.5">
+            <div className="text-[9px] sm:text-[10px] font-bold text-amber-600 uppercase tracking-wider truncate">
               {product.category_name || 'Каталог'}
             </div>
-            {(product.views_count || 0) > 0 && (
-              <div className="text-[9px] text-slate-400 font-mono font-medium flex items-center gap-0.5 shrink-0" title="Количество просмотров">
-                <span>👁</span>
-                <span>{product.views_count}</span>
-              </div>
-            )}
           </div>
 
-          <h3 className="text-xs sm:text-sm font-bold text-slate-900 line-clamp-2 leading-snug font-heading group-hover:text-amber-600 transition-colors">
+          <h3 className="text-[11px] sm:text-sm font-bold text-slate-900 line-clamp-2 leading-snug font-heading group-hover:text-amber-600 transition-colors">
             {product.title}
           </h3>
         </div>
 
         {/* Цена и кнопка */}
-        <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+        <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
           <div>
-            <div className="text-[9px] text-slate-400 font-medium">в сомони</div>
+            <div className="text-[9px] text-slate-400 font-medium">{t('inSomoni')}</div>
             <div className="text-sm sm:text-base font-extrabold text-slate-900 font-mono tracking-tight">
               {priceDisplay}
             </div>
@@ -136,10 +116,10 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               onSelect(product);
             }}
             className="p-2 sm:px-3 sm:py-1.5 bg-black hover:bg-amber-400 hover:text-black text-amber-400 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1 active:scale-95 border border-amber-400/30"
-            title="Открыть карточку товара"
+            title={t('chooseProduct')}
           >
-            <ShoppingBag className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Выбрать</span>
+            <ShoppingBasket className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{t('chooseProduct')}</span>
           </button>
         </div>
       </div>

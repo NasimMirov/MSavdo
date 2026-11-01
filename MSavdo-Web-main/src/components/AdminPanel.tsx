@@ -43,6 +43,7 @@ import {
 import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
 import { apiFetch } from '../api';
+import { useI18n } from '../i18n';
 
 interface TelegramLoginResult {
   id_token?: string;
@@ -82,6 +83,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onBack,
   onRefreshCatalog,
 }) => {
+  const { t, language } = useI18n();
   // Авторизация
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loginError, setLoginError] = useState('');
@@ -111,7 +113,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [navCategory, setNavCategory] = useState<string>('all');
   const [navDelivery, setNavDelivery] = useState<'all' | 'stock' | 'order'>('all');
   const [navStatus, setNavStatus] = useState<'all' | 'active' | 'draft'>('all');
-  const [navSort, setNavSort] = useState<'newest' | 'title' | 'price_asc' | 'price_desc' | 'variants'>('newest');
+  const [navSort, setNavSort] = useState<'newest' | 'title' | 'price_asc' | 'price_desc' | 'variants' | 'popular'>('newest');
   const [navViewMode, setNavViewMode] = useState<'table' | 'cards'>('table');
   const [expandedSpecsId, setExpandedSpecsId] = useState<number | null>(null);
 
@@ -211,7 +213,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             client_id: config.client_id,
             scope: ['profile'],
             nonce: config.nonce,
-            lang: 'ru',
+            lang: language === 'tg' ? 'en' : language,
           });
           setIsTelegramLoginReady(true);
         };
@@ -229,7 +231,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       active = false;
       script?.remove();
     };
-  }, [completeTelegramLogin, isAuthenticated]);
+  }, [completeTelegramLogin, isAuthenticated, language]);
 
   const openTelegramLogin = () => {
     const loginSdk = window.Telegram?.Login;
@@ -1051,6 +1053,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         if (navSort === 'newest') return b.id - a.id;
         if (navSort === 'title') return a.title.localeCompare(b.title);
         if (navSort === 'variants') return (b.variants?.length || 0) - (a.variants?.length || 0);
+        if (navSort === 'popular') return (b.views_count || 0) - (a.views_count || 0);
 
         const aPrices = (a.variants || []).map((v: any) => v.price_tjs).filter((pr: number) => pr > 0);
         const bPrices = (b.variants || []).map((v: any) => v.price_tjs).filter((pr: number) => pr > 0);
@@ -1090,7 +1093,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             disabled={isLoggingIn || !isTelegramLoginReady}
             className="w-full rounded-xl bg-[#229ed9] py-4 text-sm font-bold text-white shadow-sm transition-colors hover:bg-[#168ac2] disabled:opacity-50"
           >
-            {isLoggingIn ? 'Проверка…' : isTelegramLoginReady ? 'Войти через Telegram' : 'Загрузка…'}
+            {isLoggingIn ? t('telegramChecking') : isTelegramLoginReady ? t('telegramLogin') : t('telegramLoading')}
           </button>
         </div>
       </div>
@@ -1101,7 +1104,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // ЭКРАН АДМИНИСТРАТОРА
   // ==========================================
   return (
-    <div className="max-w-7xl mx-auto py-4 space-y-6">
+    <div className="max-w-7xl mx-auto py-2 space-y-3">
       
       {/* Toast Notification */}
       {feedbackNotice && (
@@ -1112,12 +1115,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       )}
 
       {/* Верхняя шапка */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200">
         <div className="flex items-center gap-3">
           <button
             onClick={onBack}
-            className="p-2 text-slate-500 hover:text-slate-900 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
-            title="Вернуться на сайт"
+            className="p-1.5 text-slate-500 hover:text-slate-900 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
+            title={t('adminBack')}
           >
             <ArrowLeft className="w-4 h-4" />
           </button>
@@ -1128,40 +1131,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             className="w-10 h-10 rounded-xl object-cover border-2 border-amber-400 shadow-xs"
           />
           <div>
-            <h1 className="text-lg sm:text-xl font-extrabold text-slate-900 font-heading flex items-center gap-2">
-              <span>Панель управления M.SAVDO</span>
-              <span className="text-[10px] font-mono bg-black text-amber-400 px-2 py-0.5 rounded-full font-black border border-amber-400/40">
-                ADMIN Co-Pilot
-              </span>
-            </h1>
-            <p className="text-xs text-slate-400">
-              Навигатор каталога, редактирование характеристик, фото из буфера и файлов
-            </p>
+            <h1 className="text-base font-extrabold text-slate-900 font-heading">MSAVDO</h1>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setIsExportModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3 py-2 bg-black hover:bg-zinc-800 text-amber-400 font-bold text-xs rounded-xl transition-colors border border-amber-400/40 shadow-xs"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-black hover:bg-zinc-800 text-amber-400 font-bold text-[11px] rounded-lg transition-colors border border-amber-400/40"
             title="Получить готовые файлы Chrome-расширения"
           >
             <FileCode className="w-3.5 h-3.5" />
-            <span>Chrome-расширение</span>
+            <span>{t('chromeExtension')}</span>
           </button>
 
           <button
             onClick={() => setIsImportModalOpen(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-amber-400 hover:bg-amber-300 text-black font-black text-xs rounded-xl transition-all shadow-md shadow-amber-400/20"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-black font-black text-[11px] rounded-lg transition-all"
             title="Вставить исходный HTML-код страницы или window.context для строгого ИИ-анализа"
           >
             <Code2 className="w-4 h-4" />
-            <span>⚡ Вставить код страницы (HTML / context)</span>
+            <span>⚡ {t('pastePageCode')}</span>
           </button>
 
           <button
             onClick={loadAdminData}
-            className="p-2 text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors shadow-xs"
+            className="p-1.5 text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
             title="Обновить данные"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
@@ -1169,41 +1164,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
           <button
             onClick={handleLogout}
-            className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-700 font-semibold text-xs rounded-xl transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 font-semibold text-[11px] rounded-lg transition-colors"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Выйти</span>
+            <span>{t('logout')}</span>
           </button>
         </div>
       </div>
 
-      {/* ЖЕСТКОЕ ПРЕДУПРЕЖДЕНИЕ О ВОЗВРАТЕ СРЕДСТВ */}
-      <div className="p-4 sm:p-5 bg-red-100 border-2 border-red-500 rounded-2xl text-red-950 flex items-start sm:items-center gap-4 shadow-sm">
-        <div className="p-2.5 bg-red-200 text-red-700 rounded-xl shrink-0">
-          <AlertTriangle className="w-6 h-6" />
-        </div>
-        <div className="space-y-0.5">
-          <div className="font-extrabold text-sm sm:text-base uppercase tracking-wide text-red-900 font-heading">
-            ВНИМАНИЕ! СОГЛАСНО ПРАВИЛАМ M.SAVDO:
-          </div>
-          <div className="text-xs sm:text-sm font-bold text-red-900 leading-snug">
-            В случае возврата средств, перевод делать СТРОГО на тот же счет/карту, с которой пришла оплата!
-          </div>
-        </div>
-      </div>
-
       {/* Вкладки админки */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto text-xs font-bold">
+      <div className="flex items-center gap-1.5 border-b border-slate-200 pb-1.5 overflow-x-auto text-[11px] font-bold">
         <button
           onClick={() => setActiveTab('products')}
-          className={`px-4 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
+          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
             activeTab === 'products'
               ? 'bg-slate-900 text-white'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
           <Layers className="w-4 h-4 text-emerald-400" />
-          <span>Навигатор каталога и товаров ({adminProducts.length})</span>
+          <span>{t('adminCatalog')} ({adminProducts.length})</span>
         </button>
 
         <button
@@ -1211,14 +1191,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             setActiveTab('orders');
             loadOrders();
           }}
-          className={`px-4 py-2.5 rounded-xl transition-colors flex items-center gap-2 relative ${
+          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 relative ${
             activeTab === 'orders'
               ? 'bg-slate-900 text-white'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
           <Package className="w-4 h-4 text-amber-400" />
-          <span>Управление заказами</span>
+          <span>{t('adminOrders')}</span>
           {orders.length > 0 && (
             <span className="bg-amber-400 text-black text-[10px] font-black px-2 py-0.5 rounded-full ml-1">
               {orders.length}
@@ -1228,26 +1208,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
         <button
           onClick={() => setActiveTab('gemini_ai')}
-          className={`px-4 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
+          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
             activeTab === 'gemini_ai'
               ? 'bg-slate-900 text-white'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
           <Sparkles className="w-4 h-4 text-purple-400" />
-          <span>Тестирование ИИ Gemini</span>
+          <span>{t('adminAi')}</span>
         </button>
 
         <button
           onClick={() => setActiveTab('settings')}
-          className={`px-4 py-2.5 rounded-xl transition-colors flex items-center gap-2 ${
+          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
             activeTab === 'settings'
               ? 'bg-slate-900 text-white'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
           }`}
         >
           <Settings className="w-4 h-4 text-blue-400" />
-          <span>Курс, вес и логистика</span>
+          <span>{t('adminSettings')}</span>
         </button>
       </div>
 
@@ -1434,7 +1414,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       navStatus === 'all' ? 'bg-white text-slate-900 shadow-xs font-bold' : 'text-slate-500'
                     }`}
                   >
-                    Все статусы
+                    {t('allStatuses')}
                   </button>
                   <button
                     onClick={() => setNavStatus('active')}
@@ -1442,7 +1422,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       navStatus === 'active' ? 'bg-emerald-100 text-emerald-800 font-bold' : 'text-slate-600'
                     }`}
                   >
-                    Активные
+                    {t('active')}
                   </button>
                   <button
                     onClick={() => setNavStatus('draft')}
@@ -1450,24 +1430,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       navStatus === 'draft' ? 'bg-amber-100 text-amber-800 font-bold' : 'text-slate-600'
                     }`}
                   >
-                    Черновики
+                    {t('drafts')}
                   </button>
                 </div>
               </div>
 
               {/* Сортировка */}
               <div className="flex items-center gap-2">
-                <span className="text-slate-400 font-medium">Сортировка:</span>
+                <span className="text-slate-400 font-medium">{t('sortBy')}</span>
                 <select
                   value={navSort}
                   onChange={(e: any) => setNavSort(e.target.value)}
                   className="p-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none"
                 >
-                  <option value="newest">Сначала новые товары</option>
-                  <option value="title">По названию (А-Я)</option>
-                  <option value="price_asc">По цене (сначала дешевле)</option>
-                  <option value="price_desc">По цене (сначала дороже)</option>
-                  <option value="variants">По числу вариантов SKU</option>
+                  <option value="newest">{t('newestAdmin')}</option>
+                  <option value="title">{t('titleAscending')}</option>
+                  <option value="price_asc">{t('priceAscending')}</option>
+                  <option value="price_desc">{t('priceDescending')}</option>
+                  <option value="variants">{t('variantCount')}</option>
+                  <option value="popular">{t('adminPopularity')}</option>
                 </select>
               </div>
             </div>
@@ -1556,6 +1537,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               </div>
                               <div className="text-[11px] text-amber-700 font-semibold mt-0.5">
                                 {p.category_name || 'Без категории'}
+                              </div>
+                              <div className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-slate-500" title="Просмотры товара">
+                                <Eye className="h-3 w-3" />
+                                <span>{p.views_count || 0}</span>
                               </div>
                               {p.original_link && (
                                 <a
@@ -1742,6 +1727,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                       <div className="text-[10px] font-bold text-amber-700 uppercase tracking-wider mb-1">
                         {p.category_name}
+                      </div>
+                      <div className="mb-1 inline-flex items-center gap-1 text-[10px] font-medium text-slate-500" title="Просмотры товара">
+                        <Eye className="h-3 w-3" />
+                        <span>{p.views_count || 0}</span>
                       </div>
                       <h4 className="text-xs sm:text-sm font-bold text-slate-900 leading-snug line-clamp-2">
                         {p.title}

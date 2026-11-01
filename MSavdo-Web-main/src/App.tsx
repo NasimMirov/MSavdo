@@ -12,42 +12,53 @@ import { RulesView } from './components/RulesView';
 import { AdminPanel } from './components/AdminPanel';
 import { ToastContainer, ToastItem } from './components/Toast';
 import { apiFetch } from './api';
+import { useI18n } from './i18n';
 import { 
   Search, 
-  ShoppingBag, 
+  ShoppingBasket,
   Package, 
   Lock,
   X,
   MessageCircle,
   Home,
   CheckCircle2,
-  Shirt,
-  Smartphone,
-  Footprints,
-  Watch,
-  Sofa,
-  Baby,
-  Dumbbell,
-  Headphones
+  ChevronDown,
+  SlidersHorizontal,
+  Sun,
+  Moon,
+  Languages,
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 
 const BRAND_LOGO_URL = '/msavdo-logo.jpg';
 
-function getCategoryIcon(name: string): LucideIcon {
+function getCategoryIllustration(name: string): string {
   const category = name.toLocaleLowerCase('ru');
-  if (/обув|кроссов|сандал|ботин|тапоч/.test(category)) return Footprints;
-  if (/одеж|одежд|футбол|худи|куртк|плать|брюк/.test(category)) return Shirt;
-  if (/телефон|электрон|гаджет|компьют|планшет/.test(category)) return Smartphone;
-  if (/час|украш|аксессуар|сумк/.test(category)) return Watch;
-  if (/дом|мебел|кухн|интерьер/.test(category)) return Sofa;
-  if (/дет|ребен|игруш|малыш/.test(category)) return Baby;
-  if (/спорт|фитнес|тренир/.test(category)) return Dumbbell;
-  if (/науш|аудио|звук/.test(category)) return Headphones;
-  return Package;
+  if (/обув|кроссов|сандал|ботин|тапоч/.test(category)) return '👟';
+  if (/одеж|футбол|худи|куртк|плать|брюк/.test(category)) return '👕';
+  if (/дет|ребен|игруш|малыш|кукл/.test(category)) return '🧸';
+  if (/сумк|рюкзак/.test(category)) return '🎒';
+  if (/час|браслет|украш/.test(category)) return '⌚';
+  if (/телефон|смартфон/.test(category)) return '📱';
+  if (/науш|аудио|звук/.test(category)) return '🎧';
+  if (/компьют|ноутбук/.test(category)) return '💻';
+  if (/аксессуар|гаджет/.test(category)) return '🔌';
+  if (/пауэрбанк|заряд/.test(category)) return '🔋';
+  if (/кухн|посуда/.test(category)) return '🍳';
+  if (/красот|уход|фен/.test(category)) return '🪞';
+  if (/освещ|ночник|свет/.test(category)) return '💡';
+  if (/текстил|декор|интерьер/.test(category)) return '🛋️';
+  if (/хранен|организац/.test(category)) return '🧺';
+  if (/умный дом/.test(category)) return '🏠';
+  if (/игр|конструктор|хобби/.test(category)) return '🧩';
+  if (/творчеств/.test(category)) return '🎨';
+  if (/спорт|фитнес|тренир/.test(category)) return '⚽';
+  if (/туризм|кемпинг/.test(category)) return '⛺';
+  if (/авто/.test(category)) return '🚗';
+  return '🎁';
 }
 
 export default function App() {
+  const { language, setLanguage, theme, toggleTheme, t } = useI18n();
   const [currentView, setCurrentView] = useState<'catalog' | 'rules' | 'admin'>('catalog');
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -77,26 +88,22 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [deliveryFilter, setDeliveryFilter] = useState<'all' | 'stock' | 'order'>('all');
-  const [sortBy, setSortBy] = useState<'popular' | 'price_asc' | 'price_desc' | 'newest'>('popular');
+  const [sortBy, setSortBy] = useState<'price_asc' | 'price_desc' | 'newest'>('newest');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const viewedProductIds = useRef<Set<number>>(new Set());
+  const categoryOptions = useMemo(
+    () => categoriesTree.flatMap((category) => category.subcategories?.length ? category.subcategories : [category]),
+    [categoriesTree],
+  );
 
   // Открытие карточки товара с автоматическим счетчиком просмотров
   const handleOpenProduct = (p: Product) => {
     setSelectedProduct(p);
     if (!viewedProductIds.current.has(p.id)) {
       viewedProductIds.current.add(p.id);
-      apiFetch(`/api/products/${p.id}/view`, { method: 'POST' })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.views_count) {
-            setProducts((prev) =>
-              prev.map((item) => (item.id === p.id ? { ...item, views_count: data.views_count } : item))
-            );
-            setSelectedProduct((prev) => (prev?.id === p.id ? { ...prev, views_count: data.views_count } : prev));
-          }
-        })
-        .catch(() => {});
+      apiFetch(`/api/products/${p.id}/view`, { method: 'POST' }).catch((error) => {
+        console.error('[Product View Count Error]', error);
+      });
     }
   };
 
@@ -278,9 +285,7 @@ export default function App() {
 
     // Сортировка как в популярных маркетплейсах
     const sorted = [...list];
-    if (sortBy === 'popular') {
-      sorted.sort((a, b) => (b.views_count || 0) - (a.views_count || 0) || b.id - a.id);
-    } else if (sortBy === 'price_asc') {
+    if (sortBy === 'price_asc') {
       sorted.sort((a, b) => (a.min_price_tjs || 0) - (b.min_price_tjs || 0));
     } else if (sortBy === 'price_desc') {
       sorted.sort((a, b) => (b.min_price_tjs || 0) - (a.min_price_tjs || 0));
@@ -304,7 +309,7 @@ export default function App() {
       {/* Строгая клиентская изоляция: никаких кнопок импорта или ссылок на Китай */}
       {/* ======================================================== */}
       <header className="sticky top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-[76px] flex items-center gap-3 sm:gap-6">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-[76px] flex items-center gap-2 sm:gap-6">
           
           <div 
             onClick={() => {
@@ -332,15 +337,15 @@ export default function App() {
                 type="search"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Поиск товаров"
-                aria-label="Поиск товаров"
+                placeholder={t('searchProducts')}
+                aria-label={t('searchProducts')}
                 className="w-full h-10 sm:h-11 rounded-xl border border-black/10 bg-white/95 pl-9 pr-9 text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 shadow-sm outline-none transition focus:ring-2 focus:ring-slate-900/20"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
-                  aria-label="Очистить поиск"
+                  aria-label={t('clearSearch')}
                   className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:text-slate-700"
                 >
                   <X className="w-4 h-4" />
@@ -348,13 +353,37 @@ export default function App() {
               )}
             </div>
           )}
+              <div className="ml-auto flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  aria-label={theme === 'light' ? t('darkTheme') : t('lightTheme')}
+                  title={theme === 'light' ? t('darkTheme') : t('lightTheme')}
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-slate-950 transition hover:bg-black/10"
+                >
+                  {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+                </button>
+                <label className="relative flex h-9 items-center gap-1 rounded-full px-1 text-slate-950 hover:bg-black/10" aria-label={t('language')}>
+                  <Languages className="h-4 w-4" />
+                  <select
+                    value={language}
+                    onChange={(event) => setLanguage(event.target.value as typeof language)}
+                    aria-label={t('language')}
+                    className="w-[42px] cursor-pointer appearance-none bg-transparent pr-1 text-[10px] font-black outline-none"
+                  >
+                    <option value="ru">RU</option>
+                    <option value="tg">TJ</option>
+                    <option value="en">EN</option>
+                  </select>
+                </label>
+              </div>
         </div>
       </header>
 
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}
       {/* ======================================================== */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-2.5 sm:py-6">
         
         {/* ЭКРАН 1: ПРАВИЛА СЕРВИСА */}
         {currentView === 'rules' && (
@@ -374,118 +403,87 @@ export default function App() {
 
         {/* ЭКРАН 3: ПУБЛИЧНЫЙ КАТАЛОГ (КОМПАКТНЫЙ, БЫСТРЫЙ, МОБИЛЬНЫЙ) */}
         {currentView === 'catalog' && (
-          <div className="space-y-4 sm:space-y-6">
+          <div className="space-y-3 sm:space-y-6">
             
             {/* Быстрые фильтры категорий (горизонтальный свайп на мобильных) */}
-            <div className="flex items-start gap-3 overflow-x-auto pb-2 scrollbar-none select-none snap-x">
+            <div className="flex items-start gap-2 overflow-x-auto pb-1.5 scrollbar-none select-none snap-x">
               <button
                 onClick={() => setSelectedCategoryId(null)}
-                className="flex w-[68px] shrink-0 snap-start flex-col items-center gap-1.5 text-center"
+                className="flex w-[58px] shrink-0 snap-start flex-col items-center gap-1 text-center"
               >
-                <span className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#fff1b8] to-[#e9ba2e] text-slate-900 shadow-[0_4px_0_#c79a18,0_7px_12px_rgba(15,23,42,0.12)] ring-1 ring-black/5 transition-transform ${selectedCategoryId === null ? '-translate-y-0.5 ring-2 ring-slate-900/30' : ''}`}>
-                  <Package className="h-6 w-6 drop-shadow-sm" strokeWidth={2.2} />
+                <span className={`flex h-11 w-11 items-center justify-center rounded-[17px] bg-gradient-to-br from-sky-200 to-sky-400 text-[27px] shadow-[0_3px_0_#5b9ab4,0_5px_9px_rgba(15,23,42,0.12)] ring-1 ring-white/70 transition-transform ${selectedCategoryId === null ? '-translate-y-0.5 ring-2 ring-slate-800/40' : ''}`}>
+                  <span className="drop-shadow-[0_2px_1px_rgba(0,0,0,0.2)]">🛍️</span>
                 </span>
-                <span className="w-full truncate text-[10px] font-bold text-slate-700">Все</span>
+                <span className="w-full truncate text-[9px] font-bold text-slate-700">{t('allCategories')}</span>
               </button>
 
-              {categoriesTree.map((cat) => {
+              {categoryOptions.map((cat) => {
                 const isActive = selectedCategoryId === cat.id;
-                const CategoryIcon = getCategoryIcon(cat.name);
                 return (
                   <button
                     key={cat.id}
                     onClick={() => setSelectedCategoryId(cat.id)}
-                    className="flex w-[68px] shrink-0 snap-start flex-col items-center gap-1.5 text-center"
+                    title={cat.name}
+                    className="flex w-[58px] shrink-0 snap-start flex-col items-center gap-1 text-center"
                   >
-                    <span className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-white to-slate-200 text-slate-800 shadow-[0_4px_0_#cbd5e1,0_7px_12px_rgba(15,23,42,0.12)] ring-1 ring-slate-300 transition-transform ${isActive ? '-translate-y-0.5 ring-2 ring-amber-500' : ''}`}>
-                      <CategoryIcon className="h-6 w-6 drop-shadow-sm" strokeWidth={2.2} />
+                    <span className={`flex h-11 w-11 items-center justify-center rounded-[17px] bg-gradient-to-br from-sky-200 to-sky-400 text-[27px] shadow-[0_3px_0_#5b9ab4,0_5px_9px_rgba(15,23,42,0.12)] ring-1 ring-white/70 transition-transform ${isActive ? '-translate-y-0.5 ring-2 ring-slate-800/40' : ''}`}>
+                      <span className="drop-shadow-[0_2px_1px_rgba(0,0,0,0.2)]">{getCategoryIllustration(cat.name)}</span>
                     </span>
-                    <span className="w-full truncate text-[10px] font-bold text-slate-700">{cat.name}</span>
+                    <span className="w-full truncate text-[9px] font-bold text-slate-700">{cat.name}</span>
                   </button>
                 );
               })}
             </div>
 
             {/* Компактный единый фильтр доставки */}
-            <div className="flex max-w-full items-center gap-1 overflow-x-auto pb-1 scrollbar-none text-[10px] sm:text-xs font-semibold">
+            <div className="flex max-w-full items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none text-[10px] sm:text-xs font-semibold">
               <button
                 onClick={() => setDeliveryFilter('all')}
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
-                Все товары
+                {t('allProducts')}
               </button>
               <button
                 onClick={() => setDeliveryFilter('order')}
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'order' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
-                Доставка 18–30 дней
+                {t('delivery18to30')}
               </button>
               <button
                 onClick={() => setDeliveryFilter('stock')}
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'stock' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
-                В наличии · 1 день
+                {t('inStockOneDay')}
               </button>
             </div>
 
             {/* ПАНЕЛЬ СОРТИРОВКИ МАРКЕТПЛЕЙСА (ТРЕБОВАНИЕ 7) */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 pb-1 border-b border-slate-200">
-              <div className="text-xs text-slate-500 font-medium flex items-center gap-1.5">
-                <span>Найдено товаров:</span>
+            <div className="flex items-center justify-between gap-2 pt-1 pb-1 border-b border-slate-200">
+              <div className="text-[11px] sm:text-xs text-slate-500 font-medium flex items-center gap-1.5">
+                <span>{t('foundProducts')}</span>
                 <span className="font-bold text-slate-900 font-mono">{filteredProducts.length}</span>
               </div>
 
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
-                <span className="text-[11px] font-bold text-slate-400 shrink-0">Сортировка:</span>
-                <div className="inline-flex p-1 bg-slate-200/70 rounded-xl text-xs font-bold gap-1">
-                  <button
-                    onClick={() => setSortBy('popular')}
-                    className={`px-2.5 py-1 rounded-lg transition-all text-[11px] whitespace-nowrap cursor-pointer ${
-                      sortBy === 'popular'
-                        ? 'bg-black text-amber-400 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    🔥 Сначала популярные
-                  </button>
-                  <button
-                    onClick={() => setSortBy('price_asc')}
-                    className={`px-2.5 py-1 rounded-lg transition-all text-[11px] whitespace-nowrap cursor-pointer ${
-                      sortBy === 'price_asc'
-                        ? 'bg-black text-amber-400 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Сначала дешевые
-                  </button>
-                  <button
-                    onClick={() => setSortBy('price_desc')}
-                    className={`px-2.5 py-1 rounded-lg transition-all text-[11px] whitespace-nowrap cursor-pointer ${
-                      sortBy === 'price_desc'
-                        ? 'bg-black text-amber-400 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Сначала дорогие
-                  </button>
-                  <button
-                    onClick={() => setSortBy('newest')}
-                    className={`px-2.5 py-1 rounded-lg transition-all text-[11px] whitespace-nowrap cursor-pointer ${
-                      sortBy === 'newest'
-                        ? 'bg-black text-amber-400 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Сначала новые
-                  </button>
-                </div>
+              <div className="relative flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 shadow-sm">
+                <SlidersHorizontal className="h-3.5 w-3.5 text-slate-500" />
+                <select
+                  aria-label={t('sortProducts')}
+                  value={sortBy}
+                  onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
+                  className="max-w-[155px] appearance-none bg-transparent pr-4 text-[10px] sm:text-xs font-semibold text-slate-700 outline-none"
+                >
+                  <option value="price_asc">{t('cheapest')}</option>
+                  <option value="price_desc">{t('expensive')}</option>
+                  <option value="newest">{t('newest')}</option>
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 h-3 w-3 text-slate-500" />
               </div>
             </div>
 
             {/* СЕТКА ТОВАРОВ: 2 КОЛОНКИ НА СМАРТФОНАХ (ЧЕТКО И КРАСИВО) */}
             <section>
               {isLoading ? (
-                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
+                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-6">
                   {[...Array(6)].map((_, i) => (
                     <div key={i} className="bg-white rounded-2xl p-3 border border-slate-200 animate-pulse space-y-3">
                       <div className="aspect-square bg-slate-200 rounded-xl" />
@@ -498,10 +496,10 @@ export default function App() {
                 <div className="bg-white border border-slate-200 rounded-3xl p-8 sm:p-12 text-center space-y-3 shadow-xs max-w-lg mx-auto my-6">
                   <Package className="w-10 h-10 text-amber-500 mx-auto" />
                   <h3 className="text-sm sm:text-base font-bold text-slate-900">
-                    Товары не найдены
+                    {t('noProducts')}
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Попробуйте изменить поисковый запрос или выберите другую категорию.
+                    {t('changeSearch')}
                   </p>
                   <button
                     onClick={() => {
@@ -510,7 +508,7 @@ export default function App() {
                     }}
                     className="mt-2 px-4 py-2 bg-black text-amber-400 rounded-xl text-xs font-bold hover:bg-zinc-800 transition-colors"
                   >
-                    Показать весь каталог
+                    {t('showCatalog')}
                   </button>
                 </div>
               ) : (
@@ -571,10 +569,10 @@ export default function App() {
         <button
           type="button"
           onClick={() => setIsCartOpen(true)}
-          aria-label={`Открыть корзину, товаров: ${totalCartCount}`}
+          aria-label={`${t('cart')}: ${totalCartCount}`}
           className="fixed bottom-6 right-6 z-40 hidden h-12 w-12 items-center justify-center rounded-full bg-[#f4c542] text-slate-950 shadow-xl ring-1 ring-black/10 transition hover:scale-105 active:scale-95 md:flex"
         >
-          <ShoppingBag className="h-5 w-5" />
+          <ShoppingBasket className="h-5 w-5" />
           {totalCartCount > 0 && (
             <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-900 px-1 text-[10px] font-bold text-white">
               {totalCartCount}
@@ -592,7 +590,7 @@ export default function App() {
           className={`flex flex-col items-center gap-1 ${currentView === 'catalog' ? 'text-amber-400' : 'text-zinc-400'}`}
         >
           <Home className="w-4 h-4" />
-          <span className="text-[10px] font-bold">Каталог</span>
+          <span className="text-[10px] font-bold">{t('catalog')}</span>
         </button>
 
         <button
@@ -604,7 +602,7 @@ export default function App() {
           className="flex flex-col items-center gap-1 text-zinc-400"
         >
           <Search className="w-4 h-4" />
-          <span className="text-[10px] font-bold">Поиск</span>
+          <span className="text-[10px] font-bold">{t('search')}</span>
         </button>
 
         <a
@@ -614,7 +612,7 @@ export default function App() {
           className="flex flex-col items-center gap-1 text-emerald-400"
         >
           <MessageCircle className="w-4 h-4" />
-          <span className="text-[10px] font-bold">WhatsApp</span>
+          <span className="text-[10px] font-bold">{t('whatsapp')}</span>
         </a>
 
         <button
@@ -622,14 +620,14 @@ export default function App() {
           className="relative flex flex-col items-center gap-1 text-amber-400 font-bold"
         >
           <div className="relative">
-            <ShoppingBag className="w-4 h-4" />
+            <ShoppingBasket className="w-4 h-4" />
             {totalCartCount > 0 && (
               <span className="absolute -top-1.5 -right-2 bg-amber-400 text-black text-[9px] font-black w-4 h-4 rounded-full flex items-center justify-center">
                 {totalCartCount}
               </span>
             )}
           </div>
-          <span className="text-[10px] font-bold">Корзина</span>
+          <span className="text-[10px] font-bold">{t('cart')}</span>
         </button>
       </div>
 
@@ -656,7 +654,7 @@ export default function App() {
               onClick={() => setCurrentView('rules')} 
               className="hover:text-amber-400 transition-colors"
             >
-              Правила сервиса
+              {t('rules')}
             </button>
             <a 
               href="https://instagram.com/MSavdo.tj" 

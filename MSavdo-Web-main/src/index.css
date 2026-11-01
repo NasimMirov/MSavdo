@@ -1,1 +1,112 @@
 @import "tailwindcss";
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  background: #000;
+}
+
+html[data-theme="dark"] body {
+  background: #000;
+  color: #f3f4f6;
+}
+
+html[data-theme="dark"] .min-h-screen.bg-slate-50 {
+  background-color: #000 !important;
+}
+
+html[data-theme="dark"] .bg-slate-50,
+html[data-theme="dark"] .bg-slate-100 {
+  background-color: #111 !important;
+}
+
+html[data-theme="dark"] .bg-slate-200 {
+  background-color: #242424 !important;
+}
+
+html[data-theme="dark"] .bg-white,
+html[data-theme="dark"] [class*="bg-white/"] {
+  background-color: #171717 !important;
+}
+
+html[data-theme="dark"] .bg-slate-900 {
+  background-color: #050505 !important;
+}
+
+html[data-theme="dark"] .bg-emerald-50,
+html[data-theme="dark"] .bg-emerald-100,
+html[data-theme="dark"] [class*="bg-emerald-50/"] {
+  background-color: #052e24 !important;
+}
+
+html[data-theme="dark"] .bg-amber-50,
+html[data-theme="dark"] .bg-amber-100,
+html[data-theme="dark"] [class*="bg-amber-50/"] {
+  background-color: #302407 !important;
+}
+
+html[data-theme="dark"] .bg-red-50,
+html[data-theme="dark"] .bg-red-100 {
+  background-color: #3a1111 !important;
+}
+
+html[data-theme="dark"] .text-slate-900,
+html[data-theme="dark"] .text-slate-800,
+html[data-theme="dark"] .text-slate-700 {
+  color: #f3f4f6 !important;
+}
+
+html[data-theme="dark"] .text-slate-600 {
+  color: #d1d5db !important;
+}
+
+html[data-theme="dark"] .text-slate-500,
+html[data-theme="dark"] .text-slate-400 {
+  color: #9ca3af !important;
+}
+
+html[data-theme="dark"] .text-emerald-600,
+html[data-theme="dark"] .text-emerald-700,
+html[data-theme="dark"] .text-emerald-800 {
+  color: #6ee7b7 !important;
+}
+
+html[data-theme="dark"] .text-amber-600,
+html[data-theme="dark"] .text-amber-700,
+html[data-theme="dark"] .text-amber-800 {
+  color: #fcd34d !important;
+}
+
+html[data-theme="dark"] .text-red-700,
+html[data-theme="dark"] .text-red-800,
+html[data-theme="dark"] .text-red-900 {
+  color: #fca5a5 !important;
+}
+
+html[data-theme="dark"] .border-slate-100,
+html[data-theme="dark"] .border-slate-200,
+html[data-theme="dark"] .border-slate-300,
+html[data-theme="dark"] [class*="border-slate-200/"] {
+  border-color: #333 !important;
+}
+
+html[data-theme="dark"] .divide-slate-100 > :not(:first-child) {
+  border-color: #333 !important;
+}
+
+html[data-theme="dark"] input:not([type="checkbox"]):not([type="radio"]),
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select {
+  background-color: #171717;
+  color: #f3f4f6;
+  border-color: #3f3f46;
+}
+
+html[data-theme="dark"] input::placeholder,
+html[data-theme="dark"] textarea::placeholder {
+  color: #9ca3af;
+}
+
+html[data-theme="dark"] option {
+  background: #171717;
+  color: #f3f4f6;
+}

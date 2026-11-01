@@ -1,5 +1,6 @@
 import React from 'react';
-import { AlertTriangle, ArrowLeft, CheckCircle2, ShieldCheck, ShoppingBag } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, CheckCircle2, ShieldCheck, ShoppingBasket } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 interface RulesViewProps {
   onBack: () => void;
@@ -7,6 +8,7 @@ interface RulesViewProps {
 }
 
 export const RulesView: React.FC<RulesViewProps> = ({ onBack, onOpenCart }) => {
+  const { t } = useI18n();
   return (
     <div className="max-w-4xl mx-auto py-4">
       <div className="mb-6 flex items-center justify-between">
@@ -15,7 +17,7 @@ export const RulesView: React.FC<RulesViewProps> = ({ onBack, onOpenCart }) => {
           className="inline-flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-emerald-700 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Вернуться в каталог</span>
+          <span>{t('backToCatalog')}</span>
         </button>
 
         {onOpenCart && (
@@ -23,8 +25,8 @@ export const RulesView: React.FC<RulesViewProps> = ({ onBack, onOpenCart }) => {
             onClick={onOpenCart}
             className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-emerald-50 text-emerald-700 font-semibold rounded-lg text-xs hover:bg-emerald-100 transition-colors"
           >
-            <ShoppingBag className="w-4 h-4" />
-            <span>Перейти в корзину</span>
+            <ShoppingBasket className="w-4 h-4" />
+            <span>{t('goToCart')}</span>
           </button>
         )}
       </div>

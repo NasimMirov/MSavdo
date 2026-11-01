@@ -1430,7 +1430,6 @@ app.get('/api/products', (req, res) => {
     let query = `
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, 
              p.main_image, p.images, p.video_url, p.youtube_url, p.specifications, p.created_at,
-             COALESCE(p.views_count, 0) as views_count,
              c.name as category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
@@ -1450,12 +1449,7 @@ app.get('/api/products', (req, res) => {
       params.push(catId, catId);
     }
 
-    // Сортировка на уровне SQL
-    if (sort === 'popular') {
-      query += ' ORDER BY p.views_count DESC, p.id DESC';
-    } else {
-      query += ' ORDER BY p.id DESC';
-    }
+    query += ' ORDER BY p.id DESC';
 
     const products = db.prepare(query).all(...params) as any[];
 
@@ -1517,7 +1511,6 @@ app.get('/api/products', (req, res) => {
         delivery_type: p.delivery_type || 'order',
         youtube_url: p.youtube_url || p.video_url || '',
         video_url: p.youtube_url || p.video_url || '',
-        views_count: p.views_count || 0,
         min_price_tjs: minPrice,
         max_price_tjs: maxPrice,
         specifications: parsedSpecs,
@@ -1530,8 +1523,6 @@ app.get('/api/products', (req, res) => {
       enriched.sort((a, b) => (a.min_price_tjs || 0) - (b.min_price_tjs || 0));
     } else if (sort === 'price_desc') {
       enriched.sort((a, b) => (b.min_price_tjs || 0) - (a.min_price_tjs || 0));
-    } else if (sort === 'popular') {
-      enriched.sort((a, b) => (b.views_count || 0) - (a.views_count || 0));
     }
 
     return res.json({ products: enriched });
@@ -1645,138 +1636,6 @@ app.get('/api/products/:id/related', (req, res) => {
   }
 });
 
-const aiRelatedRateLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  limit: 5,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-});
-
-app.post('/api/products/:id/ai-related', aiRelatedRateLimiter, async (req, res) => {
-  const productId = Number(req.params.id);
-  if (!Number.isSafeInteger(productId) || productId <= 0) {
-    return res.status(400).json({ error: 'Некорректный ID товара' });
-  }
-  if (!aiClient) {
-    return res.status(503).json({ error: 'Поиск похожих товаров временно недоступен' });
-  }
-
-  const currentProduct = db.prepare(`
-    SELECT p.id, p.title, p.description, p.specifications, c.name AS category_name
-    FROM products p
-    LEFT JOIN categories c ON c.id = p.category_id
-    WHERE p.id = ? AND p.status = 'active'
-  `).get(productId) as {
-    id: number;
-    title: string;
-    description: string;
-    specifications: string | null;
-    category_name: string | null;
-  } | undefined;
-  if (!currentProduct) {
-    return res.status(404).json({ error: 'Товар не найден' });
-  }
-
-  const candidates = db.prepare(`
-    SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status,
-           p.delivery_type, p.main_image, p.images, p.video_url, p.youtube_url,
-           p.specifications, c.name AS category_name,
-           COALESCE((
-             SELECT MIN(v.price_tjs)
-             FROM product_variants v
-             WHERE v.product_id = p.id AND v.price_tjs > 0
-           ), 0) AS min_price_tjs
-    FROM products p
-    LEFT JOIN categories c ON c.id = p.category_id
-    WHERE p.status = 'active' AND p.id != ?
-    ORDER BY CASE WHEN p.category_id = (
-      SELECT category_id FROM products WHERE id = ?
-    ) THEN 0 ELSE 1 END, p.id DESC
-    LIMIT 60
-  `).all(productId, productId) as Array<{
-    id: number;
-    title: string;
-    description: string;
-    category_name: string | null;
-    specifications: string | null;
-    [key: string]: any;
-  }>;
-  if (candidates.length === 0) return res.json({ products: [] });
-
-  const prompt = `Найди до 4 товаров каталога, наиболее похожих на исходный товар по назначению, типу, материалам и характеристикам. Верни только JSON вида {"product_ids":[числовые ID]}.
-Не выбирай исходный товар. Выбирай только ID из списка кандидатов.
-Исходный товар: ${JSON.stringify({
-    title: currentProduct.title,
-    description: currentProduct.description?.slice(0, 500) || '',
-    category: currentProduct.category_name || '',
-    specifications: currentProduct.specifications?.slice(0, 500) || '',
-  })}
-Кандидаты: ${JSON.stringify(candidates.map((candidate) => ({
-    id: candidate.id,
-    title: candidate.title,
-    description: candidate.description?.slice(0, 240) || '',
-    category: candidate.category_name || '',
-    specifications: candidate.specifications?.slice(0, 240) || '',
-  })))}`;
-
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const response = await Promise.race([
-      aiClient.models.generateContent({
-        model: GEMINI_IMPORT_MODEL,
-        contents: prompt,
-        config: { responseMimeType: 'application/json' },
-      }),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('AI-поиск похожих товаров превысил время ожидания')), 8000);
-      }),
-    ]);
-    const result = JSON.parse(response.text?.trim() || '{}') as { product_ids?: unknown[] };
-    const candidateIds = new Set(candidates.map((candidate) => candidate.id));
-    const selectedIds = Array.isArray(result.product_ids)
-      ? [...new Set(result.product_ids.map(Number).filter((id) => Number.isSafeInteger(id) && candidateIds.has(id)))].slice(0, 4)
-      : [];
-    if (selectedIds.length === 0) return res.json({ products: [] });
-
-    const getSelectedProduct = db.prepare(`
-      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status,
-             p.delivery_type, p.main_image, p.images, p.video_url, p.youtube_url,
-             c.name AS category_name,
-             COALESCE((
-               SELECT MIN(v.price_tjs)
-               FROM product_variants v
-               WHERE v.product_id = p.id AND v.price_tjs > 0
-             ), 0) AS min_price_tjs
-      FROM products p
-      LEFT JOIN categories c ON c.id = p.category_id
-      WHERE p.id = ? AND p.status = 'active'
-    `);
-    const getVariants = db.prepare(`
-      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
-      FROM product_variants
-      WHERE product_id = ?
-      ORDER BY id ASC
-    `);
-    const products = selectedIds.flatMap((id) => {
-      const selected = getSelectedProduct.get(id) as Record<string, any> | undefined;
-      if (!selected) return [];
-      return [{
-        ...selected,
-        variants: getVariants.all(id),
-        delivery_type: selected.delivery_type || 'order',
-        youtube_url: selected.youtube_url || selected.video_url || '',
-        video_url: selected.youtube_url || selected.video_url || '',
-      }];
-    });
-    return res.json({ products });
-  } catch (error) {
-    console.error('[AI Related Products Error]', error);
-    return res.status(502).json({ error: 'Не удалось найти похожие товары. Попробуйте позже.' });
-  } finally {
-    if (timeoutId) clearTimeout(timeoutId);
-  }
-});
-
 // Увеличение счетчика просмотров товара
 app.post('/api/products/:id/view', (req, res) => {
   try {
@@ -1784,8 +1643,7 @@ app.post('/api/products/:id/view', (req, res) => {
     if (!id) return res.status(400).json({ error: 'Некорректный ID' });
 
     db.prepare('UPDATE products SET views_count = COALESCE(views_count, 0) + 1 WHERE id = ?').run(id);
-    const row = db.prepare('SELECT views_count FROM products WHERE id = ?').get(id) as { views_count: number } | undefined;
-    return res.json({ success: true, views_count: row?.views_count || 1 });
+    return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

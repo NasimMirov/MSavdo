@@ -1,0 +1,293 @@
+import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+
+export type AppLanguage = 'ru' | 'tg' | 'en';
+export type AppTheme = 'light' | 'dark';
+
+const translations = {
+  ru: {
+    searchProducts: 'Поиск товаров',
+    allCategories: 'Все',
+    allProducts: 'Все товары',
+    delivery18to30: 'Доставка 18–30 дней',
+    inStockOneDay: 'В наличии · 1 день',
+    foundProducts: 'Найдено товаров:',
+    sortProducts: 'Сортировка товаров',
+    popular: 'Популярные',
+    cheapest: 'Сначала дешевле',
+    expensive: 'Сначала дороже',
+    newest: 'Сначала новые',
+    noProducts: 'Товары не найдены',
+    changeSearch: 'Попробуйте изменить поисковый запрос или выберите другую категорию.',
+    showCatalog: 'Показать весь каталог',
+    catalog: 'Каталог',
+    search: 'Поиск',
+    whatsapp: 'WhatsApp',
+    cart: 'Корзина',
+    cartTitle: 'Корзина покупок',
+    cartEmpty: 'В корзине пока пусто',
+    cartEmptyHint: 'Выберите товар в каталоге, укажите нужный цвет и размер.',
+    totalToPay: 'Итого к оплате:',
+    checkoutWhatsApp: 'Оформить заказ в WhatsApp',
+    backToCatalog: 'Вернуться в каталог',
+    goToCart: 'Перейти в корзину',
+    chooseProduct: 'Выбрать',
+    color: 'Цвет:',
+    size: 'Размер:',
+    originalCollection: 'Оригинальная коллекция',
+    inSomoni: 'в сомони',
+    clearSearch: 'Очистить поиск',
+    modificationSku: 'Артикул модификации:',
+    noPhoto: 'Нет фото',
+    similarProducts: 'Похожие товары',
+    rules: 'Правила сервиса',
+    close: 'Закрыть',
+    selectedColor: 'Цвет:',
+    selectedSize: 'Размер:',
+    finalPrice: 'Финальная стоимость:',
+    deliveryTime: 'Срок поставки:',
+    inStock: 'В наличии · 1 день',
+    orderNow: 'Заказать',
+    addToCart: 'Добавить в корзину',
+    addedToCart: 'Добавлено в корзину',
+    recommendations: 'Рекомендуем вам',
+    similarNotFound: 'Похожие товары пока не найдены.',
+    description: 'Описание',
+    photo: 'Фото',
+    videoReview: 'Видеообзор товара',
+    adminBack: 'Вернуться на сайт',
+    telegramLogin: 'Войти через Telegram',
+    telegramChecking: 'Проверка…',
+    telegramLoading: 'Загрузка…',
+    adminCatalog: 'Каталог',
+    adminOrders: 'Заказы',
+    adminAi: 'Тест ИИ',
+    adminSettings: 'Настройки',
+    logout: 'Выйти',
+    chromeExtension: 'Расширение Chrome',
+    pastePageCode: 'Вставить код страницы',
+    allStatuses: 'Все статусы',
+    active: 'Активные',
+    drafts: 'Черновики',
+    adminPopularity: 'По просмотрам',
+    sortBy: 'Сортировка:',
+    newestAdmin: 'Сначала новые товары',
+    titleAscending: 'По названию (А-Я)',
+    priceAscending: 'По цене (сначала дешевле)',
+    priceDescending: 'По цене (сначала дороже)',
+    variantCount: 'По числу вариантов SKU',
+    language: 'Язык',
+    lightTheme: 'Светлая тема',
+    darkTheme: 'Тёмная тема',
+  },
+  tg: {
+    searchProducts: 'Ҷустуҷӯи мол',
+    allCategories: 'Ҳама',
+    allProducts: 'Ҳамаи молҳо',
+    delivery18to30: 'Расонидан 18–30 рӯз',
+    inStockOneDay: 'Дар анбор · 1 рӯз',
+    foundProducts: 'Мол ёфт шуд:',
+    sortProducts: 'Мураттабсозии молҳо',
+    popular: 'Машҳур',
+    cheapest: 'Аввал арзон',
+    expensive: 'Аввал гарон',
+    newest: 'Аввал нав',
+    noProducts: 'Мол ёфт нашуд',
+    changeSearch: 'Дархости ҷустуҷӯро тағйир диҳед ё гурӯҳи дигарро интихоб кунед.',
+    showCatalog: 'Намоиши ҳамаи молҳо',
+    catalog: 'Каталог',
+    search: 'Ҷустуҷӯ',
+    whatsapp: 'WhatsApp',
+    cart: 'Сабад',
+    cartTitle: 'Сабади харид',
+    cartEmpty: 'Сабад ҳоло холӣ аст',
+    cartEmptyHint: 'Аз каталог молро интихоб карда, ранг ва андозаи лозимиро нишон диҳед.',
+    totalToPay: 'Ҳамагӣ барои пардохт:',
+    checkoutWhatsApp: 'Фармоиш тавассути WhatsApp',
+    backToCatalog: 'Бозгашт ба каталог',
+    goToCart: 'Ба сабад гузаштан',
+    chooseProduct: 'Интихоб',
+    color: 'Ранг:',
+    size: 'Андоза:',
+    originalCollection: 'Маҷмӯаи аслӣ',
+    inSomoni: 'бо сомонӣ',
+    clearSearch: 'Пок кардани ҷустуҷӯ',
+    modificationSku: 'Рамзи тағйирот:',
+    noPhoto: 'Акс нест',
+    similarProducts: 'Молҳои монанд',
+    rules: 'Қоидаҳои хизматрасонӣ',
+    close: 'Пӯшидан',
+    selectedColor: 'Ранг:',
+    selectedSize: 'Андоза:',
+    finalPrice: 'Нархи ниҳоӣ:',
+    deliveryTime: 'Муҳлати расонидан:',
+    inStock: 'Дар анбор · 1 рӯз',
+    orderNow: 'Фармоиш',
+    addToCart: 'Ба сабад илова кардан',
+    addedToCart: 'Ба сабад илова шуд',
+    recommendations: 'Барои шумо тавсия медиҳем',
+    similarNotFound: 'Моли монанд ҳоло ёфт нашуд.',
+    description: 'Тавсиф',
+    photo: 'Акс',
+    videoReview: 'Шарҳи видеоии мол',
+    adminBack: 'Бозгашт ба сомона',
+    telegramLogin: 'Воридшавӣ бо Telegram',
+    telegramChecking: 'Санҷиш…',
+    telegramLoading: 'Боркунӣ…',
+    adminCatalog: 'Каталог',
+    adminOrders: 'Фармоишҳо',
+    adminAi: 'Санҷиши AI',
+    adminSettings: 'Танзимот',
+    logout: 'Баромадан',
+    chromeExtension: 'Васеъкунии Chrome',
+    pastePageCode: 'Гузоштани рамзи саҳифа',
+    allStatuses: 'Ҳамаи ҳолатҳо',
+    active: 'Фаъол',
+    drafts: 'Нусхаҳо',
+    adminPopularity: 'Аз рӯи боздид',
+    sortBy: 'Мураттабсозӣ:',
+    newestAdmin: 'Аввал молҳои нав',
+    titleAscending: 'Аз рӯи ном (А-Я)',
+    priceAscending: 'Аз рӯи нарх (аввал арзон)',
+    priceDescending: 'Аз рӯи нарх (аввал гарон)',
+    variantCount: 'Аз рӯи шумораи вариантҳо',
+    language: 'Забон',
+    lightTheme: 'Намуди равшан',
+    darkTheme: 'Намуди торик',
+  },
+  en: {
+    searchProducts: 'Search products',
+    allCategories: 'All',
+    allProducts: 'All products',
+    delivery18to30: 'Delivery 18–30 days',
+    inStockOneDay: 'In stock · 1 day',
+    foundProducts: 'Products found:',
+    sortProducts: 'Sort products',
+    popular: 'Popular',
+    cheapest: 'Price: low to high',
+    expensive: 'Price: high to low',
+    newest: 'Newest first',
+    noProducts: 'No products found',
+    changeSearch: 'Try another search or choose a different category.',
+    showCatalog: 'Show all products',
+    catalog: 'Catalog',
+    search: 'Search',
+    whatsapp: 'WhatsApp',
+    cart: 'Cart',
+    cartTitle: 'Shopping cart',
+    cartEmpty: 'Your cart is empty',
+    cartEmptyHint: 'Choose a product and select the color and size you need.',
+    totalToPay: 'Total:',
+    checkoutWhatsApp: 'Place order in WhatsApp',
+    backToCatalog: 'Back to catalog',
+    goToCart: 'Go to cart',
+    chooseProduct: 'Select',
+    color: 'Color:',
+    size: 'Size:',
+    originalCollection: 'Original collection',
+    inSomoni: 'in somoni',
+    clearSearch: 'Clear search',
+    modificationSku: 'Variant SKU:',
+    noPhoto: 'No photo',
+    similarProducts: 'Similar products',
+    rules: 'Service rules',
+    close: 'Close',
+    selectedColor: 'Color:',
+    selectedSize: 'Size:',
+    finalPrice: 'Final price:',
+    deliveryTime: 'Delivery time:',
+    inStock: 'In stock · 1 day',
+    orderNow: 'Order now',
+    addToCart: 'Add to cart',
+    addedToCart: 'Added to cart',
+    recommendations: 'Recommended for you',
+    similarNotFound: 'No similar products found yet.',
+    description: 'Description',
+    photo: 'Photos',
+    videoReview: 'Product video',
+    adminBack: 'Back to shop',
+    telegramLogin: 'Sign in with Telegram',
+    telegramChecking: 'Checking…',
+    telegramLoading: 'Loading…',
+    adminCatalog: 'Catalog',
+    adminOrders: 'Orders',
+    adminAi: 'AI tools',
+    adminSettings: 'Settings',
+    logout: 'Sign out',
+    chromeExtension: 'Chrome extension',
+    pastePageCode: 'Paste page code',
+    allStatuses: 'All statuses',
+    active: 'Active',
+    drafts: 'Drafts',
+    adminPopularity: 'Most viewed',
+    sortBy: 'Sort by:',
+    newestAdmin: 'Newest products',
+    titleAscending: 'Title (A–Z)',
+    priceAscending: 'Price (low to high)',
+    priceDescending: 'Price (high to low)',
+    variantCount: 'Number of variants',
+    language: 'Language',
+    lightTheme: 'Light theme',
+    darkTheme: 'Dark theme',
+  },
+} as const;
+
+type TranslationKey = keyof typeof translations.ru;
+
+interface I18nContextValue {
+  language: AppLanguage;
+  setLanguage: (language: AppLanguage) => void;
+  theme: AppTheme;
+  toggleTheme: () => void;
+  t: (key: TranslationKey) => string;
+}
+
+const I18nContext = createContext<I18nContextValue | null>(null);
+
+function getStoredLanguage(): AppLanguage {
+  try {
+    const stored = localStorage.getItem('msavdo_language');
+    return stored === 'tg' || stored === 'en' ? stored : 'ru';
+  } catch {
+    return 'ru';
+  }
+}
+
+function getStoredTheme(): AppTheme {
+  try {
+    return localStorage.getItem('msavdo_theme') === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+  const [language, setLanguageState] = useState<AppLanguage>(getStoredLanguage);
+  const [theme, setThemeState] = useState<AppTheme>(getStoredTheme);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem('msavdo_language', language);
+      localStorage.setItem('msavdo_theme', theme);
+    } catch (error) {
+      console.warn('[Preferences] Could not persist display preferences', error);
+    }
+  }, [language, theme]);
+
+  const value = useMemo<I18nContextValue>(() => ({
+    language,
+    setLanguage: setLanguageState,
+    theme,
+    toggleTheme: () => setThemeState((current) => current === 'light' ? 'dark' : 'light'),
+    t: (key) => translations[language][key],
+  }), [language, theme]);
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+}
+
+export function useI18n() {
+  const context = useContext(I18nContext);
+  if (!context) throw new Error('useI18n must be used within I18nProvider');
+  return context;
+}

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { CartItem } from '../types';
-import { X, Trash2, Plus, Minus, Send, ShoppingBag, ShieldAlert, Check, Clock, Truck } from 'lucide-react';
+import { X, Trash2, Plus, Minus, Send, ShoppingBasket, ShieldAlert, Check, Clock, Truck } from 'lucide-react';
 import { apiFetch } from '../api';
+import { useI18n } from '../i18n';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -24,6 +25,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onOpenRules,
   whatsappPhone = '992444431',
 }) => {
+  const { t } = useI18n();
   const [agreedWithRules, setAgreedWithRules] = useState(false);
   const [showPreOrderModal, setShowPreOrderModal] = useState(false);
   const [customerName, setCustomerName] = useState('');
@@ -137,16 +139,16 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           {/* Заголовок корзины */}
           <div className="p-5 border-b border-slate-200 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ShoppingBag className="w-5 h-5 text-emerald-700" />
+              <ShoppingBasket className="w-5 h-5 text-emerald-700" />
               <h2 className="text-lg font-bold text-slate-900 font-heading">
-                Корзина покупок
+                {t('cartTitle')}
               </h2>
               <span className="text-xs text-slate-500 font-mono">({items.length})</span>
             </div>
             <button
               onClick={onClose}
               className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors"
-              aria-label="Закрыть корзину"
+              aria-label={t('close')}
             >
               <X className="w-5 h-5" />
             </button>
@@ -156,10 +158,10 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
             {items.length === 0 ? (
               <div className="py-20 text-center text-slate-400 space-y-3">
-                <ShoppingBag className="w-12 h-12 mx-auto text-slate-200" />
-                <p className="text-sm font-semibold text-slate-700">В корзине пока пусто</p>
+                <ShoppingBasket className="w-12 h-12 mx-auto text-slate-200" />
+                <p className="text-sm font-semibold text-slate-700">{t('cartEmpty')}</p>
                 <p className="text-xs text-slate-400 max-w-xs mx-auto">
-                  Выберите понравившийся товар в каталоге, укажите нужный цвет и размер.
+                  {t('cartEmptyHint')}
                 </p>
               </div>
             ) : (
@@ -183,13 +185,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       {/* Параметры варианта: Цвет и Размер */}
                       <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-1 font-medium">
                         {item.color && item.color !== 'Стандарт' && (
-                          <span className="text-slate-700">Цвет: <strong>{item.color}</strong></span>
+                          <span className="text-slate-700">{t('color')} <strong>{item.color}</strong></span>
                         )}
                         {item.color && item.color !== 'Стандарт' && item.size && item.size !== 'One Size' && (
                           <span className="text-slate-300">·</span>
                         )}
                         {item.size && item.size !== 'One Size' && (
-                          <span className="text-slate-700">Разм: <strong>{item.size}</strong></span>
+                          <span className="text-slate-700">{t('size')} <strong>{item.size}</strong></span>
                         )}
                       </div>
 
@@ -243,7 +245,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           {items.length > 0 && (
             <div className="p-5 border-t border-slate-200 bg-slate-50/80 space-y-4">
               <div className="flex items-center justify-between text-base font-bold text-slate-900">
-                <span>Итого к оплате:</span>
+                <span>{t('totalToPay')}</span>
                 <span className="text-2xl font-mono text-emerald-800">{totalSum} TJS</span>
               </div>
 
@@ -297,7 +299,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 }`}
               >
                 <Send className="w-4 h-4" />
-                <span>Оформить заказ в WhatsApp</span>
+                <span>{t('checkoutWhatsApp')}</span>
               </button>
 
               <div className="flex justify-between items-center text-[10px] text-slate-400">
