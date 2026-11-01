@@ -1343,16 +1343,21 @@ app.post('/api/admin/telegram-auth/login', checkTelegramLoginIpBlock, telegramLo
     }
     const idToken = req.body?.id_token;
     const nonceCookie = getCookieValue(req, ADMIN_TELEGRAM_NONCE_COOKIE);
-    if (typeof idToken !== 'string' || idToken.length > 10000 || !nonceCookie) {
+    const requestNonce = req.body?.nonce;
+    const expectedNonce = typeof requestNonce === 'string' ? requestNonce : nonceCookie;
+    if (typeof idToken !== 'string' || idToken.length > 10000) {
+      return res.status(400).json({ error: 'Telegram не вернул токен входа. Обновите страницу и попробуйте снова.' });
+    }
+    if (typeof expectedNonce !== 'string' || !expectedNonce || expectedNonce.length > 256) {
       return res.status(400).json({ error: 'Не удалось проверить ответ Telegram. Обновите страницу и попробуйте снова.' });
     }
-    const claims = await verifyTelegramIdToken(idToken, nonceCookie);
+    const claims = await verifyTelegramIdToken(idToken, expectedNonce);
     if (!claims) {
       return res.status(401).json({ error: 'Подпись или срок действия ответа Telegram недействительны' });
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const nonceHash = crypto.createHash('sha256').update(nonceCookie).digest('hex');
+    const nonceHash = crypto.createHash('sha256').update(expectedNonce).digest('hex');
     const consumedNonce = db.prepare(
       'DELETE FROM admin_telegram_nonces WHERE nonce_hash = ? AND expires_at > ?',
     ).run(nonceHash, now);

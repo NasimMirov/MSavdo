@@ -89,6 +89,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [loginError, setLoginError] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isTelegramLoginReady, setIsTelegramLoginReady] = useState(false);
+  const [telegramLoginNonce, setTelegramLoginNonce] = useState('');
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
@@ -156,13 +157,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     };
   }, []);
 
-  const completeTelegramLogin = useCallback(async (result: TelegramLoginResult) => {
+  const completeTelegramLogin = useCallback(async (result: TelegramLoginResult, nonce: string) => {
     if (result.error) {
       setLoginError('Вход через Telegram отменён или не выполнен. Попробуйте ещё раз.');
       return;
     }
     if (!result.id_token) {
       setLoginError('Telegram не вернул подтверждение входа. Попробуйте ещё раз.');
+      return;
+    }
+    if (!nonce) {
+      setLoginError('Сессия входа истекла. Обновите страницу и попробуйте снова.');
       return;
     }
 
@@ -172,7 +177,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const response = await apiFetch('/api/admin/telegram-auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id_token: result.id_token }),
+        body: JSON.stringify({ id_token: result.id_token, nonce }),
       });
       const data = await response.json();
       if (response.ok && data.success) {
@@ -197,7 +202,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const response = await apiFetch('/api/admin/telegram-auth/config', { method: 'POST' });
         const config = await response.json() as TelegramLoginConfig & { error?: string };
         if (!response.ok) throw new Error(config.error || 'Не удалось настроить вход через Telegram');
+        if (typeof config.nonce !== 'string' || !config.nonce) {
+          throw new Error('Сервер не создал сессию входа. Обновите страницу и попробуйте снова.');
+        }
         if (!active) return;
+        setTelegramLoginNonce(config.nonce);
 
         script = document.createElement('script');
         script.src = 'https://oauth.telegram.org/js/telegram-login.js?3';
@@ -240,7 +249,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
     setLoginError('');
-    loginSdk.open(completeTelegramLogin);
+    loginSdk.open((result) => {
+      void completeTelegramLogin(result, telegramLoginNonce);
+    });
   };
 
   useEffect(() => {
