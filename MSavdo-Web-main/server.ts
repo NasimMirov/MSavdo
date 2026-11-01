@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases } from './src/utils/semanticAi.js';
+import { calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,6 +162,7 @@ db.exec(`
     price_tjs INTEGER NOT NULL,
     stock INTEGER DEFAULT 10,
     weight_kg REAL DEFAULT 0.5,
+    volume_m3 REAL NOT NULL DEFAULT 0,
     variant_sku TEXT UNIQUE NOT NULL,
     image_url TEXT,
     FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE
@@ -326,6 +328,40 @@ if (!ordersColumns.some((column) => column.name === 'total_amount_tjs')) {
   db.exec('ALTER TABLE orders ADD COLUMN total_amount_tjs REAL NOT NULL DEFAULT 0;');
 }
 db.exec('UPDATE orders SET total_amount_tjs = total_amount WHERE total_amount_tjs = 0 AND total_amount != 0;');
+const variantColumns = db.prepare('PRAGMA table_info(product_variants)').all() as Array<{ name: string }>;
+if (!variantColumns.some((column) => column.name === 'volume_m3')) {
+  db.exec('ALTER TABLE product_variants ADD COLUMN volume_m3 REAL NOT NULL DEFAULT 0;');
+}
+const variantsMissingVolume = db.prepare(`
+  SELECT v.id, p.specifications
+  FROM product_variants v
+  JOIN products p ON p.id = v.product_id
+  WHERE v.volume_m3 <= 0 AND p.specifications IS NOT NULL AND p.specifications != ''
+`).all() as Array<{ id: number; specifications: string }>;
+const updateVariantVolume = db.prepare('UPDATE product_variants SET volume_m3 = ? WHERE id = ?');
+for (const variant of variantsMissingVolume) {
+  const volumeM3 = extractShippingMetrics(parseSpecifications(variant.specifications)).volumeM3;
+  if (volumeM3 > 0) updateVariantVolume.run(volumeM3, variant.id);
+}
+const pricingFormulaVersion = db.prepare('SELECT value FROM settings WHERE key = ?').get('pricing_formula_version') as { value: string } | undefined;
+if (pricingFormulaVersion?.value !== '2') {
+  const variants = db.prepare('SELECT id, price_cny, weight_kg, volume_m3, price_tjs FROM product_variants').all() as Array<{
+    id: number;
+    price_cny: number;
+    weight_kg: number;
+    volume_m3: number;
+    price_tjs: number;
+  }>;
+  const updatePrice = db.prepare('UPDATE product_variants SET price_tjs = ? WHERE id = ?');
+  let migratedPriceCount = 0;
+  for (const variant of variants) {
+    if (variant.price_tjs !== calculateLegacyVariantPriceTjs(variant.price_cny, variant.weight_kg)) continue;
+    updatePrice.run(calculateVariantPriceTjs(variant.price_cny, variant.weight_kg, variant.volume_m3), variant.id);
+    migratedPriceCount++;
+  }
+  setSetting('pricing_formula_version', '2');
+  console.info(`[Pricing Migration] Обновлены цены по новой формуле: ${migratedPriceCount}`);
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS order_items (
@@ -750,25 +786,42 @@ if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('whatsapp_phone'
 // ==========================================
 // ЦЕНООБРАЗОВАНИЕ В TJS
 // ==========================================
-function calculateVariantPriceTjs(priceCny: number, weightKg: number = 0.5): number {
-  const numCny = Number.isFinite(Number(priceCny)) ? Number(priceCny) : 0;
-  const numWeight = Number.isFinite(Number(weightKg)) ? Number(weightKg) : 0.5;
-  const markup = numCny <= 20 ? 2.0 : numCny <= 100 ? 1.6 : 1.3;
-
-  return Math.round((numCny * 1.45 * markup) + (numWeight * 30));
+function parseSpecifications(value: unknown): Array<{ name: string; value: string }> {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter((item): item is { name: string; value: string } =>
+    Boolean(item && typeof item.name === 'string' && typeof item.value === 'string'),
+  );
 }
 
-const storedVariantsForRepricing = db.prepare(
-  'SELECT id, price_cny, weight_kg FROM product_variants'
-).all() as Array<{ id: number; price_cny: number; weight_kg: number }>;
-const updateStoredVariantPrice = db.prepare(
-  'UPDATE product_variants SET price_tjs = ? WHERE id = ?'
-);
-for (const variant of storedVariantsForRepricing) {
-  updateStoredVariantPrice.run(
-    calculateVariantPriceTjs(variant.price_cny, variant.weight_kg),
-    variant.id
-  );
+function calculateVariantPriceTjs(priceCny: number, weightKg: number = 0.5, volumeM3 = 0): number {
+  return calculatePriceTjs(Number(priceCny), Number(weightKg), Number(volumeM3));
+}
+
+function calculateLegacyVariantPriceTjs(priceCny: number, weightKg: number = 0.5): number {
+  const cny = Number.isFinite(Number(priceCny)) ? Number(priceCny) : 0;
+  const weight = Number.isFinite(Number(weightKg)) ? Number(weightKg) : 0.5;
+  const markup = cny <= 20 ? 2 : cny <= 100 ? 1.6 : 1.3;
+  return Math.round((cny * 1.45 * markup) + (weight * 30));
+}
+
+function hasValidOptionalRetailPrice(value: unknown): boolean {
+  if (value === undefined || value === null || value === '') return true;
+  const price = Number(value);
+  return Number.isSafeInteger(price) && price >= 0;
+}
+
+function resolveRetailPriceTjs(value: unknown, priceCny: number, weightKg: number, volumeM3 = 0): number {
+  return value === undefined || value === null || value === ''
+    ? calculateVariantPriceTjs(priceCny, weightKg, volumeM3)
+    : Number(value);
 }
 
 // Генератор короткого артикула: две буквы категории и четыре цифры.
@@ -933,6 +986,8 @@ interface ParsedVariant {
   price_cny: number;
   stock: number;
   weight_kg?: number;
+  volume_m3?: number;
+  price_tjs?: number;
   image_url?: string;
 }
 
@@ -2607,6 +2662,9 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
     }
+    if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
+      return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
+    }
 
     const cleanTitle = title.trim();
     let cleanDesc = (description || '').trim();
@@ -2665,20 +2723,23 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
 
     // Сохранение вариантов
     const insertVar = db.prepare(`
-      INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, variant_sku, image_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3, variant_sku, image_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const createdVars: any[] = [];
+    const productVolumeM3 = extractShippingMetrics(parseSpecifications(specifications)).volumeM3;
     if (Array.isArray(variants) && variants.length > 0) {
       for (const v of variants) {
         const vColor = (v.color || 'Основной цвет').trim();
         const vSize = (v.size || 'Стандарт').trim();
         const parsedWeight = Number(v.weight_kg);
         const vWeight = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 0.5;
+        const parsedVolume = Number(v.volume_m3);
+        const vVolume = Number.isFinite(parsedVolume) && parsedVolume > 0 ? parsedVolume : productVolumeM3;
         const parsedCny = Number(v.price_cny);
         const vCny = Number.isFinite(parsedCny) && parsedCny >= 0 ? parsedCny : 0;
-        const vTjs = calculateVariantPriceTjs(vCny, vWeight);
+        const vTjs = resolveRetailPriceTjs(v.price_tjs, vCny, vWeight, vVolume);
         const parsedStock = Number(v.stock);
         const vStock = Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 10;
         const vSku = typeof v.variant_sku === 'string' && v.variant_sku.trim()
@@ -2686,13 +2747,14 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
           : generateVariantSku(baseSku, vColor, vSize);
         const vImg = typeof v.image_url === 'string' ? v.image_url.trim() : mImage;
 
-        insertVar.run(productId, vColor, vSize, vCny, vTjs, vStock, vWeight, vSku, vImg);
+        insertVar.run(productId, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg);
         createdVars.push({
           color: vColor,
           size: vSize,
           price_tjs: vTjs,
           stock: vStock,
           weight_kg: vWeight,
+          volume_m3: vVolume,
           variant_sku: vSku,
           image_url: vImg,
         });
@@ -2702,7 +2764,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       const defaultWeightKg = 0.5;
       const defaultPriceTjs = calculateVariantPriceTjs(defaultPriceCny, defaultWeightKg);
       const defaultSku = generateVariantSku(baseSku, 'Основной', 'Стандарт');
-      insertVar.run(productId, 'Основной', 'Стандарт', defaultPriceCny, defaultPriceTjs, 15, defaultWeightKg, defaultSku, mImage);
+      insertVar.run(productId, 'Основной', 'Стандарт', defaultPriceCny, defaultPriceTjs, 15, defaultWeightKg, productVolumeM3, defaultSku, mImage);
       createdVars.push({
         color: 'Основной',
         size: 'Стандарт',
@@ -2757,6 +2819,9 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
     }
+    if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
+      return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
+    }
 
     const cleanTitle = title.trim();
     let cleanDesc = (description || '').trim();
@@ -2802,8 +2867,11 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     }
 
     // Получаем текущий базовый артикул
-    const existingProd = db.prepare('SELECT base_sku FROM products WHERE id = ?').get(id) as { base_sku: string } | undefined;
+    const existingProd = db.prepare('SELECT base_sku, specifications FROM products WHERE id = ?').get(id) as { base_sku: string; specifications: string | null } | undefined;
     const baseSku = existingProd ? existingProd.base_sku : generateBaseSku(categoryId);
+    const volumeFromSpecs = extractShippingMetrics(
+      parseSpecifications(cleanSpecs ?? existingProd?.specifications),
+    ).volumeM3;
 
     // Обновляем карточку товара
     db.prepare(`
@@ -2818,8 +2886,8 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(id);
 
       const insertVar = db.prepare(`
-        INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, variant_sku, image_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3, variant_sku, image_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const v of variants) {
@@ -2827,25 +2895,27 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
         const vSize = (v.size || 'Стандарт').trim();
         const parsedWeight = Number(v.weight_kg);
         const vWeight = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 0.5;
+        const parsedVolume = Number(v.volume_m3);
+        const vVolume = Number.isFinite(parsedVolume) && parsedVolume > 0 ? parsedVolume : volumeFromSpecs;
         const parsedCny = Number(v.price_cny);
         const vCny = Number.isFinite(parsedCny) && parsedCny >= 0 ? parsedCny : 0;
-        const vTjs = calculateVariantPriceTjs(vCny, vWeight);
+        const vTjs = resolveRetailPriceTjs(v.price_tjs, vCny, vWeight, vVolume);
         const parsedStock = Number(v.stock);
         const vStock = Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 10;
         const vSku = v.variant_sku || generateVariantSku(baseSku, vColor, vSize);
         const vImg = typeof v.image_url === 'string' ? v.image_url.trim() : mImage;
 
-        insertVar.run(id, vColor, vSize, vCny, vTjs, vStock, vWeight, vSku, vImg);
+        insertVar.run(id, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg);
       }
     } else if (default_weight_kg !== undefined && default_weight_kg !== null) {
       // Иначе если просто передан новый вес: пересчитываем существующие варианты
       const weightNum = parseFloat(default_weight_kg) || 0.5;
-      const currentVars = db.prepare('SELECT id, price_cny FROM product_variants WHERE product_id = ?').all(id) as Array<{ id: number; price_cny: number }>;
+      const currentVars = db.prepare('SELECT id, price_cny, volume_m3 FROM product_variants WHERE product_id = ?').all(id) as Array<{ id: number; price_cny: number; volume_m3: number }>;
 
-      const updateVar = db.prepare('UPDATE product_variants SET weight_kg = ?, price_tjs = ? WHERE id = ?');
+      const updateVar = db.prepare('UPDATE product_variants SET weight_kg = ?, volume_m3 = ?, price_tjs = ? WHERE id = ?');
       for (const v of currentVars) {
-        const newTjs = calculateVariantPriceTjs(v.price_cny, weightNum);
-        updateVar.run(weightNum, newTjs, v.id);
+        const newTjs = calculateVariantPriceTjs(v.price_cny, weightNum, volumeFromSpecs || v.volume_m3);
+        updateVar.run(weightNum, volumeFromSpecs || v.volume_m3, newTjs, v.id);
       }
     }
 
@@ -2865,21 +2935,30 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
 app.put('/api/admin/variants/:id', requireAdmin, (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { color, size, price_cny, weight_kg, stock, image_url } = req.body;
+    const { color, size, price_cny, price_tjs, weight_kg, volume_m3, stock, image_url } = req.body;
+
+    if (!hasValidOptionalRetailPrice(price_tjs)) {
+      return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
+    }
 
     const cnyNum = parseFloat(price_cny) || 0;
     const weightNum = parseFloat(weight_kg) || 0.5;
+    const currentVariant = db.prepare('SELECT volume_m3 FROM product_variants WHERE id = ?').get(id) as { volume_m3: number } | undefined;
+    const parsedVolume = Number(volume_m3);
+    const volumeNum = Number.isFinite(parsedVolume) && parsedVolume > 0
+      ? parsedVolume
+      : (currentVariant?.volume_m3 || 0);
     const stockNum = parseInt(stock, 10) || 0;
-    const finalTjs = calculateVariantPriceTjs(cnyNum, weightNum);
+    const finalTjs = resolveRetailPriceTjs(price_tjs, cnyNum, weightNum, volumeNum);
     const cleanImg = typeof image_url === 'string' ? image_url.trim() : '';
 
     db.prepare(`
       UPDATE product_variants
-      SET color = ?, size = ?, price_cny = ?, price_tjs = ?, weight_kg = ?, stock = ?, image_url = CASE WHEN ? != '' THEN ? ELSE image_url END
+      SET color = ?, size = ?, price_cny = ?, price_tjs = ?, weight_kg = ?, volume_m3 = ?, stock = ?, image_url = CASE WHEN ? != '' THEN ? ELSE image_url END
       WHERE id = ?
-    `).run(color, size, cnyNum, finalTjs, weightNum, stockNum, cleanImg, cleanImg, id);
+    `).run(color, size, cnyNum, finalTjs, weightNum, volumeNum, stockNum, cleanImg, cleanImg, id);
 
-    return res.json({ success: true, price_tjs: finalTjs });
+    return res.json({ success: true, price_tjs: finalTjs, volume_m3: volumeNum });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -3026,6 +3105,15 @@ app.post('/api/add-product', async (req, res) => {
       finalDesc = `${finalDesc.trim()}\n\nХарактеристики:\n${specsLines}`;
     }
 
+    const shippingMetrics = extractShippingMetrics(specificationsToProcess, fullRawText);
+    finalWeight = shippingMetrics.weightKg || normalizeWeightKg(finalWeight) || normalizeWeightKg(initialWeight) || 0.5;
+    const productVolumeM3 = shippingMetrics.volumeM3;
+    variantsToProcess = variantsToProcess.map((variant) => ({
+      ...variant,
+      weight_kg: normalizeWeightKg(variant.weight_kg) || finalWeight,
+      volume_m3: Number(variant.volume_m3) > 0 ? Number(variant.volume_m3) : productVolumeM3,
+    }));
+
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
     finalDesc = cleanBannedWordsAndPhrases(finalDesc);
 
@@ -3063,8 +3151,8 @@ app.post('/api/add-product', async (req, res) => {
 
     // Записываем варианты
     const varInsert = db.prepare(`
-      INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, variant_sku, image_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3, variant_sku, image_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const createdVariants: any[] = [];
@@ -3081,15 +3169,16 @@ app.post('/api/add-product', async (req, res) => {
 
     for (const v of variantsToProcess) {
       const vCny = parseFloat(v.price_cny as any) || baseCny;
-      const vWeight = parseFloat(v.weight_kg as any) || finalWeight;
-      const vPriceTjs = calculateVariantPriceTjs(vCny, vWeight);
+      const vWeight = normalizeWeightKg(v.weight_kg) || finalWeight;
+      const vVolume = Number(v.volume_m3) > 0 ? Number(v.volume_m3) : productVolumeM3;
+      const vPriceTjs = calculateVariantPriceTjs(vCny, vWeight, vVolume);
       const vColor = translateVariantName(v.color || 'Основной вариант');
       const vSize = translateVariantName(v.size || 'Стандарт');
       const vStock = parseInt(v.stock as any, 10) || 15;
       const vSku = generateVariantSku(baseSku, vColor, vSize);
       const vImg = v.image_url || mainImage;
 
-      varInsert.run(productId, vColor, vSize, vCny, vPriceTjs, vStock, vWeight, vSku, vImg);
+      varInsert.run(productId, vColor, vSize, vCny, vPriceTjs, vStock, vWeight, vVolume, vSku, vImg);
 
       createdVariants.push({
         color: vColor,
@@ -3099,6 +3188,7 @@ app.post('/api/add-product', async (req, res) => {
         variant_sku: vSku,
         stock: vStock,
         weight_kg: vWeight,
+        volume_m3: vVolume,
       });
     }
 
@@ -3115,6 +3205,8 @@ app.post('/api/add-product', async (req, res) => {
         category_name: finalCategory,
         status: importedProductStatus,
         weight_kg: finalWeight,
+        volume_m3: productVolumeM3,
+        estimated_shipping_tjs: calculatePriceTjs(0, finalWeight, productVolumeM3),
         delivery_type: finalDeliveryType,
         youtube_url: cleanYoutubeUrl,
         specifications: specificationsToProcess,
@@ -3194,6 +3286,23 @@ app.post('/api/parse-product-html', async (req, res) => {
       });
     }
 
+    const shippingMetrics = extractShippingMetrics(combinedSpecs, html_code);
+    const finalWeight = shippingMetrics.weightKg
+      || normalizeWeightKg(analysis.weight_kg)
+      || normalizeWeightKg(initialWeight)
+      || 0.5;
+    const productVolumeM3 = shippingMetrics.volumeM3;
+    finalVariants = finalVariants.map((variant) => {
+      const variantWeight = normalizeWeightKg(variant.weight_kg) || finalWeight;
+      const variantVolume = Number(variant.volume_m3) > 0 ? Number(variant.volume_m3) : productVolumeM3;
+      return {
+        ...variant,
+        weight_kg: variantWeight,
+        volume_m3: variantVolume,
+        price_tjs: calculateVariantPriceTjs(variant.price_cny || baseCny, variantWeight, variantVolume),
+      };
+    });
+
     const imagesList = structured.images.length > 0 ? structured.images : (analysis.variants.map((v) => v.image_url).filter(Boolean));
     const mainImg = imagesList[0] || (finalVariants[0]?.image_url) || '';
 
@@ -3225,7 +3334,9 @@ app.post('/api/parse-product-html', async (req, res) => {
       title: finalTitle,
       description: finalDesc,
       category_name: analysis.category_name,
-      weight_kg: analysis.weight_kg || initialWeight,
+      weight_kg: finalWeight,
+      volume_m3: productVolumeM3,
+      estimated_shipping_tjs: calculatePriceTjs(0, finalWeight, productVolumeM3),
       specifications: combinedSpecs,
       variants: finalVariants,
       images: imagesList,
@@ -3267,22 +3378,23 @@ app.post('/api/parse-product-html', async (req, res) => {
       const productId = Number(prodInsert.lastInsertRowid);
 
       const varInsert = db.prepare(`
-        INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, variant_sku, image_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3, variant_sku, image_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const createdVariants: any[] = [];
       for (const v of finalVariants) {
         const vCny = parseFloat(v.price_cny as any) || baseCny;
-        const vWeight = parseFloat(v.weight_kg as any) || finalProduct.weight_kg;
-        const vPriceTjs = calculateVariantPriceTjs(vCny, vWeight);
+        const vWeight = normalizeWeightKg(v.weight_kg) || finalProduct.weight_kg;
+        const vVolume = Number(v.volume_m3) > 0 ? Number(v.volume_m3) : finalProduct.volume_m3;
+        const vPriceTjs = calculateVariantPriceTjs(vCny, vWeight, vVolume);
         const vColor = translateVariantName(v.color || 'Основной цвет');
         const vSize = translateVariantName(v.size || 'Стандарт');
         const vStock = parseInt(v.stock as any, 10) || 25;
         const vSku = generateVariantSku(baseSku, vColor, vSize);
         const vImg = v.image_url || mainImg;
 
-        varInsert.run(productId, vColor, vSize, vCny, vPriceTjs, vStock, vWeight, vSku, vImg);
+        varInsert.run(productId, vColor, vSize, vCny, vPriceTjs, vStock, vWeight, vVolume, vSku, vImg);
         createdVariants.push({
           color: vColor,
           size: vSize,
@@ -3291,6 +3403,7 @@ app.post('/api/parse-product-html', async (req, res) => {
           variant_sku: vSku,
           stock: vStock,
           weight_kg: vWeight,
+          volume_m3: vVolume,
           image_url: vImg,
         });
       }
@@ -3547,32 +3660,24 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
       setSetting('somon_category_config', JSON.stringify(categoryConfig));
     }
 
-    // Keep stored prices consistent with the fixed pricing formula.
-    const allVariants = db.prepare('SELECT id, price_cny, weight_kg FROM product_variants').all() as Array<{ id: number; price_cny: number; weight_kg: number }>;
-    const updateV = db.prepare('UPDATE product_variants SET price_tjs = ? WHERE id = ?');
-    for (const v of allVariants) {
-      const newTjs = calculateVariantPriceTjs(v.price_cny, v.weight_kg);
-      updateV.run(newTjs, v.id);
-    }
-
-    return res.json({ success: true, message: 'Настройки сохранены, цены вариантов пересчитаны по фиксированной формуле' });
+    return res.json({ success: true, message: 'Настройки сохранены' });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
-// Ручной пересчет цен всех вариантов товаров по гибкой формуле процентной выручки
+// Ручной пересчёт цен всех вариантов по курсу CNY и стоимости доставки
 app.post('/api/admin/recalculate-prices', requireAdmin, (req, res) => {
   try {
-    const allVariants = db.prepare('SELECT id, price_cny, weight_kg FROM product_variants').all() as Array<{ id: number; price_cny: number; weight_kg: number }>;
+    const allVariants = db.prepare('SELECT id, price_cny, weight_kg, volume_m3 FROM product_variants').all() as Array<{ id: number; price_cny: number; weight_kg: number; volume_m3: number }>;
     const updateV = db.prepare('UPDATE product_variants SET price_tjs = ? WHERE id = ?');
     let count = 0;
     for (const v of allVariants) {
-      const newTjs = calculateVariantPriceTjs(v.price_cny, v.weight_kg);
+      const newTjs = calculateVariantPriceTjs(v.price_cny, v.weight_kg, v.volume_m3);
       updateV.run(newTjs, v.id);
       count++;
     }
-    return res.json({ success: true, updated_count: count, message: `Успешно пересчитано ${count} цен вариантов по формуле наценки и веса` });
+    return res.json({ success: true, updated_count: count, message: `Пересчитаны ${count} цен по курсу юаня и стоимости доставки по весу или объёму` });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

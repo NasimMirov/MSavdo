@@ -7,6 +7,7 @@ export interface ProductVariant {
   price_tjs: number;
   stock: number;
   weight_kg: number;
+  volume_m3?: number;
   variant_sku: string;
   image_url: string;
 }

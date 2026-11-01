@@ -633,6 +633,15 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                     </div>
                   </div>
 
+                  {parsedPreview.estimated_shipping_tjs !== undefined && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] text-amber-950">
+                      <strong>Расчет доставки:</strong>{' '}
+                      {parsedPreview.volume_m3 > 0
+                        ? `${Number(parsedPreview.volume_m3).toFixed(3)} м³ × 2 000 = ${Number(parsedPreview.estimated_shipping_tjs).toLocaleString('ru-RU')} TJS`
+                        : `${Number(parsedPreview.weight_kg).toLocaleString('ru-RU')} кг × 30 = ${Number(parsedPreview.estimated_shipping_tjs).toLocaleString('ru-RU')} TJS`}
+                    </div>
+                  )}
+
                   {/* Характеристики */}
                   {parsedPreview.specifications && parsedPreview.specifications.length > 0 && (
                     <div className="space-y-1 pt-1">
@@ -659,7 +668,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                       <div className="flex flex-wrap gap-1.5">
                         {parsedPreview.variants.slice(0, 8).map((v: any, idx: number) => (
                           <span key={idx} className="px-2 py-1 bg-white border border-slate-200 rounded-md text-[10px] font-mono">
-                            <strong>{v.color}</strong> ({v.size}) — ¥{v.price_cny} | Склад: {v.stock}
+                            <strong>{v.color}</strong> ({v.size}) — ¥{v.price_cny} → {Number(v.price_tjs || 0).toLocaleString('ru-RU')} TJS | Склад: {v.stock}
                           </span>
                         ))}
                       </div>

@@ -44,6 +44,7 @@ import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
+import { calculatePriceTjs } from '../utils/pricing';
 
 interface TelegramLoginResult {
   id_token?: string;
@@ -87,11 +88,6 @@ declare global {
 interface AdminPanelProps {
   onBack: () => void;
   onRefreshCatalog: () => void;
-}
-
-function calculatePriceTjs(priceCny: number, weightKg: number): number {
-  const markup = priceCny <= 20 ? 2 : priceCny <= 100 ? 1.6 : 1.3;
-  return Math.round((priceCny * 1.45 * markup) + (weightKg * 30));
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
@@ -512,6 +508,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const [isRecalculatingPrices, setIsRecalculatingPrices] = useState(false);
   const handleRecalculatePrices = async () => {
+    if (!confirm('Пересчитать цены всех товаров? Ранее указанные вручную цены продажи будут заменены расчетными.')) return;
     setIsRecalculatingPrices(true);
     try {
       const res = await adminFetch('/api/admin/recalculate-prices', { method: 'POST' });
@@ -520,6 +517,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         showNotice(`✓ ${data.message || 'Цены пересчитаны'}`);
         loadAdminData();
         onRefreshCatalog();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showNotice(data.error || 'Не удалось пересчитать цены');
       }
     } catch (e) {
       showNotice('Ошибка пересчета цен');
@@ -543,8 +543,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (res.ok) {
         setSettingsSaved(true);
         setTimeout(() => setSettingsSaved(false), 2500);
-        loadAdminData();
-        onRefreshCatalog();
       } else {
         const data = await res.json().catch(() => ({}));
         showNotice(data.error || 'Не удалось сохранить настройки');
@@ -617,6 +615,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       price_cny: v.price_cny || 0,
       stock: v.stock !== undefined ? v.stock : 10,
       weight_kg: v.weight_kg || 0.5,
+      volume_m3: v.volume_m3 || 0,
       variant_sku: v.variant_sku || '',
       image_url: v.image_url || '',
     }));
@@ -629,6 +628,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         price_cny: 0,
         stock: 10,
         weight_kg: 0.5,
+        volume_m3: 0,
         image_url: '',
       });
     }
@@ -863,6 +863,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       price_cny: 0,
       stock: 15,
       weight_kg: 0.5,
+      volume_m3: 0,
       image_url: editingProduct.main_image || '',
     });
     setEditingProduct({ ...editingProduct, variants: curVars });
@@ -2170,7 +2171,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 className="w-full p-3 border border-slate-300 rounded-xl text-sm font-mono font-bold bg-slate-100"
               />
               <span className="text-[10px] text-slate-400">
-                Наценка: до 20 CNY — ×2.0; до 100 CNY — ×1.6; выше — ×1.3.
+                Стоимость товара переводится в сомони без дополнительной наценки.
               </span>
             </div>
 
@@ -2187,7 +2188,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 className="w-full p-3 border border-slate-300 rounded-xl text-sm font-mono font-bold bg-slate-100"
               />
               <span className="text-[10px] text-slate-400">
-                Итог: round((цена CNY × 1.45 × коэффициент) + (вес, кг × 30)).
+                Применяется только при отсутствии габаритов.
+              </span>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">
+                Доставка за кубометр (фиксировано: 2 000 TJS)
+              </label>
+              <input
+                type="number"
+                step="1"
+                readOnly
+                value="2000"
+                className="w-full p-3 border border-slate-300 rounded-xl text-sm font-mono font-bold bg-slate-100"
+              />
+              <span className="text-[10px] text-slate-400">
+                Если размеры товара известны, стоимость доставки считается по объёму в м³ вместо веса.
               </span>
             </div>
 
@@ -2313,45 +2330,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </section>
 
-            {/* Гибкая процентная выручка */}
+            {/* Автоматический расчёт цены */}
             <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-amber-950 text-xs">Гибкая процентная выручка (добавленная стоимость)</span>
-                <span className="text-[10px] font-black bg-amber-200 text-amber-900 px-2 py-0.5 rounded-full">
-                  От 70% до 10%
-                </span>
-              </div>
+              <h3 className="font-bold text-amber-950 text-xs">Формула цены продажи</h3>
               <p className="text-[11px] text-amber-900/80 leading-relaxed">
-                Выручка рассчитывается автоматически от себестоимости по курсу CNY:
+                Цена = цена в CNY × 1,45 + доставка. Если импортированы габариты, доставка считается по объёму (м³ × 2 000 TJS); иначе — по весу (кг × 30 TJS).
               </p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px] font-medium text-slate-700">
-                <div className="bg-white p-2 rounded-xl border border-amber-200/60">
-                  <span className="text-slate-400 block font-normal">До 50 TJS</span>
-                  <span className="font-bold text-emerald-700">+70%</span> выручки
-                </div>
-                <div className="bg-white p-2 rounded-xl border border-amber-200/60">
-                  <span className="text-slate-400 block font-normal">50 – 100 TJS</span>
-                  <span className="font-bold text-emerald-700">+50%</span> выручки
-                </div>
-                <div className="bg-white p-2 rounded-xl border border-amber-200/60">
-                  <span className="text-slate-400 block font-normal">100 – 250 TJS</span>
-                  <span className="font-bold text-emerald-700">+40%</span> выручки
-                </div>
-                <div className="bg-white p-2 rounded-xl border border-amber-200/60">
-                  <span className="text-slate-400 block font-normal">250 – 600 TJS</span>
-                  <span className="font-bold text-emerald-700">+30%</span> выручки
-                </div>
-                <div className="bg-white p-2 rounded-xl border border-amber-200/60">
-                  <span className="text-slate-400 block font-normal">600 – 1200 TJS</span>
-                  <span className="font-bold text-emerald-700">+20%</span> выручки
-                </div>
-                <div className="bg-white p-2 rounded-xl border border-amber-200/60">
-                  <span className="text-slate-400 block font-normal">Свыше 1200 TJS</span>
-                  <span className="font-bold text-emerald-700">+10%</span> выручки
-                </div>
-              </div>
-              <p className="text-[10px] text-slate-500 pt-1">
-                Пример: товар 100 TJS + 40% наценка = 140 TJS + доставка (1 кг = 30 TJS) = <strong>170 TJS итого</strong>.
+              <p className="text-[10px] text-slate-600">
+                Пример автомобиля: 5 000 CNY × 1,45 = 7 250 TJS; 4,2 × 1,51 × 1,92 = 12,17664 м³; доставка ≈ 24 353 TJS; цена ≈ <strong>31 603 TJS</strong>.
               </p>
             </div>
 
@@ -2361,7 +2347,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition-colors shadow-sm flex items-center gap-2"
               >
                 <Save className="w-4 h-4" />
-                <span>{settingsSaved ? '✓ Сохранено и пересчитано!' : 'Сохранить настройки'}</span>
+                <span>{settingsSaved ? '✓ Настройки сохранены' : 'Сохранить настройки'}</span>
               </button>
 
               <button
@@ -3273,15 +3259,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         />
                       </div>
                       <div className="sm:col-span-2">
-                        <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цена TJS (розница):</span>
+                        <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цена продажи (TJS):</span>
                         <input
                           type="number"
                           required
                           min="0"
                           step="1"
-                          value={calculatePriceTjs(Number(v.price_cny) || 0, Number(v.weight_kg) || 0.5)}
-                          readOnly
-                          className="w-full p-2 bg-slate-100 border border-slate-300 rounded-xl text-xs font-mono font-black text-slate-900"
+                          value={v.price_tjs ?? calculatePriceTjs(Number(v.price_cny) || 0, Number(v.weight_kg) || 0.5, Number(v.volume_m3) || 0)}
+                          onChange={(e) => handleUpdateVariantField(vIdx, 'price_tjs', e.target.value === '' ? '' : Number(e.target.value))}
+                          className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-black text-slate-900 focus:border-amber-400 outline-none"
                         />
                       </div>
                       <div className="sm:col-span-1">

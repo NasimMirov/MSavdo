@@ -49,7 +49,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           <a
             href={productUrl}
             aria-label={product.title}
-            className="contents"
+            className="absolute inset-0 flex items-center justify-center"
             onClick={(event) => event.stopPropagation()}
           >
             <img
@@ -58,7 +58,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               referrerPolicy="no-referrer"
               onLoad={() => setImageLoaded(true)}
               onError={() => setImageError(true)}
-              className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out ${
+              className={`block w-full h-full object-contain group-hover:scale-105 transition-transform duration-500 ease-out ${
                 imageLoaded ? 'opacity-100' : 'opacity-0'
               }`}
               loading="lazy"

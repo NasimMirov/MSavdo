@@ -8,6 +8,7 @@
  * - Четкое разделение: Офисная бумага !== Чернила для принтера, Обувь !== Одежда
  * - Парсинг featureAttributes и skuInfoMap с сохранением точных цен и складских остатков
  */
+import { normalizeWeightKg } from './pricing.js';
 
 export interface SemanticVariant {
   color: string;
@@ -297,12 +298,12 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
       || '';
 
     // Вес
-    const weightVal = parseFloat(
-      dataObj.shippingInfo?.unitWeight ||
-      dataObj.freightInfo?.unitWeight ||
-      dataObj.grossWeight ||
-      dataObj.weight || 0
-    );
+    const weightSource = dataObj.shippingInfo?.unitWeight
+      || dataObj.freightInfo?.unitWeight
+      || dataObj.grossWeight
+      || dataObj.weight
+      || 0;
+    const weightVal = normalizeWeightKg(weightSource);
     if (weightVal > 0) result.weightKg = weightVal;
 
     // Характеристики (featureAttributes / productAttributes)
