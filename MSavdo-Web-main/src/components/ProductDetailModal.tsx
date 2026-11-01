@@ -65,6 +65,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [selectedQuantity, setSelectedQuantity] = useState(1);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
+  const [photoAspectRatio, setPhotoAspectRatio] = useState(1);
 
   const productVideos = useMemo(() => {
     const storedVideos = Array.isArray(product?.video_urls) ? product.video_urls : [];
@@ -193,6 +194,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   }, [activeVariant, mediaSlides]);
 
   const currentMedia = mediaSlides[selectedMediaIndex];
+  useEffect(() => {
+    setPhotoAspectRatio(1);
+  }, [product?.id, currentMedia?.src]);
+
   const currentImage = currentMedia?.type === 'photo'
     ? currentMedia.src
     : activeVariant?.image_url || product?.main_image || allGalleryImages[0] || '';
@@ -330,7 +335,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           <div className="space-y-2 sm:space-y-3.5">
             {/* Главный блок показа */}
             <div
-              className="relative h-[32dvh] min-h-44 max-h-[280px] touch-pan-y overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100 shadow-sm sm:aspect-[4/4.5] sm:h-auto sm:max-h-none sm:rounded-2xl"
+              style={{ aspectRatio: currentMedia?.type === 'video' ? '16 / 9' : photoAspectRatio }}
+              className="relative w-full aspect-square touch-pan-y overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100 shadow-sm sm:rounded-2xl"
               onTouchStart={(event) => {
                 const touch = event.touches[0];
                 galleryTouchStart.current = { x: touch.clientX, y: touch.clientY };
@@ -379,8 +385,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   src={currentMedia?.src || currentImage}
                   alt={product.title}
                   referrerPolicy="no-referrer"
+                  onLoad={(event) => {
+                    const { naturalWidth, naturalHeight } = event.currentTarget;
+                    if (naturalWidth > 0 && naturalHeight > 0) {
+                      setPhotoAspectRatio(naturalWidth / naturalHeight);
+                    }
+                  }}
                   onClick={openPhotoZoom}
-                  className="h-full w-full object-contain p-1 transition-all duration-300 cursor-zoom-in sm:p-2"
+                  className="h-full w-full object-contain transition-all duration-300 cursor-zoom-in"
                 />
               )}
               {currentMedia?.type !== 'video' && (
