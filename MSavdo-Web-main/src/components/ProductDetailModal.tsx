@@ -64,7 +64,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [selectedQuantity, setSelectedQuantity] = useState(1);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
-  const [selectedVideoIndex, setSelectedVideoIndex] = useState(0);
 
   const productVideos = useMemo(() => {
     const storedVideos = Array.isArray(product?.video_urls) ? product.video_urls : [];
@@ -143,29 +142,38 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     return list;
   }, [product, variants]);
 
-  // Выбранное фото из галереи и режим медиа
-  const [selectedGalleryImage, setSelectedGalleryImage] = useState<string>(product?.main_image || '');
-  const [mediaMode, setMediaMode] = useState<'photo' | 'video'>('photo');
+  const mediaSlides = useMemo(
+    () => [
+      ...allGalleryImages.map((src) => ({ type: 'photo' as const, src })),
+      ...productVideos.map((src) => ({ type: 'video' as const, src })),
+    ],
+    [allGalleryImages, productVideos]
+  );
+  const [selectedMediaIndex, setSelectedMediaIndex] = useState(0);
   const galleryTouchStart = useRef<{ x: number; y: number } | null>(null);
   const edgeSwipeStart = useRef<{ x: number; y: number } | null>(null);
 
-  const moveGallery = (direction: -1 | 1) => {
-    if (allGalleryImages.length < 2) return;
-    const currentIndex = allGalleryImages.indexOf(currentImage);
-    const nextIndex = (Math.max(currentIndex, 0) + direction + allGalleryImages.length) % allGalleryImages.length;
-    setSelectedGalleryImage(allGalleryImages[nextIndex]);
-    setMediaMode('photo');
+  const moveMedia = (direction: -1 | 1) => {
+    if (mediaSlides.length < 2) return;
+    setSelectedMediaIndex((currentIndex) => (
+      (currentIndex + direction + mediaSlides.length) % mediaSlides.length
+    ));
+    setIsPhotoZoomed(false);
   };
 
   useEffect(() => {
     if (activeVariant?.image_url) {
-      setSelectedGalleryImage(activeVariant.image_url);
-      setMediaMode('photo');
+      const variantImageIndex = mediaSlides.findIndex(
+        (slide) => slide.type === 'photo' && slide.src === activeVariant.image_url
+      );
+      if (variantImageIndex >= 0) setSelectedMediaIndex(variantImageIndex);
     }
-  }, [activeVariant]);
+  }, [activeVariant, mediaSlides]);
 
-  // Текущее изображение
-  const currentImage = selectedGalleryImage || activeVariant?.image_url || product?.main_image || '';
+  const currentMedia = mediaSlides[selectedMediaIndex];
+  const currentImage = currentMedia?.type === 'photo'
+    ? currentMedia.src
+    : activeVariant?.image_url || product?.main_image || allGalleryImages[0] || '';
 
   // Характеристики товара (спецификации)
   const productSpecs = useMemo(() => {
@@ -194,11 +202,9 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   useEffect(() => {
     if (!product) return;
     setSelectedColor(availableColors[0]?.name || variants[0]?.color || 'Стандарт');
-    setSelectedGalleryImage(product.main_image || '');
-    setMediaMode('photo');
+    setSelectedMediaIndex(0);
     setAdded(false);
     setSelectedQuantity(1);
-    setSelectedVideoIndex(0);
     setIsPhotoZoomed(false);
   }, [product?.id]);
 
@@ -278,45 +284,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
         <div className="p-3 sm:p-8 grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-6 lg:gap-10">
           
-          {/* Левая колонка: Галерея, видео и изображения */}
+          {/* Левая колонка: единая галерея изображений и видео */}
           <div className="space-y-2 sm:space-y-3.5">
-            {/* Переключатель Фото / Видео если есть видео */}
-            {productVideos.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 text-xs">
-                <button
-                  onClick={() => {
-                    setMediaMode('photo');
-                    setIsPhotoZoomed(false);
-                  }}
-                  className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
-                    mediaMode === 'photo'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  📷 {t('photo')} ({allGalleryImages.length})
-                </button>
-                {productVideos.map((_, videoIndex) => (
-                  <button
-                    key={`video-${videoIndex}`}
-                    onClick={() => {
-                      setSelectedVideoIndex(videoIndex);
-                      setMediaMode('video');
-                      setIsPhotoZoomed(false);
-                    }}
-                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
-                      mediaMode === 'video' && selectedVideoIndex === videoIndex
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
-                    }`}
-                  >
-                    <span>▶</span>
-                    <span>{t('videoReview')} {productVideos.length > 1 ? videoIndex + 1 : ''}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
             {/* Главный блок показа */}
             <div
               className="relative h-[32dvh] min-h-44 max-h-[280px] touch-pan-y overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100 shadow-sm sm:aspect-[4/4.5] sm:h-auto sm:max-h-none sm:rounded-2xl"
@@ -327,18 +296,18 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               onTouchEnd={(event) => {
                 const start = galleryTouchStart.current;
                 galleryTouchStart.current = null;
-                if (!start || mediaMode !== 'photo' || edgeSwipeStart.current) return;
+                if (!start || edgeSwipeStart.current) return;
                 const touch = event.changedTouches[0];
                 const deltaX = touch.clientX - start.x;
                 const deltaY = touch.clientY - start.y;
                 if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY)) {
-                  moveGallery(deltaX < 0 ? 1 : -1);
+                  moveMedia(deltaX < 0 ? 1 : -1);
                 }
               }}
             >
-              {mediaMode === 'video' && productVideos[selectedVideoIndex] ? (
+              {currentMedia?.type === 'video' ? (
                 (() => {
-                  const targetVideo = productVideos[selectedVideoIndex];
+                  const targetVideo = currentMedia.src;
                   const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/;
                   const match = targetVideo.match(regExp);
                   if (match && match[1]) {
@@ -365,14 +334,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 })()
               ) : (
                 <img
-                  src={currentImage}
+                  src={currentMedia?.src || currentImage}
                   alt={product.title}
                   referrerPolicy="no-referrer"
                   onClick={() => setIsPhotoZoomed(true)}
                   className="w-full h-full object-cover transition-all duration-300 cursor-zoom-in"
                 />
               )}
-              {mediaMode === 'photo' && (
+              {currentMedia?.type !== 'video' && (
                 <button
                   type="button"
                   onClick={() => setIsPhotoZoomed(true)}
@@ -400,31 +369,45 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               )}
             </div>
 
-            {/* Миниатюры галереи нескольких фото */}
-            {allGalleryImages.length > 1 && (
+            {/* Общая лента миниатюр фотографий и видео */}
+            {mediaSlides.length > 1 && (
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {allGalleryImages.map((img, idx) => {
-                  const isSelected = mediaMode === 'photo' && currentImage === img;
+                {mediaSlides.map((slide, idx) => {
+                  const isSelected = selectedMediaIndex === idx;
                   return (
                     <button
-                      key={idx}
+                      key={`${slide.type}-${slide.src}`}
                       onClick={() => {
-                        setSelectedGalleryImage(img);
-                        setMediaMode('photo');
+                        setSelectedMediaIndex(idx);
                         setIsPhotoZoomed(false);
                       }}
+                      aria-label={slide.type === 'video'
+                        ? `${t('videoReview')} ${productVideos.indexOf(slide.src) + 1}`
+                        : `${t('photo')} ${idx + 1}`}
                       className={`relative w-11 h-11 sm:w-14 sm:h-14 rounded-lg sm:rounded-xl overflow-hidden border-2 shrink-0 transition-all ${
                         isSelected
                           ? 'border-emerald-600 ring-2 ring-emerald-500/30 scale-105'
                           : 'border-slate-200 hover:border-slate-400 opacity-80 hover:opacity-100'
                       }`}
                     >
-                      <img
-                        src={img}
-                        alt=""
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
-                      />
+                      {slide.type === 'photo' ? (
+                        <img
+                          src={slide.src}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <>
+                          <img
+                            src={currentImage}
+                            alt=""
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover"
+                          />
+                          <span className="absolute inset-0 flex items-center justify-center bg-slate-950/40 text-white text-lg">▶</span>
+                        </>
+                      )}
                     </button>
                   );
                 })}
@@ -713,7 +696,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
       </div>
     </div>
-    {isPhotoZoomed && mediaMode === 'photo' && (
+    {isPhotoZoomed && currentMedia?.type !== 'video' && (
       <div
         className="fixed inset-0 z-[70] flex items-center justify-center bg-black/95 p-3 sm:p-8"
         role="dialog"
@@ -730,7 +713,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           <X className="h-5 w-5" />
         </button>
         <img
-          src={currentImage}
+          src={currentMedia?.src || currentImage}
           alt={product.title}
           referrerPolicy="no-referrer"
           onClick={(event) => event.stopPropagation()}
