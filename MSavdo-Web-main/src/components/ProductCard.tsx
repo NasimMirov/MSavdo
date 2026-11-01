@@ -116,16 +116,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </h3>
         </div>
 
-        <div className="mt-2.5 flex items-center justify-between gap-1.5 rounded-lg border border-amber-100 bg-gradient-to-r from-amber-50 to-orange-50 px-2 py-1.5 sm:mt-3 sm:rounded-xl sm:px-2.5 sm:py-2">
+        <div className="mt-2.5 flex items-center justify-between gap-1.5 px-0.5 py-1 sm:mt-3 sm:px-1 sm:py-1.5">
           <div className="min-w-0">
             <div className="text-[7px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[8px]">{t('inSomoni')}</div>
-            <div className="mt-0.5 whitespace-nowrap text-[15px] font-extrabold leading-none tracking-tight text-slate-950 sm:text-lg">
-              {maxPrice > minPrice && <span className="mr-0.5 text-[9px] font-bold text-slate-500 sm:text-[11px]">от</span>}
+            <div className="mt-0.5 whitespace-nowrap text-[17px] font-extrabold leading-none tracking-tight text-slate-950 sm:text-xl">
+              {maxPrice > minPrice && <span className="mr-0.5 text-[10px] font-bold text-slate-500 sm:text-xs">от</span>}
               {minPrice.toLocaleString('ru-RU')}
-              <span className="ml-1 text-[8px] font-bold text-slate-600 sm:text-[9px]">с.</span>
+              <span className="ml-1 text-[9px] font-bold text-slate-600 sm:text-[10px]">с.</span>
             </div>
           </div>
-          <span className="shrink-0 rounded-full bg-white/80 px-1.5 py-1 text-[7px] font-semibold text-slate-500 sm:px-2 sm:text-[8px]">
+          <span className="shrink-0 text-[7px] font-semibold text-slate-500 sm:text-[8px]">
             {isStock ? 'В наличии' : 'Под заказ'}
           </span>
         </div>
