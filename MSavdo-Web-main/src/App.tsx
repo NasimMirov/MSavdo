@@ -11,7 +11,6 @@ import { CartDrawer } from './components/CartDrawer';
 import { RulesView } from './components/RulesView';
 import { AdminPanel } from './components/AdminPanel';
 import { ToastContainer, ToastItem } from './components/Toast';
-import { ImageSearchModal } from './components/ImageSearchModal';
 import { apiFetch } from './api';
 import { 
   Search, 
@@ -22,18 +21,36 @@ import {
   MessageCircle,
   Home,
   CheckCircle2,
-  ExternalLink,
-  Camera,
-  Sparkles
+  Shirt,
+  Smartphone,
+  Footprints,
+  Watch,
+  Sofa,
+  Baby,
+  Dumbbell,
+  Headphones
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
-const BRAND_LOGO_URL = "/assets/aistudio/photo_2026-06-11_22-16-50_6464a600.jpg";
+const BRAND_LOGO_URL = '/msavdo-logo.jpg';
+
+function getCategoryIcon(name: string): LucideIcon {
+  const category = name.toLocaleLowerCase('ru');
+  if (/обув|кроссов|сандал|ботин|тапоч/.test(category)) return Footprints;
+  if (/одеж|одежд|футбол|худи|куртк|плать|брюк/.test(category)) return Shirt;
+  if (/телефон|электрон|гаджет|компьют|планшет/.test(category)) return Smartphone;
+  if (/час|украш|аксессуар|сумк/.test(category)) return Watch;
+  if (/дом|мебел|кухн|интерьер/.test(category)) return Sofa;
+  if (/дет|ребен|игруш|малыш/.test(category)) return Baby;
+  if (/спорт|фитнес|тренир/.test(category)) return Dumbbell;
+  if (/науш|аудио|звук/.test(category)) return Headphones;
+  return Package;
+}
 
 export default function App() {
   const [currentView, setCurrentView] = useState<'catalog' | 'rules' | 'admin'>('catalog');
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [isImageSearchOpen, setIsImageSearchOpen] = useState(false);
 
   // Глобальная система всплывающих уведомлений (Toasts)
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -286,97 +303,51 @@ export default function App() {
       {/* 1. ШАПКА МАГАЗИНА: ЖЕЛТО-ЧЕРНЫЙ СТИЛЬ M.SAVDO */}
       {/* Строгая клиентская изоляция: никаких кнопок импорта или ссылок на Китай */}
       {/* ======================================================== */}
-      <header className="sticky top-0 z-40 bg-black text-white border-b border-zinc-800 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 sm:h-18 flex items-center justify-between gap-4">
+      <header className="sticky top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 h-16 sm:h-[76px] flex items-center gap-3 sm:gap-6">
           
-          {/* Бренд с официальным логотипом */}
           <div 
             onClick={() => {
               setCurrentView('catalog');
               setSelectedCategoryId(null);
               setSearchQuery('');
             }}
-            className="cursor-pointer flex items-center gap-3 shrink-0 select-none group"
+            className="cursor-pointer flex items-center gap-2 sm:gap-3 shrink-0 select-none group"
           >
-            <div className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden border-2 border-amber-400 shadow-sm shrink-0 bg-amber-400 flex items-center justify-center">
+            <div className="relative w-10 h-10 sm:w-12 sm:h-12 rounded-xl overflow-hidden border border-black/10 shadow-md shrink-0 bg-[#f4c542] flex items-center justify-center">
               <img 
                 src={BRAND_LOGO_URL} 
                 alt="MSavdo" 
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                className="w-full h-full object-contain group-hover:scale-105 transition-transform"
               />
             </div>
-            
-            <div className="flex flex-col">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xl sm:text-2xl font-black tracking-tight text-white font-heading">
-                  M<span className="text-amber-400">Savdo</span>
-                </span>
-                <span className="bg-amber-400 text-black text-[9px] font-black px-1.5 py-0.5 rounded uppercase">
-                  TJ
-                </span>
-              </div>
-              <div className="text-[10px] text-zinc-400 font-medium hidden sm:flex items-center gap-1">
-                <span>Каталог фабричных товаров</span>
-                <span className="text-zinc-600">·</span>
-                <a 
-                  href="https://instagram.com/MSavdo.tj" 
-                  target="_blank" 
-                  rel="noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="text-amber-400 hover:underline flex items-center gap-0.5"
+            <span className="text-lg sm:text-2xl font-black tracking-tight text-slate-950 font-heading">MSavdo</span>
+          </div>
+
+          {currentView === 'catalog' && (
+            <div className="relative min-w-0 flex-1 max-w-3xl ml-auto">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 pointer-events-none" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Поиск товаров"
+                aria-label="Поиск товаров"
+                className="w-full h-10 sm:h-11 rounded-xl border border-black/10 bg-white/95 pl-9 pr-9 text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 shadow-sm outline-none transition focus:ring-2 focus:ring-slate-900/20"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Очистить поиск"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full p-1 text-slate-400 hover:text-slate-700"
                 >
-                  @MSavdo.tj
-                </a>
-              </div>
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
-          </div>
-
-          {/* Навигация для клиентов */}
-          <nav className="hidden md:flex items-center gap-6 text-xs sm:text-sm font-bold text-zinc-300">
-            <button
-              onClick={() => {
-                setCurrentView('catalog');
-                setSelectedCategoryId(null);
-              }}
-              className={`hover:text-amber-400 transition-colors whitespace-nowrap ${
-                currentView === 'catalog' ? 'text-amber-400 font-extrabold' : ''
-              }`}
-            >
-              Каталог
-            </button>
-            <button
-              onClick={() => setCurrentView('rules')}
-              className={`hover:text-amber-400 transition-colors whitespace-nowrap ${
-                currentView === 'rules' ? 'text-amber-400 font-extrabold' : ''
-              }`}
-            >
-              Правила сервиса и доставка
-            </button>
-            <a
-              href="https://instagram.com/MSavdo.tj"
-              target="_blank"
-              rel="noreferrer"
-              className="text-zinc-400 hover:text-amber-400 transition-colors whitespace-nowrap flex items-center gap-1"
-            >
-              <span>Instagram: @MSavdo.tj</span>
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          </nav>
-
-          {/* Корзина заказа */}
-          <div className="flex items-center gap-2.5 shrink-0">
-            <button
-              onClick={() => setIsCartOpen(true)}
-              className="relative inline-flex items-center gap-2 px-3.5 sm:px-4 py-2 sm:py-2.5 text-xs sm:text-sm font-black rounded-xl bg-amber-400 text-black hover:bg-amber-300 transition-all shadow-md active:scale-95"
-            >
-              <ShoppingBag className="w-4 h-4" />
-              <span className="hidden sm:inline">Корзина</span>
-              <span className="bg-black text-amber-400 text-xs font-mono font-extrabold rounded-full px-2 py-0.5 min-w-[20px] text-center">
-                {totalCartCount}
-              </span>
-            </button>
-          </div>
-
+          )}
         </div>
       </header>
 
@@ -405,124 +376,55 @@ export default function App() {
         {currentView === 'catalog' && (
           <div className="space-y-4 sm:space-y-6">
             
-            {/* Поисковая строка + Поиск по фото (Камера и галерея) */}
-            <div className="space-y-2 max-w-3xl mx-auto">
-              <div className="flex items-center gap-2">
-                <div className="relative flex-1">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-zinc-400">
-                    <Search className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </div>
-                  <input
-                    ref={searchInputRef}
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Поиск по названию или артикулу (например: кроссовки, худи, MS-849)..."
-                    className="w-full pl-10 sm:pl-12 pr-10 py-3 sm:py-3.5 bg-white border border-slate-200 rounded-2xl text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-amber-400 shadow-xs transition-all"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Кнопка "Поиск по фото" */}
-                <button
-                  type="button"
-                  onClick={() => setIsImageSearchOpen(true)}
-                  className="inline-flex items-center gap-2 px-3.5 sm:px-4 py-3 sm:py-3.5 bg-black hover:bg-zinc-800 text-amber-400 border border-amber-400/50 rounded-2xl font-black text-xs sm:text-sm transition-all shadow-xs shrink-0 active:scale-95 group"
-                  title="Поиск товара по фото (Камера и галерея)"
-                >
-                  <Camera className="w-4 h-4 sm:w-5 sm:h-5 text-amber-400 group-hover:scale-110 transition-transform" />
-                  <span className="hidden sm:inline">Поиск по фото</span>
-                </button>
-              </div>
-
-              {/* Активный чип поиска по фото, если применен */}
-              {searchQuery && (
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="bg-amber-100 text-amber-900 px-3 py-1 rounded-full font-bold border border-amber-300 flex items-center gap-1.5 shadow-xs">
-                    <Sparkles className="w-3 h-3 text-amber-600" />
-                    <span>Поиск: &laquo;{searchQuery}&raquo;</span>
-                    <button
-                      onClick={() => setSearchQuery('')}
-                      className="ml-1 hover:text-black font-extrabold"
-                    >
-                      ×
-                    </button>
-                  </span>
-                </div>
-              )}
-            </div>
-
             {/* Быстрые фильтры категорий (горизонтальный свайп на мобильных) */}
-            <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none text-xs font-bold select-none py-1">
+            <div className="flex items-start gap-3 overflow-x-auto pb-2 scrollbar-none select-none snap-x">
               <button
                 onClick={() => setSelectedCategoryId(null)}
-                className={`px-3.5 py-2 rounded-xl whitespace-nowrap transition-all shrink-0 ${
-                  selectedCategoryId === null
-                    ? 'bg-black text-amber-400 shadow-sm font-black'
-                    : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                }`}
+                className="flex w-[68px] shrink-0 snap-start flex-col items-center gap-1.5 text-center"
               >
-                Все категории ({products.length})
+                <span className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#fff1b8] to-[#e9ba2e] text-slate-900 shadow-[0_4px_0_#c79a18,0_7px_12px_rgba(15,23,42,0.12)] ring-1 ring-black/5 transition-transform ${selectedCategoryId === null ? '-translate-y-0.5 ring-2 ring-slate-900/30' : ''}`}>
+                  <Package className="h-6 w-6 drop-shadow-sm" strokeWidth={2.2} />
+                </span>
+                <span className="w-full truncate text-[10px] font-bold text-slate-700">Все</span>
               </button>
 
               {categoriesTree.map((cat) => {
                 const isActive = selectedCategoryId === cat.id;
+                const CategoryIcon = getCategoryIcon(cat.name);
                 return (
                   <button
                     key={cat.id}
                     onClick={() => setSelectedCategoryId(cat.id)}
-                    className={`px-3.5 py-2 rounded-xl whitespace-nowrap transition-all shrink-0 ${
-                      isActive
-                        ? 'bg-black text-amber-400 shadow-sm font-black'
-                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
-                    }`}
+                    className="flex w-[68px] shrink-0 snap-start flex-col items-center gap-1.5 text-center"
                   >
-                    {cat.name}
+                    <span className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-white to-slate-200 text-slate-800 shadow-[0_4px_0_#cbd5e1,0_7px_12px_rgba(15,23,42,0.12)] ring-1 ring-slate-300 transition-transform ${isActive ? '-translate-y-0.5 ring-2 ring-amber-500' : ''}`}>
+                      <CategoryIcon className="h-6 w-6 drop-shadow-sm" strokeWidth={2.2} />
+                    </span>
+                    <span className="w-full truncate text-[10px] font-bold text-slate-700">{cat.name}</span>
                   </button>
                 );
               })}
             </div>
 
-            {/* Быстрый фильтр типа доставки: Наличие в Душанбе / Под заказ */}
-            <div className="flex flex-wrap items-center gap-2 text-xs font-bold pt-1">
+            {/* Компактный единый фильтр доставки */}
+            <div className="flex max-w-full items-center gap-1 overflow-x-auto pb-1 scrollbar-none text-[10px] sm:text-xs font-semibold">
               <button
                 onClick={() => setDeliveryFilter('all')}
-                className={`px-3 py-1.5 rounded-xl transition-all ${
-                  deliveryFilter === 'all'
-                    ? 'bg-zinc-900 text-white shadow-xs'
-                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                }`}
+                className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
-                Все товары ({products.length})
-              </button>
-              <button
-                onClick={() => setDeliveryFilter('stock')}
-                className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                  deliveryFilter === 'stock'
-                    ? 'bg-emerald-600 text-white shadow-xs font-extrabold'
-                    : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
-                }`}
-              >
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span>🚚 В наличии в Душанбе (1 день)</span>
+                Все товары
               </button>
               <button
                 onClick={() => setDeliveryFilter('order')}
-                className={`px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
-                  deliveryFilter === 'order'
-                    ? 'bg-amber-400 text-black shadow-xs font-black border border-amber-500'
-                    : 'bg-amber-50 text-amber-900 hover:bg-amber-100 border border-amber-200'
-                }`}
+                className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'order' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
-                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                <span>⏳ Под заказ (15-30 дней)</span>
+                Доставка 18–30 дней
+              </button>
+              <button
+                onClick={() => setDeliveryFilter('stock')}
+                className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'stock' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                В наличии · 1 день
               </button>
             </div>
 
@@ -639,6 +541,11 @@ export default function App() {
         product={selectedProduct}
         onClose={() => setSelectedProduct(null)}
         onAddToCart={handleAddToCart}
+        onOrderNow={(item) => {
+          handleAddToCart(item);
+          setSelectedProduct(null);
+          setIsCartOpen(true);
+        }}
         onSelectRelatedProduct={handleOpenProduct}
       />
 
@@ -657,22 +564,24 @@ export default function App() {
         whatsappPhone={whatsappPhone}
       />
 
-      {/* Модальное окно поиска по фото (Камера и галерея) */}
-      <ImageSearchModal
-        isOpen={isImageSearchOpen}
-        onClose={() => setIsImageSearchOpen(false)}
-        onSelectProduct={(p) => setSelectedProduct(p)}
-        onApplySearchQuery={(q) => {
-          setSearchQuery(q);
-          setSelectedCategoryId(null);
-          setCurrentView('catalog');
-          addToast('info', 'Поиск по фото', `Показаны товары по запросу: "${q}"`);
-        }}
-      />
-
       {/* ======================================================== */}
       {/* 4. МОБИЛЬНАЯ НИЖНЯЯ ПАНЕЛЬ НАВИГАЦИИ (ФИКСИРОВАННАЯ) */}
       {/* ======================================================== */}
+      {currentView === 'catalog' && (
+        <button
+          type="button"
+          onClick={() => setIsCartOpen(true)}
+          aria-label={`Открыть корзину, товаров: ${totalCartCount}`}
+          className="fixed bottom-6 right-6 z-40 hidden h-12 w-12 items-center justify-center rounded-full bg-[#f4c542] text-slate-950 shadow-xl ring-1 ring-black/10 transition hover:scale-105 active:scale-95 md:flex"
+        >
+          <ShoppingBag className="h-5 w-5" />
+          {totalCartCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-900 px-1 text-[10px] font-bold text-white">
+              {totalCartCount}
+            </span>
+          )}
+        </button>
+      )}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-black text-white border-t border-zinc-800 px-4 py-2 flex items-center justify-around shadow-2xl">
         <button
           onClick={() => {
@@ -684,15 +593,6 @@ export default function App() {
         >
           <Home className="w-4 h-4" />
           <span className="text-[10px] font-bold">Каталог</span>
-        </button>
-
-        <button
-          onClick={() => setIsImageSearchOpen(true)}
-          className="flex flex-col items-center gap-1 text-amber-400 font-bold"
-          title="Поиск по фото"
-        >
-          <Camera className="w-4 h-4" />
-          <span className="text-[10px] font-bold">По фото</span>
         </button>
 
         <button

@@ -61,20 +61,20 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         )}
 
         {/* Артикул коллекции */}
-        <div className="absolute top-2.5 left-2.5 bg-black/85 backdrop-blur-md text-amber-400 text-[9px] sm:text-[10px] font-mono font-bold px-2 py-0.5 rounded-md shadow-xs border border-amber-400/20">
+        <div className="absolute top-2 left-2 bg-white/95 text-slate-800 text-[8px] sm:text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-md shadow-xs border border-slate-200/80">
           {product.base_sku}
         </div>
 
         {/* Срок доставки */}
         {isStock ? (
-          <div className="absolute top-2.5 right-2.5 max-w-[75%] whitespace-normal break-words bg-emerald-600/95 backdrop-blur-md text-white text-[9px] font-bold px-2 py-0.5 rounded-md shadow-xs border border-emerald-400/40 flex items-center gap-1">
-            <Truck className="w-3 h-3 text-white" />
-            <span className="min-w-0 leading-tight">В наличии (Доставка 1 день)</span>
+          <div className="absolute top-2 right-2 max-w-[75%] whitespace-normal break-words bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-1 rounded-md shadow-xs border border-black/5 flex items-center gap-1">
+            <Truck className="w-3 h-3 shrink-0" />
+            <span className="min-w-0 leading-tight">В наличии · 1 день</span>
           </div>
         ) : (
-          <div className="absolute top-2.5 right-2.5 max-w-[75%] whitespace-normal break-words bg-black/85 backdrop-blur-md text-amber-300 text-[9px] font-bold px-2 py-0.5 rounded-md shadow-xs border border-amber-400/20 flex items-center gap-1">
-            <Clock className="w-3 h-3 text-amber-400" />
-            <span className="min-w-0 leading-tight">Под заказ: 15-30 дней напрямую с фабрики</span>
+          <div className="absolute top-2 right-2 max-w-[75%] whitespace-normal break-words bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-1 rounded-md shadow-xs border border-black/5 flex items-center gap-1">
+            <Clock className="w-3 h-3 shrink-0" />
+            <span className="min-w-0 leading-tight">Доставка 18–30 дней</span>
           </div>
         )}
 

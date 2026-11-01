@@ -540,14 +540,31 @@ for (const variant of storedVariantsForRepricing) {
   );
 }
 
-// Генераторы артикулов SKU
-function generateBaseSku(): string {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let code = '';
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
+// Генератор короткого артикула: две буквы категории и четыре цифры.
+function generateBaseSku(categoryId?: number | null): string {
+  const category = categoryId
+    ? db.prepare('SELECT name FROM categories WHERE id = ?').get(categoryId) as { name: string } | undefined
+    : undefined;
+  const transliteration: Record<string, string> = {
+    а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i',
+    й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't',
+    у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sh', ъ: '', ы: 'y', ь: '',
+    э: 'e', ю: 'yu', я: 'ya',
+  };
+  const categoryLetters = (category?.name || '')
+    .toLocaleLowerCase('ru')
+    .replace(/[а-яё]/g, (letter) => transliteration[letter] || '')
+    .replace(/[^a-z]/g, '')
+    .slice(0, 2)
+    .toUpperCase();
+  const prefix = categoryLetters ? categoryLetters.padEnd(2, 'P') : 'MS';
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const sku = `${prefix}${Math.floor(1000 + Math.random() * 9000)}`;
+    const existing = db.prepare('SELECT 1 FROM products WHERE base_sku = ?').get(sku);
+    if (!existing) return sku;
   }
-  return `MS-${code}`;
+  throw new Error('Не удалось создать уникальный артикул товара');
 }
 
 function generateVariantSku(baseSku: string, color?: string, size?: string): string {
@@ -579,7 +596,7 @@ if (countProducts === 0) {
   `);
 
   // Товар 1: Кроссовки с цветами и размерами
-  const p1Sku = generateBaseSku();
+  const p1Sku = generateBaseSku(sneakersCatId);
   const p1Res = insertProd.run(
     'Мужские защитные дышащие кроссовки Hyper-Breeze',
     'Ультралегкие кроссовки из дышащего плетеного текстиля с анатомической подошвой EVA. Оптимальная амортизация для города и тренировок.',
@@ -605,7 +622,7 @@ if (countProducts === 0) {
   }
 
   // Товар 2: Оверсайз худи Heavy Cotton
-  const p2Sku = generateBaseSku();
+  const p2Sku = generateBaseSku(hoodieCatId);
   const p2Res = insertProd.run(
     'Оверсайз худи Heavy Cotton 450г/м² с мягким начесом',
     'Премиальный плотный хлопок с шелковистым внутренним начесом. Сохраняет форму после многократных стирок, свободный силуэт.',
@@ -631,7 +648,7 @@ if (countProducts === 0) {
   }
 
   // Товар 3: Смарт-часы Titanium Ultra
-  const p3Sku = generateBaseSku();
+  const p3Sku = generateBaseSku(watchCatId);
   const p3Res = insertProd.run(
     'Смарт-часы Titanium Series Ultra AMOLED',
     'Флагманский титановый корпус, дисплей сапфирового класса 1000 нит, датчики пульса и кислорода, автономность до 12 дней.',
@@ -654,7 +671,7 @@ if (countProducts === 0) {
   }
 
   // Товар 4: Наушники ANC Pro
-  const p4Sku = generateBaseSku();
+  const p4Sku = generateBaseSku(audioCatId);
   const p4Res = insertProd.run(
     'Беспроводные наушники Clarity ANC Pro с пространственным аудио',
     'Гибридное активное шумоподавление до -40dB, динамические драйверы 12мм, 32 часа автономной работы с футляром Type-C.',
@@ -1628,6 +1645,138 @@ app.get('/api/products/:id/related', (req, res) => {
   }
 });
 
+const aiRelatedRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+app.post('/api/products/:id/ai-related', aiRelatedRateLimiter, async (req, res) => {
+  const productId = Number(req.params.id);
+  if (!Number.isSafeInteger(productId) || productId <= 0) {
+    return res.status(400).json({ error: 'Некорректный ID товара' });
+  }
+  if (!aiClient) {
+    return res.status(503).json({ error: 'Поиск похожих товаров временно недоступен' });
+  }
+
+  const currentProduct = db.prepare(`
+    SELECT p.id, p.title, p.description, p.specifications, c.name AS category_name
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    WHERE p.id = ? AND p.status = 'active'
+  `).get(productId) as {
+    id: number;
+    title: string;
+    description: string;
+    specifications: string | null;
+    category_name: string | null;
+  } | undefined;
+  if (!currentProduct) {
+    return res.status(404).json({ error: 'Товар не найден' });
+  }
+
+  const candidates = db.prepare(`
+    SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status,
+           p.delivery_type, p.main_image, p.images, p.video_url, p.youtube_url,
+           p.specifications, c.name AS category_name,
+           COALESCE((
+             SELECT MIN(v.price_tjs)
+             FROM product_variants v
+             WHERE v.product_id = p.id AND v.price_tjs > 0
+           ), 0) AS min_price_tjs
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    WHERE p.status = 'active' AND p.id != ?
+    ORDER BY CASE WHEN p.category_id = (
+      SELECT category_id FROM products WHERE id = ?
+    ) THEN 0 ELSE 1 END, p.id DESC
+    LIMIT 60
+  `).all(productId, productId) as Array<{
+    id: number;
+    title: string;
+    description: string;
+    category_name: string | null;
+    specifications: string | null;
+    [key: string]: any;
+  }>;
+  if (candidates.length === 0) return res.json({ products: [] });
+
+  const prompt = `Найди до 4 товаров каталога, наиболее похожих на исходный товар по назначению, типу, материалам и характеристикам. Верни только JSON вида {"product_ids":[числовые ID]}.
+Не выбирай исходный товар. Выбирай только ID из списка кандидатов.
+Исходный товар: ${JSON.stringify({
+    title: currentProduct.title,
+    description: currentProduct.description?.slice(0, 500) || '',
+    category: currentProduct.category_name || '',
+    specifications: currentProduct.specifications?.slice(0, 500) || '',
+  })}
+Кандидаты: ${JSON.stringify(candidates.map((candidate) => ({
+    id: candidate.id,
+    title: candidate.title,
+    description: candidate.description?.slice(0, 240) || '',
+    category: candidate.category_name || '',
+    specifications: candidate.specifications?.slice(0, 240) || '',
+  })))}`;
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = await Promise.race([
+      aiClient.models.generateContent({
+        model: GEMINI_IMPORT_MODEL,
+        contents: prompt,
+        config: { responseMimeType: 'application/json' },
+      }),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('AI-поиск похожих товаров превысил время ожидания')), 8000);
+      }),
+    ]);
+    const result = JSON.parse(response.text?.trim() || '{}') as { product_ids?: unknown[] };
+    const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+    const selectedIds = Array.isArray(result.product_ids)
+      ? [...new Set(result.product_ids.map(Number).filter((id) => Number.isSafeInteger(id) && candidateIds.has(id)))].slice(0, 4)
+      : [];
+    if (selectedIds.length === 0) return res.json({ products: [] });
+
+    const getSelectedProduct = db.prepare(`
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status,
+             p.delivery_type, p.main_image, p.images, p.video_url, p.youtube_url,
+             c.name AS category_name,
+             COALESCE((
+               SELECT MIN(v.price_tjs)
+               FROM product_variants v
+               WHERE v.product_id = p.id AND v.price_tjs > 0
+             ), 0) AS min_price_tjs
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.id = ? AND p.status = 'active'
+    `);
+    const getVariants = db.prepare(`
+      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
+      FROM product_variants
+      WHERE product_id = ?
+      ORDER BY id ASC
+    `);
+    const products = selectedIds.flatMap((id) => {
+      const selected = getSelectedProduct.get(id) as Record<string, any> | undefined;
+      if (!selected) return [];
+      return [{
+        ...selected,
+        variants: getVariants.all(id),
+        delivery_type: selected.delivery_type || 'order',
+        youtube_url: selected.youtube_url || selected.video_url || '',
+        video_url: selected.youtube_url || selected.video_url || '',
+      }];
+    });
+    return res.json({ products });
+  } catch (error) {
+    console.error('[AI Related Products Error]', error);
+    return res.status(502).json({ error: 'Не удалось найти похожие товары. Попробуйте позже.' });
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+});
+
 // Увеличение счетчика просмотров товара
 app.post('/api/products/:id/view', (req, res) => {
   try {
@@ -2057,7 +2206,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       if (!mImage && allImages) mImage = allImages.split(',')[0].trim();
     }
 
-    const baseSku = generateBaseSku();
+    const baseSku = generateBaseSku(categoryId);
 
     const insertProd = db.prepare(`
       INSERT INTO products (title, description, category_id, base_sku, status, delivery_type, main_image, images, video_url, youtube_url, specifications)
@@ -2197,7 +2346,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
 
     // Получаем текущий базовый артикул
     const existingProd = db.prepare('SELECT base_sku FROM products WHERE id = ?').get(id) as { base_sku: string } | undefined;
-    const baseSku = existingProd ? existingProd.base_sku : generateBaseSku();
+    const baseSku = existingProd ? existingProd.base_sku : generateBaseSku(categoryId);
 
     // Обновляем карточку товара
     db.prepare(`
@@ -2421,7 +2570,7 @@ app.post('/api/add-product', async (req, res) => {
     const categoryId = resolveCategoryId(finalCategory);
 
     // Генерируем уникальный артикул базового товара
-    const baseSku = generateBaseSku();
+    const baseSku = generateBaseSku(categoryId);
 
     // Извлекаем изображения
     let allImages = '';
@@ -2620,7 +2769,7 @@ app.post('/api/parse-product-html', async (req, res) => {
     if (save_to_catalog) {
       const categoryId = resolveCategoryId(finalProduct.category_name);
 
-      const baseSku = generateBaseSku();
+      const baseSku = generateBaseSku(categoryId);
       const allImagesStr = imagesList.join(',');
       const specsJson = JSON.stringify(combinedSpecs);
 

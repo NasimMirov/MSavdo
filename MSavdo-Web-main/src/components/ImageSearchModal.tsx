@@ -538,12 +538,12 @@ export const ImageSearchModal: React.FC<ImageSearchModalProps> = ({
                             {p.delivery_type === 'stock' ? (
                               <div className="absolute bottom-1.5 left-1.5 max-w-[85%] whitespace-normal break-words bg-emerald-600/90 text-white text-[8px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
                                 <Truck className="w-2.5 h-2.5" />
-                                <span className="min-w-0 leading-tight">В наличии (Доставка 1 день)</span>
+                                <span className="min-w-0 leading-tight">В наличии · 1 день</span>
                               </div>
                             ) : (
                               <div className="absolute bottom-1.5 left-1.5 max-w-[85%] whitespace-normal break-words bg-black/85 text-amber-300 text-[8px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
                                 <Clock className="w-2.5 h-2.5 text-amber-400" />
-                                <span className="min-w-0 leading-tight">Под заказ: 15-30 дней напрямую с фабрики</span>
+                                <span className="min-w-0 leading-tight">Доставка 18–30 дней</span>
                               </div>
                             )}
                           </div>

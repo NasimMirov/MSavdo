@@ -35,7 +35,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   const totalSum = items.reduce((sum, item) => sum + item.price_tjs * item.quantity, 0);
 
-  // Проверка: есть ли в корзине товары под заказ из Китая (срок 15-30 дней)
+  // Проверка: есть ли товары с доставкой из Китая за 18–30 дней.
   const hasPreOrderItems = items.some((item) => item.delivery_type !== 'stock');
 
   // Шаг 1: Нажатие на кнопку оформления
@@ -119,8 +119,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       ``,
       `💰 ИТОГО К ОПЛАТЕ: ${totalSum} TJS`,
       hasPreOrderItems
-        ? `🚚 Срок доставки: ТОВАР ПОД ЗАКАЗ ИЗ КИТАЯ (15–30 ДНЕЙ) — СОГЛАСИЕ ПОДТВЕРЖДЕНО`
-        : `🚚 Доставка: В наличии на складе (1-2 дня)`,
+        ? `🚚 Доставка: 18–30 дней — СОГЛАСИЕ ПОДТВЕРЖДЕНО`
+        : `🚚 Доставка: в наличии на складе, 1 день`,
       `✓ С правилами сервиса (возврат строго на карту плательщика) ознакомлен и согласен.`
     ].filter(Boolean).join('\n');
 
@@ -250,7 +250,10 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               {/* Авторитетный инфо-блок срока доставки */}
               <div className="p-3 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-center gap-2.5 text-xs text-slate-800 shadow-xs">
                 <Truck className="w-4 h-4 text-amber-600 shrink-0" />
-                <span><strong>🚚 Срок доставки:</strong> под заказ 15–30 дней напрямую с фабрики</span>
+                <span>
+                  <strong>🚚 Срок доставки:</strong>{' '}
+                  {hasPreOrderItems ? 'доставка 18–30 дней' : 'в наличии · 1 день'}
+                </span>
               </div>
 
               {/* ОБЯЗАТЕЛЬНЫЙ ЧЕКБОКС: БЕЗ НЕГО ЗАКАЗ ЗАБЛОКИРОВАН */}
@@ -312,7 +315,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         </div>
       </div>
 
-      {/* МОДАЛЬНОЕ ОКНО ПРЕДУПРЕЖДЕНИЯ О ДОСТАВКЕ ИЗ КИТАЯ 15-30 ДНЕЙ (ТРЕБОВАНИЕ 5) */}
+      {/* Подтверждение срока доставки из Китая */}
       {showPreOrderModal && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
           <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border-4 border-amber-400 text-center space-y-6 animate-scale-up">
@@ -323,7 +326,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
             <div className="space-y-3">
               <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight font-heading leading-snug">
-                ВНИМАНИЕ! ТОВАР ДОСТАВЛЯЕТСЯ ИЗ КИТАЯ В ТЕЧЕНИЕ 15–30 ДНЕЙ
+                ВНИМАНИЕ! ДОСТАВКА ТОВАРА ЗАЙМЁТ 18–30 ДНЕЙ
               </h3>
               <p className="text-base sm:text-lg font-extrabold text-amber-700">
                 Вы согласны со сроками доставки?

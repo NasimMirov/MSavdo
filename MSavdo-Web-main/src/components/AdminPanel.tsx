@@ -970,7 +970,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           prev.map((item) => (item.id === p.id ? { ...item, delivery_type: newDelivery } : item))
         );
         onRefreshCatalog();
-        showNotice(`Доставка для ${p.base_sku}: ${newDelivery === 'stock' ? 'В наличии (1 день)' : 'Под заказ (15-30 дн.)'}`);
+        showNotice(`Доставка для ${p.base_sku}: ${newDelivery === 'stock' ? 'В наличии · 1 день' : 'Доставка 18–30 дней'}`);
       }
     } catch (err) {
       console.error('Ошибка смены доставки:', err);
@@ -1077,49 +1077,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // ==========================================
   if (!isAuthenticated) {
     return (
-      <div className="max-w-md mx-auto py-16 px-4">
-        <div className="mb-6">
-          <button
-            onClick={onBack}
-            className="inline-flex items-center gap-2 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Вернуться в магазин</span>
-          </button>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-xl space-y-6">
-          <div className="text-center space-y-2">
-            <div className="w-12 h-12 bg-slate-900 text-white rounded-2xl flex items-center justify-center mx-auto shadow-md">
-              <Lock className="w-6 h-6 text-emerald-400" />
-            </div>
-            <h2 className="text-xl font-extrabold text-slate-900 font-heading">
-              Панель администратора M.Savdo
-            </h2>
-            <p className="text-xs text-slate-500">
-              Управление каталогом, навигатором товаров и импортом с 1688 / Pinduoduo
-            </p>
-          </div>
-
+      <div className="mx-auto flex min-h-[50vh] max-w-md items-center justify-center px-4">
+        <div className="w-full space-y-4">
           {loginError && (
             <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-semibold text-red-700 text-center">
               {loginError}
             </div>
           )}
-
-          <div className="space-y-4 text-xs">
-            <button
-              type="button"
-              onClick={openTelegramLogin}
-              disabled={isLoggingIn || !isTelegramLoginReady}
-              className="w-full py-3.5 bg-sky-600 hover:bg-sky-700 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition-colors shadow-sm disabled:opacity-50"
-            >
-              {isLoggingIn ? 'Проверка Telegram...' : isTelegramLoginReady ? 'Войти через Telegram' : 'Загрузка Telegram Login...'}
-            </button>
-            <div className="p-3 bg-slate-50 rounded-xl text-[11px] text-slate-500 text-center border border-slate-100">
-              Доступ разрешён только двум Telegram-аккаунтам, настроенным на сервере. Откройте панель через HTTPS.
-            </div>
-          </div>
+          <button
+            type="button"
+            onClick={openTelegramLogin}
+            disabled={isLoggingIn || !isTelegramLoginReady}
+            className="w-full rounded-xl bg-[#229ed9] py-4 text-sm font-bold text-white shadow-sm transition-colors hover:bg-[#168ac2] disabled:opacity-50"
+          >
+            {isLoggingIn ? 'Проверка…' : isTelegramLoginReady ? 'Войти через Telegram' : 'Загрузка…'}
+          </button>
         </div>
       </div>
     );
@@ -1303,7 +1275,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <div className="bg-white p-3.5 rounded-2xl border border-amber-200 bg-amber-50/30 shadow-xs">
               <span className="text-[11px] text-amber-700 font-medium block flex items-center gap-1">
                 <Clock className="w-3 h-3" />
-                <span>Под заказ (15-30 дн):</span>
+                <span>Доставка 18–30 дней:</span>
               </span>
               <span className="text-xl font-extrabold text-amber-900 font-mono mt-0.5 block">
                 {adminProducts.filter(p => p.delivery_type !== 'stock').length}
@@ -1617,7 +1589,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                                 ) : (
                                   <>
                                     <Clock className="w-3 h-3 text-amber-700" />
-                                    <span>Под заказ (15-30)</span>
+                                    <span>Доставка 18–30 дней</span>
                                   </>
                                 )}
                               </button>
@@ -1763,7 +1735,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               p.delivery_type === 'stock' ? 'bg-emerald-600 text-white' : 'bg-amber-400 text-black'
                             }`}
                           >
-                            {p.delivery_type === 'stock' ? '🚚 Склад (1д)' : '⏳ Заказ (15-30)'}
+                            {p.delivery_type === 'stock' ? 'В наличии · 1 день' : 'Доставка 18–30 дней'}
                           </button>
                         </div>
                       </div>
@@ -2236,7 +2208,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           {order.delivery_type === 'order' ? (
                             <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 flex items-center gap-1">
                               <Clock className="w-3 h-3 text-amber-600" />
-                              <span>Под заказ 15–30 дней</span>
+                              <span>Доставка 18–30 дней</span>
                             </span>
                           ) : (
                             <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl bg-emerald-50 text-emerald-900 border border-emerald-200 flex items-center gap-1">
