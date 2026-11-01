@@ -49,11 +49,9 @@ python3 app.py
 
 ## Защита админ-панели (Node.js сервер)
 
-Перед запуском Node.js-сервера задайте `ADMIN_JWT_SECRET` случайным значением не короче 32 байт и `ADMIN_INITIAL_PASSWORD` длиной не менее 12 символов. При необходимости задайте `ADMIN_INITIAL_USERNAME` (по умолчанию `admin`). Например, создайте секрет командой `node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"` и сохраните его вместе с паролем в переменных окружения, а не в репозитории.
+Вход в админ-панель выполняется через Telegram Login. В BotFather выберите `@msavdo_login_bot`, откройте `Login Widget`, зарегистрируйте `https://msavdo.shop` как Allowed URL и получите Client ID. В серверных переменных окружения задайте `TELEGRAM_LOGIN_CLIENT_ID`, `ADMIN_TELEGRAM_ALLOWED_IDS` с ровно двумя числовыми Telegram user ID и `ADMIN_JWT_SECRET` случайным значением не короче 32 байт. Секрет можно сгенерировать командой `node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"`. Не коммитьте секрет.
 
-При первом запуске эти переменные создают администратора с индивидуальной солью и хешем scrypt. Если пароль по умолчанию `admin123` уже был сохранён прежней версией сервера, учётная запись будет отключена; задайте новый `ADMIN_INITIAL_PASSWORD` и перезапустите сервер для её безопасной замены. В production сервер не запустится без `ADMIN_JWT_SECRET`.
-
-Админская сессия живёт два часа и хранится только в cookie `HttpOnly`, `Secure`, `SameSite=Strict`; панель должна открываться по HTTPS. Для фронтенда с отдельным, но принадлежащим тому же сайту origin добавьте его точное значение в `ADMIN_ALLOWED_ORIGINS` (несколько origin разделяются запятыми); cross-site cookie-сессии запрещены. За reverse proxy укажите доверенное число прокси в `TRUST_PROXY_HOPS`, чтобы ограничение входа учитывало IP клиента.
+Сервер проверяет подпись Telegram ID token, issuer, audience, срок действия, одноразовый nonce и наличие Telegram ID в allowlist. Парольный вход отключён. Админская сессия живёт два часа и хранится только в cookie `HttpOnly`, `Secure`, `SameSite=Strict`; панель и API должны использовать HTTPS-домены одного сайта. Добавьте точный frontend origin в `ADMIN_ALLOWED_ORIGINS`. За reverse proxy задайте доверенное число прокси в `TRUST_PROXY_HOPS`.
 
 ---
 
