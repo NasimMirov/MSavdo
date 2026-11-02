@@ -42,6 +42,201 @@ export interface ExtractedHtmlContext {
   rawSnippetForAi: string;
 }
 
+function findBalancedJsonValue(source: string, startIndex: number): unknown | null {
+  const start = source.indexOf('{', startIndex);
+  if (start < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(source.slice(start, index + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function extractEmbeddedJson(rawInput: string): unknown | null {
+  const trimmed = rawInput.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      // Try the embedded marketplace data below.
+    }
+  }
+
+  const assignmentPattern = /(?:window\.)?(?:context|__INIT_DATA__|runParams|__INITIAL_DATA__|data)\s*=/gi;
+  for (const assignment of rawInput.matchAll(assignmentPattern)) {
+    const assignmentEnd = (assignment.index ?? 0) + assignment[0].length;
+    const wrapperCall = /\}\)\s*\(\s*[^,]+,\s*/g;
+    wrapperCall.lastIndex = assignmentEnd;
+    const wrapped = wrapperCall.exec(rawInput);
+    const value = findBalancedJsonValue(rawInput, wrapped ? wrapperCall.lastIndex : assignmentEnd);
+    if (value) return value;
+  }
+
+  const dataDetailMatch = rawInput.match(/data-detail=(["'])([\s\S]*?)\1/i);
+  if (dataDetailMatch) {
+    const decoded = dataDetailMatch[2]
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;|&apos;/gi, "'");
+    try {
+      return JSON.parse(decoded);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function collectNestedObjects(root: unknown): Record<string, any>[] {
+  const objects: Record<string, any>[] = [];
+  const visited = new Set<object>();
+  const visit = (value: unknown, depth: number) => {
+    if (!value || typeof value !== 'object' || depth > 30 || visited.has(value)) return;
+    visited.add(value);
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child, depth + 1);
+      return;
+    }
+    const objectValue = value as Record<string, unknown>;
+    objects.push(objectValue);
+    for (const child of Object.values(objectValue)) visit(child, depth + 1);
+  };
+  visit(root, 0);
+  return objects;
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&gt;/gi, '>')
+    .replace(/&lt;/gi, '<')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/\\u003e/gi, '>')
+    .replace(/\\u0026/gi, '&')
+    .trim();
+}
+
+function stringValue(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return decodeHtmlEntities(String(value));
+  if (Array.isArray(value)) return value.map(stringValue).filter(Boolean).join(' / ');
+  if (value && typeof value === 'object') {
+    const objectValue = value as Record<string, unknown>;
+    return stringValue(objectValue.name ?? objectValue.value ?? objectValue.label ?? objectValue.text);
+  }
+  return '';
+}
+
+function findFieldValue(objects: Record<string, any>[], fieldNames: string[]): unknown {
+  for (const fieldName of fieldNames) {
+    for (const objectValue of objects) {
+      const value = objectValue[fieldName];
+      if (value !== undefined && value !== null && value !== '') return value;
+    }
+  }
+  return undefined;
+}
+
+function normalizePositiveNumber(value: unknown): number {
+  if (typeof value !== 'string' && typeof value !== 'number') return 0;
+  const match = String(value).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+  const number = match ? Number(match[0]) : 0;
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function extractImageUrls(value: unknown): string[] {
+  const urls = new Set<string>();
+  const visit = (current: unknown, key = '', inImageContext = false) => {
+    const imageContext = inImageContext || /image|pic|photo|main|gallery|img/i.test(key);
+    if (typeof current === 'string') {
+      const url = current.startsWith('//') ? `https:${current}` : current;
+      if (/^https?:\/\/\S+$/i.test(url) && imageContext) urls.add(url);
+      return;
+    }
+    if (Array.isArray(current)) {
+      current.forEach((item) => visit(item, key, imageContext));
+    } else if (current && typeof current === 'object') {
+      for (const [childKey, childValue] of Object.entries(current)) visit(childValue, childKey, imageContext);
+    }
+  };
+  visit(value);
+  return [...urls].filter((url) => !/\.(?:gif|svg|ico)(?:[?#]|$)/i.test(url)).slice(0, 32);
+}
+
+function extractVariants(
+  skuMap: unknown,
+  weightKg: number,
+  skuProps: unknown,
+): SemanticVariant[] {
+  if (!skuMap || typeof skuMap !== 'object' || Array.isArray(skuMap)) return [];
+  const optionNames = new Map<string, string>();
+  const props = Array.isArray(skuProps) ? skuProps : [];
+  for (const prop of props) {
+    if (!prop || typeof prop !== 'object') continue;
+    const values = (prop as Record<string, unknown>).value;
+    if (!Array.isArray(values)) continue;
+    for (const option of values) {
+      if (!option || typeof option !== 'object') continue;
+      const entry = option as Record<string, unknown>;
+      const name = stringValue(entry.name ?? entry.value);
+      for (const key of [entry.vid, entry.value, entry.specValueId, entry.id]) {
+        if (key !== undefined && key !== null) optionNames.set(String(key), name);
+      }
+    }
+  }
+
+  const variants: SemanticVariant[] = [];
+  for (const [rawKey, rawValue] of Object.entries(skuMap)) {
+    if (!rawValue || typeof rawValue !== 'object') continue;
+    const sku = rawValue as Record<string, unknown>;
+    const rawAttributes = decodeHtmlEntities(stringValue(sku.specAttrs) || rawKey);
+    const resolvedAttributes = rawAttributes
+      .split(/\s*(?:>|;|；|\|)\s*/)
+      .map((attribute) => optionNames.get(attribute) || attribute)
+      .filter(Boolean);
+    const attributes = resolvedAttributes.length > 1
+      ? resolvedAttributes
+      : (() => {
+        const simpleSizeMatch = rawAttributes.match(/^(.+?)\s+(\d+(?:\.\d+)?\s*(?:码|cm|ml|g|kg)?)$/i);
+        return simpleSizeMatch ? [simpleSizeMatch[1], simpleSizeMatch[2]] : resolvedAttributes;
+      })();
+    const price = normalizePositiveNumber(sku.price ?? sku.discountPrice ?? sku.retailPrice);
+    const stockValue = sku.canBookCount ?? sku.amountOnSale ?? sku.quantity ?? sku.stock;
+    const parsedStock = Number(stockValue);
+    const imageUrl = stringValue(sku.skuImageUrl ?? sku.picUrl ?? sku.imageUrl);
+    variants.push({
+      color: translateVariantName(attributes[0] || rawAttributes) || 'Стандарт',
+      size: translateVariantName(attributes.slice(1).join(' / ')) || 'Стандарт',
+      price_cny: price,
+      stock: Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 0,
+      weight_kg: weightKg || 0.5,
+      image_url: imageUrl.startsWith('//') ? `https:${imageUrl}` : imageUrl,
+      sku_id: stringValue(sku.skuId ?? sku.specId),
+    });
+  }
+  return variants;
+}
+
 function normalizeVideoUrl(value: string): string {
   const url = value
     .replace(/\\u002F/gi, '/')
@@ -222,11 +417,8 @@ export function translateVariantName(chineseText: string): string {
     }
   }
 
-  // Удаляем оставшиеся китайские иероглифы
-  s = s.replace(/[\u4e00-\u9fa5]/g, ' ');
-  s = s.replace(/\s+/g, ' ').trim();
-
-  return s || 'Стандарт';
+  s = s.replace(/[\u4e00-\u9fa5]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s || chineseText.trim() || 'Стандарт';
 }
 
 /**
@@ -243,113 +435,69 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
 
   if (!rawInput || typeof rawInput !== 'string') return result;
 
-  const trimmed = rawInput.trim();
-
-  // 1. Попытка извлечь JSON (window.context / window.__INIT_DATA / window.runParams или чистый JSON)
-  let parsedJson: any = null;
-
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    try {
-      parsedJson = JSON.parse(trimmed);
-    } catch (_) {}
-  }
-
-  if (!parsedJson) {
-    const jsonMatches = [
-      /window\.context\s*=\s*(\{[\s\S]*?\});(?:\s*<|\s*$)/,
-      /window\.__INIT_DATA\s*=\s*(\{[\s\S]*?\});(?:\s*<|\s*$)/,
-      /window\.runParams\s*=\s*(\{[\s\S]*?\});(?:\s*<|\s*$)/,
-      /var\s+data\s*=\s*(\{[\s\S]*?\});(?:\s*<|\s*$)/,
-      /__INITIAL_DATA__\s*=\s*(\{[\s\S]*?\});(?:\s*<|\s*$)/,
-      /data-detail='(\{[\s\S]*?\})'/,
-      /data-detail="(\{[\s\S]*?\})"/
-    ];
-
-    for (const regex of jsonMatches) {
-      const match = rawInput.match(regex);
-      if (match && match[1]) {
-        try {
-          parsedJson = JSON.parse(match[1]);
-          break;
-        } catch (_) {}
-      }
-    }
-  }
-
-  // 2. Если JSON найден, глубоко парсим offerData, featureAttributes, skuInfoMap
+  // 1. Извлекаем JSON из обычного присваивания или вызова window.context(..., JSON).
+  const parsedJson = extractEmbeddedJson(rawInput);
   if (parsedJson && typeof parsedJson === 'object') {
-    const dataObj = parsedJson.data || parsedJson.offerData || parsedJson.globalData?.tempModel?.offerDetail || parsedJson;
+    const nestedObjects = collectNestedObjects(parsedJson);
+    const skuOwner = nestedObjects.find((entry) => {
+      const map = entry.skuInfoMap || entry.skuMap || entry.sku?.skuInfoMap;
+      return map && typeof map === 'object' && !Array.isArray(map);
+    });
+    const skuMap = skuOwner?.skuInfoMap || skuOwner?.skuMap || skuOwner?.sku?.skuInfoMap;
+    const offerDetail = nestedObjects.find((entry) => entry.subject && (
+      entry.featureAttributes || entry.productAttributes || entry.skuInfoMap
+    ));
 
-    // Заголовок
-    result.title = dataObj.title || dataObj.subject || dataObj.productTitle || dataObj.offerTitle || '';
-
-    // Фотографии
-    const imgs = dataObj.images || dataObj.offerImgList || dataObj.image?.images || dataObj.picUrlList || [];
-    if (Array.isArray(imgs)) {
-      result.images = imgs.map((u: any) => typeof u === 'string' ? u : u?.url || '').filter((u: string) => u.startsWith('http') || u.startsWith('//'));
-    }
-
-    // Видео
+    const titleValue = offerDetail?.subject
+      ?? findFieldValue(nestedObjects, ['subject', 'productTitle', 'offerTitle', 'title']);
+    result.title = stringValue(titleValue);
+    result.images = extractImageUrls(parsedJson);
     result.videoUrls = collectVideoUrls(parsedJson);
-    result.videoUrl = result.videoUrls[0]
-      || dataObj.videoUrl
-      || dataObj.mainVideo?.videoUrl
-      || dataObj.videoInfo?.videoUrl
-      || '';
+    result.videoUrl = result.videoUrls[0];
 
-    // Вес
-    const weightSource = dataObj.shippingInfo?.unitWeight
-      || dataObj.freightInfo?.unitWeight
-      || dataObj.grossWeight
-      || dataObj.weight
-      || 0;
-    const weightVal = normalizeWeightKg(weightSource);
+    const weightSource = findFieldValue(nestedObjects, [
+      'unitWeight', 'grossWeight', 'weight', 'productWeight', 'netWeight',
+    ]);
+    const weightVal = normalizeWeightKg(stringValue(weightSource));
     if (weightVal > 0) result.weightKg = weightVal;
 
-    // Характеристики (featureAttributes / productAttributes)
-    const attrs = dataObj.featureAttributes || dataObj.productAttributes || dataObj.attributes || [];
-    if (Array.isArray(attrs)) {
-      for (const attr of attrs) {
-        const k = (attr.name || attr.attributeName || attr.propName || '').trim();
-        const v = (attr.value || attr.attributeValue || attr.propValue || '').trim();
-        if (k && v) {
+    const seenSpecifications = new Set<string>();
+    for (const objectValue of nestedObjects) {
+      for (const fieldName of ['featureAttributes', 'productAttributes', 'attributes']) {
+        const attrs = objectValue[fieldName];
+        if (!Array.isArray(attrs)) continue;
+        for (const attribute of attrs) {
+          if (!attribute || typeof attribute !== 'object') continue;
+          const item = attribute as Record<string, unknown>;
+          const name = stringValue(item.name ?? item.attributeName ?? item.propName ?? item.label);
+          const value = stringValue(item.value ?? item.attributeValue ?? item.propValue ?? item.values);
+          const normalizedName = name.toLocaleLowerCase();
+          if (!name || !value || seenSpecifications.has(normalizedName)) continue;
+          seenSpecifications.add(normalizedName);
           result.specifications.push({
-            name: translateVariantName(k),
-            value: translateVariantName(v)
+            name: translateVariantName(name),
+            value: translateVariantName(value),
           });
+          if (result.specifications.length >= 100) break;
         }
+        if (result.specifications.length >= 100) break;
       }
+      if (result.specifications.length >= 100) break;
     }
 
-    // Карта SKU (skuInfoMap / skuMap)
-    const skuMap = dataObj.skuInfoMap || dataObj.skuMap || dataObj.sku?.skuInfoMap || {};
-    result.skuInfoMap = skuMap;
-
-    if (skuMap && typeof skuMap === 'object') {
-      for (const [skuKey, skuVal] of Object.entries(skuMap)) {
-        if (!skuVal || typeof skuVal !== 'object') continue;
-        const valObj = skuVal as any;
-        const price = parseFloat(valObj.price || valObj.discountPrice || valObj.retailPrice || 0);
-        const stock = parseInt(valObj.canBookCount || valObj.amountOnSale || valObj.quantity || valObj.stock || 25, 10);
-        const img = valObj.skuImageUrl || valObj.picUrl || valObj.imageUrl || '';
-        const translatedKey = translateVariantName(skuKey);
-
-        result.variants.push({
-          color: translatedKey,
-          size: 'Стандарт',
-          price_cny: price > 0 ? price : 50,
-          stock: stock > 0 ? stock : 25,
-          weight_kg: result.weightKg || 0.5,
-          image_url: img,
-          sku_id: String(valObj.skuId || valObj.specId || '')
-        });
-      }
+    if (skuMap) {
+      result.skuInfoMap = skuMap;
+      const skuProps = findFieldValue(nestedObjects, ['skuProps', 'skuPropertyList', 'skuAttributes']);
+      result.variants = extractVariants(skuMap, result.weightKg || 0.5, skuProps);
     }
+
+    const category = findFieldValue(nestedObjects, ['categoryName', 'category']);
+    result.categoryHint = stringValue(category) || undefined;
   }
 
   const videoUrlMatches = rawInput.matchAll(/(?:videoUrl|playUrl|video_url|videoAddress|mediaUrl)\s*["']?\s*[:=]\s*["']([^"']+)["']/gi);
   for (const match of videoUrlMatches) {
-    const url = normalizeVideoUrl(match[1]);
+    const url = normalizeVideoUrl(decodeHtmlEntities(match[1]));
     if (url && !result.videoUrls.includes(url)) result.videoUrls.push(url);
   }
   const videoTagMatches = rawInput.matchAll(/<(?:video|source)\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi);
@@ -385,7 +533,7 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
     let match;
     const seenNames = new Set<string>();
 
-    while ((match = attrRegex.exec(rawInput)) !== null && result.specifications.length < 15) {
+    while ((match = attrRegex.exec(rawInput)) !== null && result.specifications.length < 100) {
       const block = match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       if (block.includes('：') || block.includes(':')) {
         const parts = block.split(/[:：]/);
@@ -393,10 +541,7 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
         const v = parts.slice(1).join(':').trim();
         if (k && v && k.length <= 40 && v.length <= 150 && !seenNames.has(k)) {
           seenNames.add(k);
-          result.specifications.push({
-            name: translateVariantName(k),
-            value: translateVariantName(v)
-          });
+          result.specifications.push({ name: translateVariantName(k), value: translateVariantName(v) });
         }
       }
     }
@@ -411,7 +556,7 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
   }
   if (result.variants.length > 0) {
     snippet += `СПИСОК МОДИФИКАЦИЙ SKU (skuInfoMap):\n` +
-      result.variants.slice(0, 15).map(v => `• ${v.color} | Цена: ¥${v.price_cny} | Склад: ${v.stock} шт.`).join('\n') + '\n';
+      result.variants.slice(0, 100).map(v => `• ${v.color} | ${v.size} | Цена: ¥${v.price_cny || 'не указана'} | Склад: ${v.stock}`).join('\n') + '\n';
   }
   if (result.images.length > 0) {
     snippet += `ФОТОГРАФИИ ГАЛЕРЕИ: ${result.images.slice(0, 5).join(', ')}\n`;

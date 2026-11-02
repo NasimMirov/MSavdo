@@ -208,6 +208,197 @@
     return Array.from(videoUrls).slice(0, MAX_VIDEOS);
   }
 
+  function parseInlineProductContext() {
+    const scripts = document.querySelectorAll("script:not([src])");
+    for (const script of scripts) {
+      const source = script.textContent || "";
+      if (source.length > 1000000 || !/skuInfoMap|featureAttributes|offerDetail/i.test(source)) continue;
+      const assignment = /(?:window\.)?(?:context|__INIT_DATA__|runParams|__INITIAL_DATA__)\s*=/gi;
+      let match;
+      while ((match = assignment.exec(source)) !== null) {
+        const afterAssignment = assignment.lastIndex;
+        const wrapper = /\}\)\s*\(\s*[^,]+,\s*/g;
+        wrapper.lastIndex = afterAssignment;
+        const wrappedCall = wrapper.exec(source);
+        const startSearch = wrappedCall ? wrapper.lastIndex : afterAssignment;
+        const objectStart = source.indexOf("{", startSearch);
+        if (objectStart < 0) continue;
+
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+        for (let index = objectStart; index < source.length; index += 1) {
+          const character = source[index];
+          if (inString) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === '"') inString = false;
+            continue;
+          }
+          if (character === '"') inString = true;
+          else if (character === "{") depth += 1;
+          else if (character === "}" && --depth === 0) {
+            try {
+              return JSON.parse(source.slice(objectStart, index + 1));
+            } catch {
+              break;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function getNestedObjects(root) {
+    const objects = [];
+    const seen = new Set();
+    const visit = (value, depth) => {
+      if (!value || typeof value !== "object" || depth > 30 || seen.has(value)) return;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        value.forEach((item) => visit(item, depth + 1));
+        return;
+      }
+      objects.push(value);
+      Object.values(value).forEach((item) => visit(item, depth + 1));
+    };
+    visit(root, 0);
+    return objects;
+  }
+
+  function cleanStructuredText(value) {
+    if (typeof value === "string" || typeof value === "number") {
+      return String(value)
+        .replace(/&gt;/gi, ">")
+        .replace(/&amp;/gi, "&")
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;|&apos;/gi, "'")
+        .trim();
+    }
+    if (Array.isArray(value)) return value.map(cleanStructuredText).filter(Boolean).join(" / ");
+    if (value && typeof value === "object") {
+      return cleanStructuredText(value.name ?? value.value ?? value.label ?? value.text);
+    }
+    return "";
+  }
+
+  function getStructuredNumber(value) {
+    if (typeof value !== "string" && typeof value !== "number") return 0;
+    const parsed = Number(String(value).replace(/[^\d.]/g, ""));
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function extractStructuredProductData() {
+    const root = parseInlineProductContext();
+    if (!root) return null;
+
+    const objects = getNestedObjects(root);
+    const skuOwner = objects.find((item) => {
+      const map = item.skuInfoMap || item.skuMap || item.sku?.skuInfoMap;
+      return map && typeof map === "object" && !Array.isArray(map);
+    });
+    const offer = objects.find((item) => item.subject && (
+      item.featureAttributes || item.productAttributes || item.skuInfoMap
+    ));
+    const firstField = (names) => {
+      for (const name of names) {
+        const owner = objects.find((item) => item[name] !== undefined && item[name] !== null && item[name] !== "");
+        if (owner) return owner[name];
+      }
+      return undefined;
+    };
+
+    const title = cleanStructuredText(
+      offer?.subject ?? firstField(["subject", "productTitle", "offerTitle", "title"])
+    );
+    const specifications = [];
+    const seenSpecifications = new Set();
+    for (const object of objects) {
+      for (const field of ["featureAttributes", "productAttributes", "attributes"]) {
+        if (!Array.isArray(object[field])) continue;
+        for (const attribute of object[field]) {
+          if (!attribute || typeof attribute !== "object") continue;
+          const name = cleanStructuredText(attribute.name ?? attribute.attributeName ?? attribute.propName ?? attribute.label);
+          const value = cleanStructuredText(attribute.value ?? attribute.attributeValue ?? attribute.propValue ?? attribute.values);
+          if (!name || !value || seenSpecifications.has(name.toLowerCase())) continue;
+          seenSpecifications.add(name.toLowerCase());
+          specifications.push({ name, value });
+          if (specifications.length >= 100) break;
+        }
+        if (specifications.length >= 100) break;
+      }
+      if (specifications.length >= 100) break;
+    }
+
+    const skuMap = skuOwner?.skuInfoMap || skuOwner?.skuMap || skuOwner?.sku?.skuInfoMap;
+    const variants = [];
+    if (skuMap && typeof skuMap === "object") {
+      for (const [skuKey, rawSku] of Object.entries(skuMap)) {
+        if (!rawSku || typeof rawSku !== "object") continue;
+        const sku = rawSku;
+        const attributes = cleanStructuredText(sku.specAttrs || skuKey)
+          .split(/\s*(?:>|;|；|\|)\s*/)
+          .filter(Boolean);
+        const rawPrice = getStructuredNumber(sku.price ?? sku.discountPrice ?? sku.retailPrice);
+        const rawStock = sku.canBookCount ?? sku.amountOnSale ?? sku.quantity ?? sku.stock;
+        const stock = Number(rawStock);
+        let imageUrl = normalizeImageUrl(sku.skuImageUrl || sku.picUrl || sku.imageUrl || "");
+        variants.push({
+          color: attributes[0] || cleanStructuredText(skuKey) || "Стандарт",
+          size: attributes.slice(1).join(" / ") || "Стандарт",
+          price_cny: rawPrice,
+          stock: Number.isFinite(stock) && stock >= 0 ? Math.floor(stock) : 0,
+          image_url: imageUrl,
+          sku_id: cleanStructuredText(sku.skuId || sku.specId || ""),
+        });
+        if (variants.length >= 500) break;
+      }
+    }
+
+    const images = new Set();
+    const collectImages = (value, key = "", inImageContext = false) => {
+      const imageContext = inImageContext || /image|pic|photo|main|gallery|img/i.test(key);
+      if (typeof value === "string") {
+        if (imageContext) {
+          const url = normalizeImageUrl(value);
+          if (url) images.add(url);
+        }
+      } else if (Array.isArray(value)) {
+        value.forEach((item) => collectImages(item, key, imageContext));
+      } else if (value && typeof value === "object") {
+        Object.entries(value).forEach(([childKey, child]) => collectImages(child, childKey, imageContext));
+      }
+    };
+    collectImages(root);
+
+    const videoUrls = new Set(collectVideoUrls());
+    const collectVideos = (value, key = "", inVideo = false) => {
+      const videoContext = inVideo || /video|playurl|mediaurl/i.test(key);
+      if (typeof value === "string") {
+        if (videoContext && /url|src|link|address|play/i.test(key) && !/poster|image|cover/i.test(key)) {
+          const url = normalizeVideoUrl(value);
+          if (url) videoUrls.add(url);
+        }
+      } else if (Array.isArray(value)) {
+        value.forEach((item) => collectVideos(item, key, videoContext));
+      } else if (value && typeof value === "object") {
+        Object.entries(value).forEach(([childKey, child]) => collectVideos(child, childKey, videoContext));
+      }
+    };
+    collectVideos(root);
+
+    const weight = getStructuredNumber(firstField(["unitWeight", "grossWeight", "weight", "productWeight", "netWeight"]));
+    return {
+      title,
+      specifications,
+      variants,
+      images: Array.from(images).slice(0, 32),
+      video_urls: Array.from(videoUrls).slice(0, MAX_VIDEOS),
+      weight_kg: weight,
+    };
+  }
+
   function getChineseLabel(element) {
     const candidates = [
       element.getAttribute("aria-label"),
@@ -263,14 +454,26 @@
 
   function gatherProductData() {
     const rawText = getPageText();
+    const structuredData = extractStructuredProductData();
+    const structuredPrice = structuredData?.variants
+      .map((variant) => variant.price_cny)
+      .filter((price) => Number.isFinite(price) && price > 0)
+      .sort((left, right) => left - right)[0];
     return {
       raw_text: rawText,
       raw_title: document.title || "",
-      price_cny: getBasePrice(rawText),
-      images: collectImages(),
-      video_urls: collectVideoUrls(),
+      price_cny: getBasePrice(rawText) || structuredPrice || null,
+      images: Array.from(new Set([
+        ...(structuredData?.images || []),
+        ...collectImages(),
+      ])).slice(0, MAX_IMAGES),
+      video_urls: Array.from(new Set([
+        ...(structuredData?.video_urls || []),
+        ...collectVideoUrls(),
+      ])).slice(0, MAX_VIDEOS),
       original_link: window.location.href,
       visual_sku_map: collectVisualSkuMap().slice(0, MAX_IMAGES),
+      structured_data: structuredData,
       use_gemini: true,
     };
   }

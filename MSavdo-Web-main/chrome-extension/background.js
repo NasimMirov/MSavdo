@@ -93,6 +93,13 @@ async function handleImportProduct(payload, sender) {
     : Array.isArray(payload.video_urls)
       ? payload.video_urls
       : null;
+  const structuredData = payload?.structured_data === undefined ? null : payload.structured_data;
+  let structuredDataSize = 0;
+  try {
+    structuredDataSize = structuredData === null ? 0 : JSON.stringify(structuredData).length;
+  } catch {
+    return { success: false, error: "Структурированные данные товара повреждены." };
+  }
   if (
     !payload
     || typeof rawText !== "string"
@@ -101,6 +108,15 @@ async function handleImportProduct(payload, sender) {
     || !videoUrls
     || videoUrls.length > 12
     || videoUrls.some((url) => typeof url !== "string" || url.length > 2048)
+    || (structuredData !== null && (
+      typeof structuredData !== "object"
+      || Array.isArray(structuredData)
+      || structuredDataSize > 1000000
+      || (structuredData.variants !== undefined && (!Array.isArray(structuredData.variants) || structuredData.variants.length > 500))
+      || (structuredData.specifications !== undefined && (!Array.isArray(structuredData.specifications) || structuredData.specifications.length > 100))
+      || (structuredData.images !== undefined && (!Array.isArray(structuredData.images) || structuredData.images.length > 32))
+      || (structuredData.video_urls !== undefined && (!Array.isArray(structuredData.video_urls) || structuredData.video_urls.length > 12))
+    ))
     || !Number.isFinite(payload.price_cny)
   ) {
     return { success: false, error: "Данные товара неполные или превышают допустимый размер." };
@@ -114,7 +130,7 @@ async function handleImportProduct(payload, sender) {
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
-      body: JSON.stringify({ ...payload, raw_text: rawText, images, video_urls: videoUrls })
+      body: JSON.stringify({ ...payload, raw_text: rawText, images, video_urls: videoUrls, structured_data: structuredData })
     });
 
     const contentType = response.headers.get("content-type") || "";

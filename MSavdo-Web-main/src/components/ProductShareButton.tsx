@@ -53,11 +53,12 @@ export const ProductShareButton: React.FC<ProductShareButtonProps> = ({
 
   const productUrl = getProductUrl(product);
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`${product.title}\n${productUrl}`)}`;
+  const wrapperPosition = className.split(/\s+/).includes('absolute') ? '' : 'relative';
 
   return (
     <div
       ref={containerRef}
-      className={`relative ${className}`}
+      className={`${wrapperPosition} ${className}`}
       onClick={(event) => event.stopPropagation()}
     >
       <button

@@ -8,7 +8,9 @@ import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases } from './src/utils/semanticAi.js';
+import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
+import { ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -754,7 +756,7 @@ try {
   const updateProd = db.prepare('UPDATE products SET title = ?, description = ? WHERE id = ?');
   for (const p of existingProds) {
     const cleanT = cleanBannedWordsAndPhrases(p.title || '');
-    const cleanD = cleanBannedWordsAndPhrases(p.description || '');
+    const cleanD = ensureOrderDeliveryNotice(cleanBannedWordsAndPhrases(p.description || ''));
     if (cleanT !== p.title || cleanD !== p.description) {
       updateProd.run(cleanT, cleanD, p.id);
     }
@@ -1071,20 +1073,19 @@ async function analyzeProductWithGemini(
   rawTitle?: string,
   basePriceCny: number = 50,
   weightKg: number = 0.5,
-  visualSkuMap: VisualSkuItem[] = []
+  visualSkuMap: VisualSkuItem[] = [],
+  providedContext?: ExtractedHtmlContext,
 ): Promise<GeminiAnalysisResult> {
   const isHtmlOrJson = rawText.includes('<') || rawText.includes('window.context') || rawText.includes('__INIT_DATA') || rawText.includes('skuInfoMap') || rawText.trim().startsWith('{');
-  let structuredContext: any = null;
+  let structuredContext: ExtractedHtmlContext | null = providedContext || null;
   let textSnippet = '';
 
-  if (isHtmlOrJson) {
+  if (!structuredContext && isHtmlOrJson) {
     structuredContext = extractStructuredFromHtmlOrJson(rawText);
-    textSnippet = (structuredContext.rawSnippetForAi || rawText).slice(0, 18000);
-  } else {
-    textSnippet = rawText;
   }
+  textSnippet = (structuredContext?.rawSnippetForAi || rawText).slice(0, 30000);
 
-  const effectiveTitle = rawTitle || structuredContext?.title || '';
+  const effectiveTitle = structuredContext?.title || rawTitle || '';
 
   if (!aiClient) {
     console.log('[Gemini] GEMINI_API_KEY отсутствует, используется автономный семантический анализ v4.0.');
@@ -1247,7 +1248,7 @@ ${textSnippet}
           color: String(v.color || 'Основной цвет').trim(),
           size: String(v.size || 'Стандарт').trim(),
           price_cny: parseFloat(v.price_cny) || basePriceCny,
-          stock: parseInt(v.stock, 10) || 25,
+          stock: Number.isFinite(Number(v.stock)) && Number(v.stock) >= 0 ? Math.floor(Number(v.stock)) : 25,
           weight_kg: parseFloat(v.weight_kg) || weight_kg,
           image_url: vImg,
         });
@@ -2685,6 +2686,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       aiCategory,
       Array.isArray(specifications) ? specifications : [],
     );
+    cleanDesc = ensureOrderDeliveryNotice(cleanDesc);
 
     // Нормализация спецификаций/характеристик
     let cleanSpecs = '';
@@ -2842,6 +2844,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       aiCategory,
       Array.isArray(specifications) ? specifications : [],
     );
+    cleanDesc = ensureOrderDeliveryNotice(cleanDesc);
 
     // Нормализация спецификаций
     let cleanSpecs: string | null = null;
@@ -2997,12 +3000,62 @@ app.post('/api/add-product', async (req, res) => {
       delivery_type = 'order',
       youtube_url = '',
       video_urls = [],
+      structured_data = null,
     } = req.body;
 
     const fullRawText = (raw_html_text || raw_text || '').trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
-    const effectiveTitle = (inputRawTitle || inputTitle || '').trim();
-    const baseCny = parseFloat(price_cny) || 50;
-    const initialWeight = parseFloat(weight_kg) || 0.5;
+    const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
+    if (structured_data && typeof structured_data === 'object' && !Array.isArray(structured_data)) {
+      if (typeof structured_data.title === 'string' && structured_data.title.trim()) {
+        structuredMedia.title = structured_data.title.trim().slice(0, 500);
+      }
+      if (Array.isArray(structured_data.specifications)) {
+        structuredMedia.specifications = structured_data.specifications
+          .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
+          .slice(0, 100)
+          .map((item: any) => ({ name: item.name.trim().slice(0, 120), value: item.value.trim().slice(0, 500) }))
+          .filter((item: { name: string; value: string }) => item.name && item.value);
+      }
+      if (Array.isArray(structured_data.variants)) {
+        structuredMedia.variants = structured_data.variants
+          .filter((item: any) => item && typeof item === 'object')
+          .slice(0, 500)
+          .map((item: any) => ({
+            color: typeof item.color === 'string' ? item.color.slice(0, 120) : 'Стандарт',
+            size: typeof item.size === 'string' ? item.size.slice(0, 120) : 'Стандарт',
+            price_cny: Number.isFinite(Number(item.price_cny)) && Number(item.price_cny) > 0 ? Number(item.price_cny) : 0,
+            stock: Number.isFinite(Number(item.stock)) && Number(item.stock) >= 0 ? Math.floor(Number(item.stock)) : 0,
+            weight_kg: normalizeWeightKg(item.weight_kg) || 0.5,
+            image_url: typeof item.image_url === 'string' ? item.image_url.slice(0, 2048) : '',
+            sku_id: typeof item.sku_id === 'string' ? item.sku_id.slice(0, 120) : '',
+          }));
+      }
+      if (Array.isArray(structured_data.images)) {
+        structuredMedia.images = structured_data.images
+          .filter((url: unknown): url is string => typeof url === 'string' && /^https?:\/\//i.test(url))
+          .slice(0, 32);
+      }
+      if (Array.isArray(structured_data.video_urls)) {
+        structuredMedia.videoUrls = normalizeVideoUrls(structured_data.video_urls).slice(0, 12);
+        structuredMedia.videoUrl = structuredMedia.videoUrls[0];
+      }
+      const sourceWeight = normalizeWeightKg(structured_data.weight_kg);
+      if (sourceWeight > 0) structuredMedia.weightKg = sourceWeight;
+      const structuredLines = [
+        structuredMedia.title ? `ИСТОЧНИКОВОЕ НАЗВАНИЕ: ${structuredMedia.title}` : '',
+        structuredMedia.specifications.length
+          ? `ХАРАКТЕРИСТИКИ ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.specifications.map((item) => `• ${item.name}: ${item.value}`).join('\n')}`
+          : '',
+        structuredMedia.variants.length
+          ? `ТОЧНЫЕ SKU ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.variants.slice(0, 300).map((item) => `• ${item.color} | ${item.size} | ¥${item.price_cny || 'не указана'} | остаток ${item.stock}`).join('\n')}`
+          : '',
+        structuredMedia.rawSnippetForAi,
+      ].filter(Boolean);
+      structuredMedia.rawSnippetForAi = structuredLines.join('\n\n').slice(0, 30000);
+    }
+    const effectiveTitle = (structuredMedia.title || inputRawTitle || inputTitle || '').trim();
+    const baseCny = parseFloat(price_cny) || structuredMedia.variants.find((variant) => variant.price_cny > 0)?.price_cny || 50;
+    const initialWeight = parseFloat(weight_kg) || structuredMedia.weightKg || 0.5;
     const visualSkuMap: VisualSkuItem[] = [];
     if (Array.isArray(visual_sku_map)) {
       for (const item of visual_sku_map) {
@@ -3022,7 +3075,6 @@ app.post('/api/add-product', async (req, res) => {
     }
     const cleanVideoUrl = typeof video_url === 'string' ? video_url.trim() : '';
     const cleanYoutubeUrl = typeof youtube_url === 'string' && youtube_url.trim() ? youtube_url.trim() : cleanVideoUrl;
-    const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
     const importedVideos = normalizeVideoUrls(video_urls, cleanYoutubeUrl)
       .concat(normalizeVideoUrls(structuredMedia.videoUrls))
       .filter((url, index, urls) => urls.indexOf(url) === index)
@@ -3043,7 +3095,14 @@ app.post('/api/add-product', async (req, res) => {
     // Приоритет разбора: Gemini Flash-Lite
     if (aiClient && fullRawText.length > 0) {
       console.log('[Gemini Flash-Lite] Интеллектуальный разбор с привязкой картинок visual_sku_map...');
-      const aiAnalysis = await analyzeProductWithGemini(fullRawText, effectiveTitle, baseCny, initialWeight, visualSkuMap);
+      const aiAnalysis = await analyzeProductWithGemini(
+        structuredMedia.rawSnippetForAi || fullRawText,
+        effectiveTitle,
+        baseCny,
+        initialWeight,
+        visualSkuMap,
+        structuredMedia,
+      );
       finalTitle = aiAnalysis.title || effectiveTitle;
       finalDesc = inputDesc || aiAnalysis.description;
       finalCategory = aiAnalysis.category_name;
@@ -3069,6 +3128,22 @@ app.post('/api/add-product', async (req, res) => {
       variantsToProcess = fb.variants;
       specificationsToProcess = fb.specifications || [];
     }
+
+    if (structuredMedia.variants.length > 0) {
+      variantsToProcess = structuredMedia.variants.map((variant) => ({
+        ...variant,
+        price_cny: variant.price_cny > 0 ? variant.price_cny : baseCny,
+        stock: variant.stock,
+        weight_kg: variant.weight_kg || initialWeight,
+      }));
+    }
+    if (structuredMedia.specifications.length > specificationsToProcess.length) {
+      specificationsToProcess = [
+        ...specificationsToProcess,
+        ...structuredMedia.specifications.slice(specificationsToProcess.length),
+      ];
+    }
+    if (structuredMedia.weightKg) finalWeight = structuredMedia.weightKg;
 
     // Если в названии остались китайские иероглифы или фабричные токены
     if (
@@ -3120,6 +3195,7 @@ app.post('/api/add-product', async (req, res) => {
     // Привязываем категорию
     finalCategory = normalizeSubcategoryName(finalCategory, `${finalTitle} ${fullRawText}`);
     finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
+    finalDesc = ensureOrderDeliveryNotice(finalDesc);
     const categoryId = resolveCategoryId(finalCategory);
 
     // Генерируем уникальный артикул базового товара
@@ -3128,16 +3204,15 @@ app.post('/api/add-product', async (req, res) => {
     // Извлекаем изображения
     let allImages = '';
     let mainImage = '';
-    if (Array.isArray(images) && images.length > 0) {
-      const cleanImgArr: string[] = [];
-      for (const img of images) {
-        if (typeof img === 'string' && img.trim()) cleanImgArr.push(img.trim());
-      }
+    const cleanImgArr = [
+      ...structuredMedia.images,
+      ...(Array.isArray(images) ? images : typeof images === 'string' ? images.split(',') : []),
+    ].filter((img: unknown): img is string => typeof img === 'string' && /^https?:\/\//i.test(img.trim()))
+      .map((img) => img.trim())
+      .filter((img, index, list) => list.indexOf(img) === index);
+    if (cleanImgArr.length > 0) {
       allImages = cleanImgArr.join(',');
       mainImage = cleanImgArr[0] || '';
-    } else if (typeof images === 'string' && images.length > 0) {
-      allImages = images.trim();
-      mainImage = images.split(',')[0].trim();
     }
 
     // Сохраняем товар в базу со всеми фото, видео и характеристиками
@@ -3174,7 +3249,8 @@ app.post('/api/add-product', async (req, res) => {
       const vPriceTjs = calculateVariantPriceTjs(vCny, vWeight, vVolume);
       const vColor = translateVariantName(v.color || 'Основной вариант');
       const vSize = translateVariantName(v.size || 'Стандарт');
-      const vStock = parseInt(v.stock as any, 10) || 15;
+      const parsedStock = Number(v.stock);
+      const vStock = Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 15;
       const vSku = generateVariantSku(baseSku, vColor, vSize);
       const vImg = v.image_url || mainImage;
 
@@ -3249,7 +3325,9 @@ app.post('/api/parse-product-html', async (req, res) => {
         structured.rawSnippetForAi || html_code,
         effectiveTitle,
         baseCny,
-        initialWeight
+        initialWeight,
+        [],
+        structured,
       );
     } else {
       analysis = analyzeSemantically(
@@ -3279,7 +3357,7 @@ app.post('/api/parse-product-html', async (req, res) => {
           color: sv.color || matchingAiVar?.color || `Модификация ${idx + 1}`,
           size: sv.size || matchingAiVar?.size || 'Стандарт',
           price_cny: sv.price_cny > 0 ? sv.price_cny : (matchingAiVar?.price_cny || baseCny),
-          stock: sv.stock > 0 ? sv.stock : 25,
+          stock: Number.isFinite(Number(sv.stock)) && Number(sv.stock) >= 0 ? Math.floor(Number(sv.stock)) : 25,
           weight_kg: sv.weight_kg || initialWeight,
           image_url: sv.image_url || matchingAiVar?.image_url || structured.images[0] || '',
         };
@@ -3329,6 +3407,7 @@ app.post('/api/parse-product-html', async (req, res) => {
       analysis.category_name,
       combinedSpecs,
     );
+    finalDesc = ensureOrderDeliveryNotice(finalDesc);
 
     const finalProduct = {
       title: finalTitle,
@@ -4104,7 +4183,7 @@ app.get('/somon-feed.xml', (_req, res) => {
 
       const title = cleanSomonTitle(product.title);
       if (!title) continue;
-      const description = String(product.description || product.title)
+      const description = ensureOrderDeliveryNotice(String(product.description || product.title))
         .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
         .replace(/<[^>]*>/g, ' ')
         .replace(/\s+/g, ' ')
