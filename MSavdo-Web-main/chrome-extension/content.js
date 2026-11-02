@@ -439,29 +439,6 @@
     return Boolean(numberMatch[2]) || (number >= 20 && number <= 120);
   }
 
-  function variantsHaveSameColor(left, right) {
-    const normalize = (value) => String(value || "").toLocaleLowerCase().replace(/\s+/g, "");
-    const first = normalize(left);
-    const second = normalize(right);
-    if (first === second || first.includes(second) || second.includes(first)) return true;
-    const colorGroups = [
-      ["黑", "black", "черн"],
-      ["白", "white", "бел"],
-      ["灰", "grey", "gray", "сер"],
-      ["红", "red", "красн"],
-      ["蓝", "blue", "син"],
-      ["粉", "pink", "розов"],
-      ["黄", "yellow", "желт"],
-      ["绿", "green", "зелен"],
-      ["咖", "棕", "brown", "корич", "кофейн"],
-      ["米", "beige", "khaki", "беж", "хаки"],
-    ];
-    return colorGroups.some((group) =>
-      group.some((token) => first.includes(token))
-      && group.some((token) => second.includes(token))
-    );
-  }
-
   function extractDomSpecifications() {
     const specifications = [];
     const seen = new Set();
@@ -740,41 +717,39 @@
     const priceCny = structuredPrice || basePrice || null;
 
     if (domData.sizes.length > 0) {
-      const colors = productColors.length > 0 ? productColors : ["Стандарт"];
-      const domVariants = colors.flatMap((color) => domData.sizes.map((size) => {
-        const existing = structuredData.variants.find((variant) =>
-          variant.size.toLocaleLowerCase().includes(size.toLocaleLowerCase())
-          && (color === "Стандарт" || variantsHaveSameColor(variant.color, color))
-        ) || structuredData.variants.find((variant) =>
-          variant.size.toLocaleLowerCase().includes(size.toLocaleLowerCase())
-        );
-        const visual = visualSkuMap.find((item) =>
-          item.raw_color === color || item.raw_color.toLocaleLowerCase().includes(color.toLocaleLowerCase())
-        );
-        return {
-          color,
-          size,
-          price_cny: existing?.price_cny || priceCny || 0,
-          stock: existing?.stock ?? 25,
-          weight_kg: existing?.weight_kg || structuredData.weight_kg || 0.5,
-          image_url: existing?.image_url || visual?.image_url || "",
-          sku_id: existing?.sku_id || "",
-        };
-      }));
       const exactStructuredVariants = structuredData.variants.filter((variant) =>
         variant.size && !/^(?:стандарт|standard)$/i.test(variant.size.trim())
       );
-      const completeDomSizes = domVariants.filter((variant) =>
-        !exactStructuredVariants.some((existing) =>
-          existing.size.toLocaleLowerCase().includes(variant.size.toLocaleLowerCase())
-          && (variant.color === "Стандарт" || variantsHaveSameColor(existing.color, variant.color))
-        )
-      );
-      structuredData.variants = [...exactStructuredVariants, ...completeDomSizes].slice(0, 500);
+      if (exactStructuredVariants.length > 0) {
+        structuredData.variants = exactStructuredVariants;
+      } else {
+        const fallbackColor = productColors.length === 1 ? productColors[0] : "Стандарт";
+        structuredData.variants = domData.sizes.map((size) => {
+          const existing = structuredData.variants.find((variant) =>
+            variant.size.toLocaleLowerCase().includes(size.toLocaleLowerCase())
+          );
+          const visual = visualSkuMap.find((item) =>
+            fallbackColor !== "Стандарт"
+            && (item.raw_color === fallbackColor || item.raw_color.toLocaleLowerCase().includes(fallbackColor.toLocaleLowerCase()))
+          );
+          return {
+            color: fallbackColor,
+            size,
+            price_cny: existing?.price_cny || priceCny || 0,
+            stock: existing?.stock ?? 25,
+            weight_kg: existing?.weight_kg || structuredData.weight_kg || 0.5,
+            image_url: existing?.image_url || visual?.image_url || "",
+            sku_id: existing?.sku_id || "",
+          };
+        }).slice(0, 500);
+      }
     }
 
     const mergedSpecs = new Map();
-    for (const specification of [...structuredData.specifications, ...domData.specifications]) {
+    const colorSpecification = domData.colors.length > 0
+      ? [{ name: "Доступные цвета", value: domData.colors.join(", ") }]
+      : [];
+    for (const specification of [...structuredData.specifications, ...domData.specifications, ...colorSpecification]) {
       const key = specification.name.toLocaleLowerCase();
       if (!mergedSpecs.has(key)) mergedSpecs.set(key, specification);
     }
