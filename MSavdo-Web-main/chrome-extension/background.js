@@ -66,9 +66,18 @@ function isMarketplacePage(rawUrl) {
   try {
     const url = new URL(rawUrl);
     if (url.protocol !== "https:" && url.protocol !== "http:") return false;
-    return MARKETPLACE_DOMAINS.some((domain) =>
+    if (MARKETPLACE_DOMAINS.some((domain) =>
       url.hostname === domain || url.hostname.endsWith(`.${domain}`)
-    );
+    )) return true;
+
+    const translatedSuffix = ".translate.goog";
+    if (!url.hostname.endsWith(translatedSuffix)) return false;
+    const translatedMarketplaceHost = url.hostname.slice(0, -translatedSuffix.length);
+    return MARKETPLACE_DOMAINS.some((domain) => {
+      const translatedDomain = domain.replace(/\./g, "-");
+      return translatedMarketplaceHost === translatedDomain
+        || translatedMarketplaceHost.endsWith(`-${translatedDomain}`);
+    });
   } catch {
     return false;
   }

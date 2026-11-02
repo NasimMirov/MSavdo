@@ -309,6 +309,64 @@ const COLOR_DICTIONARY: Record<string, string> = {
 
 // 2. СЛОВАРЬ ТЕРМИНОВ ТОВАРОВ И СПЕЦИФИКАЦИЙ
 const DICTIONARY_MAP: Array<{ regex: RegExp; replace: string }> = [
+  // Общие термины и карточка обуви
+  { regex: /商务正装/gi, replace: 'классические деловые' },
+  { regex: /商务休闲/gi, replace: 'деловые повседневные' },
+  { regex: /男士|男款|男鞋/gi, replace: 'мужские' },
+  { regex: /女士|女款|女鞋/gi, replace: 'женские' },
+  { regex: /皮鞋/gi, replace: 'туфли' },
+  { regex: /休闲鞋/gi, replace: 'повседневная обувь' },
+  { regex: /运动鞋/gi, replace: 'спортивная обувь' },
+  { regex: /工作鞋/gi, replace: 'рабочая обувь' },
+  { regex: /劳保鞋/gi, replace: 'защитная обувь' },
+  { regex: /鞋面材质/gi, replace: 'материал верха' },
+  { regex: /鞋底材质/gi, replace: 'материал подошвы' },
+  { regex: /鞋头材质/gi, replace: 'материал носка' },
+  { regex: /鞋头形状|鞋头款式/gi, replace: 'форма носка' },
+  { regex: /鞋跟形状/gi, replace: 'форма каблука' },
+  { regex: /适用季节/gi, replace: 'сезон' },
+  { regex: /尺码类型/gi, replace: 'размерная сетка' },
+  { regex: /鞋号|尺码/gi, replace: 'размер' },
+  { regex: /鞋面/gi, replace: 'верх обуви' },
+  { regex: /鞋底/gi, replace: 'подошва' },
+  { regex: /鞋子|鞋/gi, replace: 'обувь' },
+  { regex: /真皮|头层牛皮/gi, replace: 'натуральная кожа' },
+  { regex: /牛皮/gi, replace: 'кожа' },
+  { regex: /\bPU\b/gi, replace: 'полиуретан' },
+  { regex: /橡胶/gi, replace: 'резина' },
+  { regex: /尖头/gi, replace: 'заострённый носок' },
+  { regex: /圆头/gi, replace: 'круглый носок' },
+  { regex: /粗跟/gi, replace: 'широкий каблук' },
+  { regex: /防滑/gi, replace: 'нескользящий' },
+  { regex: /耐磨/gi, replace: 'износостойкий' },
+  { regex: /透气/gi, replace: 'дышащий' },
+  { regex: /轻便|轻量/gi, replace: 'лёгкий' },
+  { regex: /软底/gi, replace: 'мягкая подошва' },
+  { regex: /厚底/gi, replace: 'толстая подошва' },
+  { regex: /品牌/gi, replace: 'Бренд' },
+  { regex: /材质/gi, replace: 'Материал' },
+  { regex: /风格|款式/gi, replace: 'Стиль' },
+  { regex: /功能/gi, replace: 'Особенности' },
+  { regex: /适用人群/gi, replace: 'Для кого' },
+  { regex: /颜色分类|颜色|顏色/gi, replace: 'Цвет' },
+  { regex: /包装方式/gi, replace: 'Упаковка' },
+  { regex: /产品类别/gi, replace: 'Тип товара' },
+  { regex: /成年/gi, replace: 'для взрослых' },
+  { regex: /标准码/gi, replace: 'стандартная размерная сетка' },
+  { regex: /四季通用/gi, replace: 'всесезонный' },
+  { regex: /系带|绑带/gi, replace: 'шнуровка' },
+  { regex: /产地|产区/gi, replace: 'Страна производства' },
+  { regex: /新款|新潮/gi, replace: 'новая модель' },
+  { regex: /舒适/gi, replace: 'комфортный' },
+  { regex: /增高/gi, replace: 'увеличение роста' },
+  { regex: /防臭/gi, replace: 'защита от запаха' },
+  { regex: /减震/gi, replace: 'амортизация' },
+  { regex: /现货/gi, replace: 'в наличии' },
+  { regex: /春季|春秋/gi, replace: 'весна' },
+  { regex: /夏季/gi, replace: 'лето' },
+  { regex: /秋季/gi, replace: 'осень' },
+  { regex: /冬季/gi, replace: 'зима' },
+
   // Бумага и канцелярские товары
   { regex: /复印纸/gi, replace: 'бумага для копирования и печати' },
   { regex: /打印纸/gi, replace: 'бумага для принтера' },
@@ -380,7 +438,7 @@ export function cleanProductTitle(rawTitle: string): string {
   const stopWords = [
     /阿里巴巴/gi, /1688/gi, /淘宝网/gi, /拼多多/gi, /tmall/gi, /taobao/gi,
     /厂家直销/gi, /一件代发/gi, /源头工厂/gi, /源头好货/gi, /批发特价/gi,
-    /跨境专供/gi, /2026新款/gi, /2025新款/gi, /爆款推荐/gi, /限时特价/gi,
+    /跨境专供/gi, /2026新款/gi, /2025新款/gi, /爆款推荐/gi, /限时特价/gi, /新款/gi, /爆款/gi, /热卖/gi,
     /包邮/gi, /专柜正品/gi, /假一赔四/gi, /加工定制/gi, /支持混批/gi,
     /中山市[^\s]+/gi, /温县[^\s]+/gi, /东莞市[^\s]+/gi, /广州市[^\s]+/gi, /深圳市[^\s]+/gi,
     /制鞋厂/gi, /鞋厂/gi, /制衣厂/gi, /五金厂/gi, /电子厂/gi, /造纸厂/gi, /纸品厂/gi,
@@ -604,7 +662,10 @@ export function analyzeSemantically(
       translated = translated.replace(item.regex, ' ' + item.replace + ' ');
     }
     translated = translated.replace(/[\u4e00-\u9fa5]/g, ' ').replace(/\s+/g, ' ').trim();
-    finalTitle = translated.length > 5 ? translated : (cleanedTitle || 'Фабричный товар каталога M.Savdo');
+    const translatedFallback = cleanedTitle.replace(/[\u4e00-\u9fa5]/g, ' ').replace(/\s+/g, ' ').trim();
+    finalTitle = translated.length > 5
+      ? translated
+      : (translatedFallback || (fullText.includes('鞋') ? 'Обувь' : 'Товар'));
   }
 
   // 2. ТОЧНОЕ ОПРЕДЕЛЕНИЕ КАТЕГОРИИ ПО СМЫСЛУ ТОВАРА (БЕЗ ЛОЖНЫХ СРАБАТЫВАНИЙ)
@@ -658,15 +719,10 @@ export function analyzeSemantically(
   }
 
   // 3. ФОРМИРОВАНИЕ ОПИСАНИЯ
-  let finalDesc = `Качественный товар «${finalTitle}». Отличается надежными материалами, продуманной конструкцией и удобством в использовании.`;
+  let finalDesc = `Товар: ${finalTitle}. Дополнительные параметры приведены в характеристиках карточки.`;
 
   // 4. СБОР ХАРАКТЕРИСТИК (ИЗВЛЕЧЕННЫХ ИЗ ТЕКСТА)
   const specsList: Array<{ name: string; value: string }> = [];
-  specsList.push(
-    { name: 'Категория', value: category },
-    { name: 'Страна производства', value: 'Фабричный Китай' }
-  );
-
   // 5. ВАРИАНТЫ ТОВАРА (СОХРАНЯЕМ РЕАЛЬНЫЕ, НЕ ПОДМЕНЯЕМ ШАБЛОНАМИ)
   const variants: SemanticVariant[] = [
     {

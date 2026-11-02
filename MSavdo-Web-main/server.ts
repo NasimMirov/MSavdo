@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
-const MAX_IMPORT_TEXT_LENGTH = 6000;
+const MAX_IMPORT_TEXT_LENGTH = 50000;
 const GEMINI_IMPORT_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_IMPORT_TIMEOUT_MS = 10000;
 const trustProxyHops = process.env.TRUST_PROXY_HOPS;
@@ -1135,17 +1135,16 @@ async function analyzeProductWithGemini(
 1. "title": Строго переведи фактический смысл исходного названия на русский язык и сформулируй краткий заголовок для клиентской витрины. Не добавляй свойства, бренды или сведения, которых нет в исходных данных.
    СТРОГО удали: слова Alibaba, 1688, оптом, 2026, 2025, фабрика, завод, производитель, рекламный спам, китайские иероглифы.
 2. "description": Напиши ровно 3 предложения на русском языке. Описывай только свойства, подтвержденные данными страницы, без выдуманных заявлений о качестве, сборке или долговечности.
-3. "specifications": В КАЖДОМ ТОВАРЕ НА САЙТЕ ЕСТЬ ХАРАКТЕРИСТИКИ, ИХ СТРОГО НЕЛЬЗЯ ПРОПУСКАТЬ!
-   Найди в тексте страницы все технические параметры, свойства и характеристики (featureAttributes, таблицы параметров, свойства материала, сезон, размеры, плотность, тип подошвы/застежки, емкость, совместимость, страна производства, бренд, комплектация и т.д.) и переведи их на РУССКИЙ язык.
-   Верни массив объектов: [ { "name": "...", "value": "..." } ] (Минимум 5-8 подробных характеристик!).
+3. "specifications": Извлеки доступные технические параметры, свойства и характеристики (featureAttributes, таблицы параметров, материал, сезон, размеры, плотность, совместимость, комплектация и т.д.) и переведи их на русский язык.
+   Верни все подтвержденные данными страницы характеристики. Не придумывай значения и не требуй минимум характеристик, если страница их не содержит.
 4. "category_name": Выбери одну наиболее подходящую ПОДКАТЕГОРИЮ строго из этого фиксированного списка. Новые категории создавать запрещено:
    - ${categoryOptions}
 5. "weight_kg": Извлеки вес единицы товара в кг.
-6. "variants": Сформируй полную матрицу модификаций товара (цвета/разновидности и РЕАЛЬНЫЕ размеры/объемы/фасовки из текста).
+6. "variants": Сформируй полную матрицу модификаций товара. Каждый SKU из переданных структурированных данных должен остаться отдельным вариантом; не объединяй размеры и цвета.
    - "color": Название модификации или цвета на русском языке.
    - "size": Размер или фасовка ("Стандарт" или реальный размер/комплектация).
-   - "price_cny": Индивидуальная цена в юанях из skuInfoMap или текста, иначе ${basePriceCny}.
-   - "stock": Реальный остаток из canBookCount / amountOnSale / quantity, иначе 25.
+   - "price_cny": Индивидуальная цена в юанях из skuInfoMap или текста. Не придумывай цену.
+   - "stock": Реальный остаток из canBookCount / amountOnSale / quantity. Не придумывай остаток.
    - "weight_kg": Вес варианта в кг.
    - "image_url": Прямая ссылка на фото модификации.
 
@@ -1153,7 +1152,7 @@ async function analyzeProductWithGemini(
 ${skuMapSnippet}
 
 ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ПЕРЕВОДА И СОПОСТАВЛЕНИЯ SKU:
-«Переведи название товара на красивый русский язык без мусора маркетплейсов и слов 'Alibaba'. Найди в тексте все доступные цвета и размеры. Для каждого цвета найди его китайское соответствие в переданном массиве visual_sku_map и присвой этому варианту ПРАВИЛЬНУЮ картинку цвета!»
+«Переведи название товара на понятный русский язык без мусора маркетплейсов и слов 'Alibaba'. Найди все доступные цвета и размеры. Переводи только подтвержденные источником сведения. Для каждого цвета сопоставляй изображение только по подтвержденному соответствию из visual_sku_map.»
 Используй image_url из visual_sku_map только для соответствующего цвета; не назначай одному цвету изображение другого цвета и не придумывай ссылки. Если соответствие не найдено, оставь image_url пустым.
 
 Заголовок со страницы: "${effectiveTitle}"
@@ -1176,10 +1175,10 @@ ${textSnippet}
     {
       "color": "Цвет / Модификация на русском",
       "size": "Размер / Фасовка",
-      "price_cny": 50.0,
-      "stock": 25,
+      "price_cny": 0,
+      "stock": 0,
       "weight_kg": 0.5,
-      "image_url": "https://..."
+      "image_url": ""
     }
   ]
 }`;
@@ -3013,7 +3012,10 @@ app.post('/api/add-product', async (req, res) => {
         structuredMedia.specifications = structured_data.specifications
           .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
           .slice(0, 100)
-          .map((item: any) => ({ name: item.name.trim().slice(0, 120), value: item.value.trim().slice(0, 500) }))
+          .map((item: any) => ({
+            name: translateVariantName(item.name.trim().slice(0, 120)),
+            value: translateVariantName(item.value.trim().slice(0, 500)),
+          }))
           .filter((item: { name: string; value: string }) => item.name && item.value);
       }
       if (Array.isArray(structured_data.variants)) {
@@ -3137,12 +3139,14 @@ app.post('/api/add-product', async (req, res) => {
         weight_kg: variant.weight_kg || initialWeight,
       }));
     }
-    if (structuredMedia.specifications.length > specificationsToProcess.length) {
-      specificationsToProcess = [
-        ...specificationsToProcess,
-        ...structuredMedia.specifications.slice(specificationsToProcess.length),
-      ];
+    const specificationMap = new Map<string, { name: string; value: string }>();
+    for (const specification of [...specificationsToProcess, ...structuredMedia.specifications]) {
+      const normalizedName = translateVariantName(specification.name).toLocaleLowerCase('ru');
+      if (normalizedName && !specificationMap.has(normalizedName)) {
+        specificationMap.set(normalizedName, specification);
+      }
     }
+    specificationsToProcess = [...specificationMap.values()].slice(0, 100);
     if (structuredMedia.weightKg) finalWeight = structuredMedia.weightKg;
 
     // Если в названии остались китайские иероглифы или фабричные токены
