@@ -164,9 +164,36 @@ function normalizePositiveNumber(value: unknown): number {
   return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
+const EXCLUDED_PRODUCT_IMAGE_CONTEXT = /logo|avatar|qrcode|qr.?code|seller|merchant|shop|store|supplier|company|wangwang|service|sprite/i;
+
+export function filterProductImageUrls(values: unknown, limit = 32): string[] {
+  const candidates = Array.isArray(values) ? values : [values];
+  const urls = new Set<string>();
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || !candidate.trim()) continue;
+    const rawUrl = candidate.trim().startsWith('//') ? `https:${candidate.trim()}` : candidate.trim();
+    try {
+      const url = new URL(rawUrl);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+      const urlText = `${url.hostname}${url.pathname}${url.search}`.toLocaleLowerCase();
+      if (
+        /logo|avatar|qrcode|qr.?code|wangwang|service|sprite|(?:^|[._/-])icon(?:[._/?-]|$)/i.test(urlText) ||
+        /\.(?:gif|svg|ico)(?:[?#]|$)/i.test(url.href) ||
+        /(?:^|[_-])(?:16|24|32|40|48|50|60|64|80|90|100)x(?:16|24|32|40|48|50|60|64|80|90|100)(?:[._/?-]|$)/i.test(urlText)
+      ) continue;
+      urls.add(url.href);
+    } catch {
+      continue;
+    }
+    if (urls.size >= limit) break;
+  }
+  return [...urls];
+}
+
 function extractImageUrls(value: unknown): string[] {
   const urls = new Set<string>();
   const visit = (current: unknown, key = '', inImageContext = false) => {
+    if (EXCLUDED_PRODUCT_IMAGE_CONTEXT.test(key)) return;
     const imageContext = inImageContext || /image|pic|photo|main|gallery|img/i.test(key);
     if (typeof current === 'string') {
       const url = current.startsWith('//') ? `https:${current}` : current;
@@ -180,7 +207,7 @@ function extractImageUrls(value: unknown): string[] {
     }
   };
   visit(value);
-  return [...urls].filter((url) => !/\.(?:gif|svg|ico)(?:[?#]|$)/i.test(url)).slice(0, 32);
+  return filterProductImageUrls([...urls]);
 }
 
 function extractVariants(
@@ -580,7 +607,8 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
   if (result.images.length === 0) {
     const imgMatches = rawInput.match(/https?:\/\/[a-z0-9\.\-]*alicdn\.com\/img\/ibank\/[^\s"'<>]+\.(?:jpg|png|webp)/gi);
     if (imgMatches) {
-      const unique = Array.from(new Set(imgMatches)).filter(url => !url.includes('.search.') && !url.includes('_30x30'));
+      const unique = filterProductImageUrls(Array.from(new Set(imgMatches))
+        .filter(url => !url.includes('.search.') && !url.includes('_30x30')));
       result.images = unique.slice(0, 8);
     }
   }
@@ -719,7 +747,9 @@ export function analyzeSemantically(
   }
 
   // 3. ФОРМИРОВАНИЕ ОПИСАНИЯ
-  let finalDesc = `Товар: ${finalTitle}. Дополнительные параметры приведены в характеристиках карточки.`;
+  let finalDesc = finalTitle
+    ? `${finalTitle}. Подробные характеристики указаны в карточке товара.`
+    : 'Подробные сведения о товаре указаны в карточке.';
 
   // 4. СБОР ХАРАКТЕРИСТИК (ИЗВЛЕЧЕННЫХ ИЗ ТЕКСТА)
   const specsList: Array<{ name: string; value: string }> = [];

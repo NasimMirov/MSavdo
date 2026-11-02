@@ -10,8 +10,10 @@
   const MAX_VIDEOS = 12;
   const EXCLUDED_IMAGE_TOKENS = [
     "logo", "avatar", "qrcode", "qr-code", "banner", "icon", "wangwang",
-    "service", "seller", "sprite",
+    "service", "seller", "sprite", "companylogo", "supplierlogo", "shoplogo",
+    "storelogo", "brandlogo", "merchantlogo",
   ];
+  const EXCLUDED_IMAGE_CONTEXT = /logo|avatar|qrcode|qr.?code|seller|merchant|shop|store|supplier|company|wangwang|service|sprite/i;
 
   function isVisible(element) {
     if (!(element instanceof Element)) return false;
@@ -128,7 +130,7 @@
     try {
       const url = new URL(rawUrl.trim(), document.baseURI);
       if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-      const lowerUrl = `${url.pathname}${url.search}`.toLowerCase();
+      const lowerUrl = `${url.hostname}${url.pathname}${url.search}`.toLowerCase();
       for (const token of EXCLUDED_IMAGE_TOKENS) {
         if (lowerUrl.includes(token)) return "";
       }
@@ -671,6 +673,7 @@
 
     const images = new Set();
     const collectImages = (value, key = "", inImageContext = false) => {
+      if (EXCLUDED_IMAGE_CONTEXT.test(key)) return;
       const imageContext = inImageContext || /image|pic|photo|main|gallery|img/i.test(key);
       if (typeof value === "string") {
         if (imageContext) {
@@ -845,8 +848,8 @@
       structuredData.title,
     ]);
     structuredData.images = Array.from(new Set([
-      ...structuredData.images,
       ...collectImages(),
+      ...structuredData.images,
     ])).slice(0, 32);
     structuredData.video_urls = Array.from(new Set([
       ...structuredData.video_urls,

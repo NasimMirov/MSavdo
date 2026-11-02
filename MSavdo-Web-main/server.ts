@@ -7,7 +7,7 @@ import fs from 'fs';
 import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
-import { analyzeSemantically, cleanProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases } from './src/utils/semanticAi.js';
+import { analyzeSemantically, cleanProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
 import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
@@ -1134,7 +1134,7 @@ async function analyzeProductWithGemini(
 ТРЕБОВАНИЯ К ПОЛЯМ:
 1. "title": Строго переведи фактический смысл исходного названия на русский язык и сформулируй краткий заголовок для клиентской витрины. Не добавляй свойства, бренды или сведения, которых нет в исходных данных.
    СТРОГО удали: слова Alibaba, 1688, оптом, 2026, 2025, фабрика, завод, производитель, рекламный спам, китайские иероглифы.
-2. "description": Напиши ровно 3 предложения на русском языке. Описывай только свойства, подтвержденные данными страницы, без выдуманных заявлений о качестве, сборке или долговечности.
+2. "description": Напиши 2–3 коротких, естественных предложения на русском языке (не более 45 слов). Кратко объясни, что это за товар, и назови только 1–3 самые важные подтвержденные особенности. Не повторяй список характеристик и вариантов, которые возвращаются отдельно. Не добавляй общие фразы вроде «высокое качество», «надежный», «идеальный выбор», призывы к покупке, сведения о доставке или другие рекламные слова. Не заполняй текст ради нужного количества предложений.
 3. "specifications": Извлеки доступные технические параметры, свойства и характеристики (featureAttributes, таблицы параметров, материал, сезон, размеры, плотность, совместимость, комплектация и т.д.) и переведи их на русский язык.
    Верни все подтвержденные данными страницы характеристики. Не придумывай значения и не требуй минимум характеристик, если страница их не содержит.
 4. "category_name": Выбери одну наиболее подходящую ПОДКАТЕГОРИЮ строго из этого фиксированного списка. Новые категории создавать запрещено:
@@ -1209,7 +1209,7 @@ ${textSnippet}
     const parsed = JSON.parse(responseText);
 
     const title = cleanBannedWordsAndPhrases(parsed.title?.trim() || cleanRawTitle(rawTitle || rawText.slice(0, 80)));
-    const description = cleanBannedWordsAndPhrases(parsed.description?.trim() || 'Практичный товар для повседневного использования. Подробные характеристики приведены в карточке. Выберите подходящий вариант товара.');
+    const description = cleanBannedWordsAndPhrases(parsed.description?.trim() || `${title}. Основные характеристики указаны в карточке.`);
     const category_name = normalizeSubcategoryName(
       typeof parsed.category_name === 'string' ? parsed.category_name : '',
       `${effectiveTitle} ${textSnippet}`
@@ -3041,9 +3041,7 @@ app.post('/api/add-product', async (req, res) => {
           }));
       }
       if (Array.isArray(structured_data.images)) {
-        structuredMedia.images = structured_data.images
-          .filter((url: unknown): url is string => typeof url === 'string' && /^https?:\/\//i.test(url))
-          .slice(0, 32);
+        structuredMedia.images = filterProductImageUrls(structured_data.images);
       }
       if (Array.isArray(structured_data.video_urls)) {
         structuredMedia.videoUrls = normalizeVideoUrls(structured_data.video_urls).slice(0, 12);
@@ -3186,12 +3184,6 @@ app.post('/api/add-product', async (req, res) => {
       finalDesc = manual_description.trim();
     }
 
-    // Требование 8: характеристики ИИ добавляет текстовым способом вместе с описанием
-    if (specificationsToProcess && specificationsToProcess.length > 0 && !finalDesc.includes('Характеристики:')) {
-      const specsLines = specificationsToProcess.map((s) => `• ${s.name}: ${s.value}`).join('\n');
-      finalDesc = `${finalDesc.trim()}\n\nХарактеристики:\n${specsLines}`;
-    }
-
     const shippingMetrics = extractShippingMetrics(specificationsToProcess, fullRawText);
     finalWeight = shippingMetrics.weightKg || normalizeWeightKg(finalWeight) || normalizeWeightKg(initialWeight) || 0.5;
     const productVolumeM3 = shippingMetrics.volumeM3;
@@ -3202,7 +3194,7 @@ app.post('/api/add-product', async (req, res) => {
     }));
 
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
-    finalDesc = cleanBannedWordsAndPhrases(finalDesc);
+    finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
 
     // Привязываем категорию
     finalCategory = normalizeSubcategoryName(finalCategory, `${finalTitle} ${fullRawText}`);
@@ -3216,12 +3208,10 @@ app.post('/api/add-product', async (req, res) => {
     // Извлекаем изображения
     let allImages = '';
     let mainImage = '';
-    const cleanImgArr = [
+    const cleanImgArr = filterProductImageUrls([
       ...structuredMedia.images,
       ...(Array.isArray(images) ? images : typeof images === 'string' ? images.split(',') : []),
-    ].filter((img: unknown): img is string => typeof img === 'string' && /^https?:\/\//i.test(img.trim()))
-      .map((img) => img.trim())
-      .filter((img, index, list) => list.indexOf(img) === index);
+    ]);
     if (cleanImgArr.length > 0) {
       allImages = cleanImgArr.join(',');
       mainImage = cleanImgArr[0] || '';
@@ -3408,18 +3398,7 @@ app.post('/api/parse-product-html', async (req, res) => {
 
     let finalDesc = (manual_description && typeof manual_description === 'string' && manual_description.trim())
       ? manual_description.trim()
-      : (analysis.description || 'Качественные фабричные материалы, продуманная эргономика и надежность в повседневном использовании.');
-
-    // Требование 8: характеристики ИИ добавляет текстовым способом вместе с описанием
-    if (combinedSpecs.length > 0 && !finalDesc.includes('Характеристики:')) {
-      const specsLines = combinedSpecs
-        .filter((spec) => !/цвет|color|colour|颜色|顏色/i.test(spec.name))
-        .map((spec) => `• ${spec.name}: ${spec.value}`)
-        .join('\n');
-      if (specsLines) {
-        finalDesc = `${finalDesc.trim()}\n\nХарактеристики:\n${specsLines}`;
-      }
-    }
+      : (analysis.description || `${finalTitle}. Основные характеристики указаны в карточке.`);
 
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
     finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
