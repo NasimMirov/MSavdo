@@ -320,8 +320,8 @@
     const scripts = document.querySelectorAll("script:not([src])");
     for (const script of scripts) {
       const source = script.textContent || "";
-      if (source.length > 1000000 || !/skuInfoMap|featureAttributes|offerDetail|productPackInfo|subject/i.test(source)) continue;
-      const assignment = /(?:window\.)?(?:context|__INIT_DATA__|runParams|__INITIAL_DATA__)\s*=/gi;
+      if (source.length > 1000000 || !/skuInfoMap|sku2info|skuMap|skuProps|skuBase|skuCore|featureAttributes|offerDetail|productPackInfo|subject/i.test(source)) continue;
+      const assignment = /(?:window\.)?(?:context|__INIT_DATA__|__INITIAL_STATE__|runParams|__INITIAL_DATA__|initialState|detailData|offerData)\s*=/gi;
       let match;
       while ((match = assignment.exec(source)) !== null) {
         const afterAssignment = assignment.lastIndex;
@@ -416,20 +416,26 @@
       .filter((element) => headingPattern.test((element.innerText || element.textContent || "").trim()))
       .filter((element) => isVisible(element));
     const options = new Set();
-    const optionSelector = "button, li, [role='radio'], [role='option'], [aria-label], [class*='item' i], [class*='value' i], span";
+    const optionSelector = "button, li, [role='radio'], [role='option'], [aria-label], [data-value], [data-name], [class*='item' i], [class*='value' i], span";
 
     for (const heading of headings.slice(0, 20)) {
       let ancestor = heading.parentElement;
-      for (let depth = 0; ancestor && depth < 4; depth += 1, ancestor = ancestor.parentElement) {
+      for (let depth = 0; ancestor && depth < 7; depth += 1, ancestor = ancestor.parentElement) {
         const found = new Set();
         for (const option of ancestor.querySelectorAll(optionSelector)) {
           if (!isVisible(option) || isProductUiElement(option)) continue;
-          const label = (option.getAttribute("aria-label") || option.innerText || option.textContent || "")
+          const label = (option.getAttribute("aria-label")
+            || option.getAttribute("data-value")
+            || option.getAttribute("data-name")
+            || option.innerText
+            || option.textContent
+            || "")
             .replace(/\s+/g, " ").trim();
           const matchesLabel = typeof labelMatcher === "function"
             ? labelMatcher(label)
             : labelMatcher instanceof RegExp && labelMatcher.test(label);
-          if (label.length <= 40 && matchesLabel) found.add(label);
+          const normalizedLabel = typeof matchesLabel === "string" ? matchesLabel : label;
+          if (normalizedLabel && normalizedLabel.length <= 48 && matchesLabel) found.add(normalizedLabel);
         }
         if (found.size >= 2) {
           found.forEach((label) => options.add(label));
@@ -440,13 +446,24 @@
     return Array.from(options).slice(0, 100);
   }
 
-  function isLikelySizeLabel(value) {
-    const normalized = value.replace(/\s+/g, "").toUpperCase();
-    if (/^(?:XS|S|M|L|XL|XXL|XXXL|[2-8]XL|均码|均碼|OS|ONESIZE)$/.test(normalized)) return true;
+  function extractLikelySizeLabel(value) {
+    const trimmed = value.trim();
+    const normalized = trimmed.replace(/\s+/g, "").toUpperCase();
+    if (/^(?:XS|S|M|L|XL|XXL|XXXL|[2-8]XL|均码|均碼|OS|ONESIZE)$/.test(normalized)) return trimmed;
     const numberMatch = normalized.match(/^(\d{1,3}(?:\.\d+)?)(码|碼|CM|厘米|MM|毫米|KG|公斤|G|克|ML|毫升)?$/i);
-    if (!numberMatch) return false;
-    const number = Number(numberMatch[1]);
-    return Boolean(numberMatch[2]) || (number >= 20 && number <= 120);
+    if (numberMatch) {
+      const number = Number(numberMatch[1]);
+      return Boolean(numberMatch[2]) || (number >= 20 && number <= 120)
+        ? `${numberMatch[1]}${numberMatch[2] || ''}`
+        : "";
+    }
+
+    const embeddedNumber = value.match(/(?:^|[\s#])(\d{1,3}(?:\.\d+)?)(?:\s*(码|碼|CM|厘米|MM|毫米))?(?=$|[\s,，;；/|])/i);
+    if (!embeddedNumber) return "";
+    const number = Number(embeddedNumber[1]);
+    return Boolean(embeddedNumber[2]) || (number >= 20 && number <= 120)
+      ? `${embeddedNumber[1]}${embeddedNumber[2] || ''}`
+      : "";
   }
 
   function extractDomSpecifications() {
@@ -499,7 +516,7 @@
     ]);
     const sizes = collectVisibleOptions(
       /^(?:尺码|尺碼|尺寸|size|размер|размеры)$/i,
-      (value) => isLikelySizeLabel(value),
+      (value) => extractLikelySizeLabel(value),
     );
     const colors = collectVisibleOptions(
       /^(?:颜色|顏色|颜色分类|colour|color|цвет|цвета)$/i,
@@ -546,9 +563,38 @@
       item.skuMap,
       item.sku?.skuInfoMap,
       item.skuInfo,
+      item.sku2info,
+      item.sku2Info,
       item.skuList,
+      item.skuCore?.sku2info,
+      item.skuCore?.sku2Info,
+      item.skuCore?.skuInfoMap,
     ]).filter((map) => map && typeof map === "object");
     const skuMap = skuMaps.sort((left, right) => Object.keys(right).length - Object.keys(left).length)[0];
+    const skuProperties = objects.flatMap((item) => [
+      item.skuProps,
+      item.skuBase?.skuProps,
+      item.skuBase?.props,
+    ]).filter(Array.isArray);
+    const propertyValues = new Map();
+    for (const property of skuProperties.flat()) {
+      if (!property || typeof property !== "object") continue;
+      const propertyName = cleanStructuredText(property.prop || property.name || property.propName);
+      const values = property.value || property.values || property.children || [];
+      if (!Array.isArray(values)) continue;
+      for (const value of values) {
+        if (!value || typeof value !== "object") continue;
+        const valueId = String(value.valueId || value.id || value.vid || "");
+        const valueName = cleanStructuredText(value.name || value.value || value.label);
+        if (valueId && valueName) {
+          propertyValues.set(valueId, {
+            propertyName,
+            valueName,
+            imageUrl: normalizeImageUrl(value.imageUrl || value.picUrl || value.image || ""),
+          });
+        }
+      }
+    }
     const offer = objects.find((item) => item.subject && (
       item.featureAttributes || item.productAttributes || item.skuInfoMap
     ));
@@ -591,20 +637,32 @@
         if (!rawSku || typeof rawSku !== "object") continue;
         const sku = rawSku;
         const attributeSource = sku.specAttrs || sku.skuAttrs || sku.specValues || sku.skuName || skuKey;
+        const keyAttributes = String(skuKey).split(/[:;|,]/).filter(Boolean);
+        const mappedAttributes = keyAttributes
+          .map((key) => propertyValues.get(key))
+          .filter((item) => Boolean(item));
         const attributes = cleanStructuredText(attributeSource)
           .split(/\s*(?:>|;|；|\||,|，)\s*/)
           .filter(Boolean);
-        const rawPriceValue = sku.price ?? sku.discountPrice ?? sku.retailPrice ?? sku.salePrice ?? sku.priceInfo?.price;
+        const variantAttributes = mappedAttributes.length > 0
+          ? mappedAttributes.map((item) => item.valueName)
+          : attributes;
+        const mappedColor = mappedAttributes.find((item) => /color|colour|颜色|顏色|цвет/i.test(item.propertyName));
+        const mappedSize = mappedAttributes.find((item) => /size|尺码|尺寸|размер/i.test(item.propertyName));
+        const rawPriceSource = sku.price ?? sku.discountPrice ?? sku.retailPrice ?? sku.salePrice ?? sku.priceInfo?.price;
+        const rawPriceValue = rawPriceSource && typeof rawPriceSource === "object"
+          ? rawPriceSource.price ?? rawPriceSource.value ?? rawPriceSource.amount
+          : rawPriceSource;
         const rawPrice = getStructuredNumber(rawPriceValue);
         const rawStock = sku.canBookCount ?? sku.amountOnSale ?? sku.quantity ?? sku.stock;
         const stock = Number(rawStock);
         const imageUrl = normalizeImageUrl(sku.skuImageUrl || sku.picUrl || sku.imageUrl || sku.image || "");
         variants.push({
-          color: cleanStructuredText(sku.color || attributes[0]) || "Стандарт",
-          size: cleanStructuredText(sku.size || attributes.slice(1)) || "Стандарт",
+          color: cleanStructuredText(sku.color || mappedColor?.valueName || variantAttributes[0]) || "Стандарт",
+          size: cleanStructuredText(sku.size || mappedSize?.valueName || variantAttributes.slice(1)) || "Стандарт",
           price_cny: rawPrice,
           stock: Number.isFinite(stock) && stock >= 0 ? Math.floor(stock) : 0,
-          image_url: imageUrl,
+          image_url: imageUrl || mappedColor?.imageUrl || "",
           sku_id: cleanStructuredText(sku.skuId || sku.specId || skuKey),
         });
         if (variants.length >= 500) break;

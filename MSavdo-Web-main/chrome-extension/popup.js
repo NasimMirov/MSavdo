@@ -1,4 +1,4 @@
-// popup.js — Управление расширением M.Savdo Co-Pilot v5.1.3
+// popup.js — Управление расширением M.Savdo Co-Pilot v5.1.4
 
 document.addEventListener("DOMContentLoaded", async () => {
   const tabSiteType = document.getElementById("tab-site-type");

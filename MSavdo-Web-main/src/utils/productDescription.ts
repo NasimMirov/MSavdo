@@ -1,5 +1,10 @@
 export const ORDER_DELIVERY_NOTICE = 'Доставка 18-30 дней!';
 export const COLOR_IMAGE_SPEC_PREFIX = 'Фото цвета: ';
+const PRODUCT_COLOR_SPEC_PATTERN = /^(?:доступные\s+цвета|цвет(?:а)?|цвет\s+товара|color(?:\s+classification)?|colou?r(?:\s+classification)?|颜色(?:分类)?|顏色)$/i;
+
+export function isProductColorSpecification(name: string): boolean {
+  return PRODUCT_COLOR_SPEC_PATTERN.test(name.trim());
+}
 
 export function extractProductColorImages(
   specifications: Array<{ name: string; value: string }>,
@@ -17,7 +22,7 @@ export function extractProductColors(
   description = '',
 ): string[] {
   const colorValues = specifications
-    .filter((spec) => !/^Фото цвета:/i.test(spec.name) && /цвет|color|colour|颜色|顏色/i.test(spec.name))
+    .filter((spec) => isProductColorSpecification(spec.name))
     .map((spec) => spec.value);
   const descriptionColors = Array.from(
     description.matchAll(/(?:^|\n)\s*(?:[•*-]\s*)?(?:доступные\s+цвета|цвет(?:а)?|colou?r)\s*[:：]\s*([^\n]+)/gi),
@@ -29,8 +34,16 @@ export function extractProductColors(
     for (const rawColor of value
       .replace(/\[[^\]]*\]|【[^】]*】/g, '')
       .split(/[,，、;；|\n/]+/)) {
-      const color = cleanProductDescription(rawColor).replace(/[.:]+$/g, '').trim();
-      if (color && !/[\u3400-\u9fff]/.test(color)) {
+      const color = cleanProductDescription(rawColor)
+        .replace(/^(?:цвет|color|colour)\s*[:：-]\s*/i, '')
+        .replace(/[.:]+$/g, '')
+        .trim();
+      if (
+        color
+        && color.length <= 48
+        && !/^(?:цвет|цвета|color|colour|standard|стандарт)$/i.test(color)
+        && !/[\u3400-\u9fff]/.test(color)
+      ) {
         colors.set(color.toLocaleLowerCase('ru'), color);
       }
     }

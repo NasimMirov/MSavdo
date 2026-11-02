@@ -3012,10 +3012,18 @@ app.post('/api/add-product', async (req, res) => {
         structuredMedia.specifications = structured_data.specifications
           .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
           .slice(0, 100)
-          .map((item: any) => ({
-            name: translateVariantName(item.name.trim().slice(0, 120)),
-            value: translateVariantName(item.value.trim().slice(0, 500)),
-          }))
+          .map((item: any) => {
+            const name = item.name.trim().slice(0, 120);
+            const colorImageMatch = name.match(/^Фото цвета:\s*(.+)$/i);
+            return {
+              name: colorImageMatch
+                ? `Фото цвета: ${translateVariantName(colorImageMatch[1])}`
+                : translateVariantName(name),
+              value: colorImageMatch
+                ? item.value.trim().slice(0, 2048)
+                : translateVariantName(item.value.trim().slice(0, 500)),
+            };
+          })
           .filter((item: { name: string; value: string }) => item.name && item.value);
       }
       if (Array.isArray(structured_data.variants)) {
@@ -3345,8 +3353,13 @@ app.post('/api/parse-product-html', async (req, res) => {
     // Совмещаем характеристики: featureAttributes из контекста имеют высокий приоритет
     const combinedSpecs: Array<{ name: string; value: string }> = [];
     for (const spec of [...(analysis.specifications || []), ...(structured.specifications || [])]) {
-      const name = cleanProductDescription(translateVariantName(spec.name));
-      const value = cleanProductDescription(translateVariantName(spec.value));
+      const colorImageMatch = spec.name.trim().match(/^Фото цвета:\s*(.+)$/i);
+      const name = colorImageMatch
+        ? `Фото цвета: ${cleanProductDescription(translateVariantName(colorImageMatch[1]))}`
+        : cleanProductDescription(translateVariantName(spec.name));
+      const value = colorImageMatch
+        ? spec.value.trim()
+        : cleanProductDescription(translateVariantName(spec.value));
       if (!name || !value || combinedSpecs.some((existing) => existing.name.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'))) {
         continue;
       }

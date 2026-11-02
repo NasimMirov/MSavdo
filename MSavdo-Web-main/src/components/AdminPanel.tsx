@@ -45,7 +45,7 @@ import { ExportCodeModal } from './ExportCodeModal';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { calculatePriceTjs } from '../utils/pricing';
-import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors } from '../utils/productDescription';
+import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors, isProductColorSpecification } from '../utils/productDescription';
 
 interface TelegramLoginResult {
   id_token?: string;
@@ -826,6 +826,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       specifications.splice(existingIndex, 1);
     }
     setEditingProduct({ ...editingProduct, specifications });
+  };
+
+  const handleRemoveColorOption = (color: string) => {
+    if (!editingProduct) return;
+    const normalize = (value: string) => value
+      .replace(/\[[^\]]*\]|【[^】]*】/g, '')
+      .trim()
+      .toLocaleLowerCase('ru');
+    const specifications = (editingProduct.specifications || []).flatMap((spec: { name: string; value: string }) => {
+      if (spec.name.toLocaleLowerCase('ru') === `${COLOR_IMAGE_SPEC_PREFIX}${color}`.toLocaleLowerCase('ru')) return [];
+      if (!isProductColorSpecification(spec.name)) return [spec];
+
+      const remainingColors = spec.value
+        .split(/[,，、;；|\n/]+/)
+        .map((value: string) => value.trim())
+        .filter((value: string) => value && normalize(value) !== normalize(color));
+      return remainingColors.length > 0
+        ? [{ ...spec, value: remainingColors.join(', ') }]
+        : [];
+    });
+    const description = String(editingProduct.description || '')
+      .split(/\r?\n/)
+      .flatMap((line: string) => {
+        const match = line.match(/^(\s*(?:[•*-]\s*)?(?:доступные\s+цвета|цвет(?:а)?|colou?r)\s*[:：]\s*)(.+)$/i);
+        if (!match) return [line];
+        const remainingColors = match[2]
+          .split(/[,，、;；|\n/]+/)
+          .map((value: string) => value.trim())
+          .filter((value: string) => value && normalize(value) !== normalize(color));
+        return remainingColors.length > 0 ? [`${match[1]}${remainingColors.join(', ')}`] : [];
+      })
+      .join('\n');
+
+    const variants = editingProduct.variants || [];
+    const remainingVariants = variants.filter(
+      (variant: ProductVariant) => normalize(variant.color || '') !== normalize(color),
+    );
+    const nextVariants = remainingVariants.length > 0
+      ? remainingVariants
+      : variants.map((variant: ProductVariant) => (
+        normalize(variant.color || '') === normalize(color)
+          ? { ...variant, color: 'Стандарт', image_url: '' }
+          : variant
+      ));
+
+    setEditingProduct({ ...editingProduct, description, specifications, variants: nextVariants });
   };
 
   const handleRemoveSpecification = (index: number) => {
@@ -3258,6 +3304,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             <span className="h-10 w-10 shrink-0 rounded-lg bg-slate-200" />
                           )}
                           <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-800">{color}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveColorOption(color)}
+                            aria-label={`Удалить цвет ${color}`}
+                            title="Удалить этот вариант цвета"
+                            className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
                           <select
                             value={colorImageSpec?.value || ''}
                             onChange={(event) => handleUpdateColorImage(color, event.target.value)}
