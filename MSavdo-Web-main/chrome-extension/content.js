@@ -399,7 +399,7 @@
     return translatedTitle || cleanCandidates.find((candidate) => /[\u3400-\u9fff]{2}/.test(candidate)) || cleanCandidates[0] || "";
   }
 
-  function collectVisibleOptions(headingPattern, labelPattern) {
+  function collectVisibleOptions(headingPattern, labelMatcher) {
     const headings = Array.from(document.querySelectorAll("body *"))
       .filter((element) => element.children.length <= 2)
       .filter((element) => headingPattern.test((element.innerText || element.textContent || "").trim()))
@@ -415,7 +415,10 @@
           if (!isVisible(option) || isProductUiElement(option)) continue;
           const label = (option.getAttribute("aria-label") || option.innerText || option.textContent || "")
             .replace(/\s+/g, " ").trim();
-          if (label.length <= 40 && labelPattern.test(label)) found.add(label);
+          const matchesLabel = typeof labelMatcher === "function"
+            ? labelMatcher(label)
+            : labelMatcher instanceof RegExp && labelMatcher.test(label);
+          if (label.length <= 40 && matchesLabel) found.add(label);
         }
         if (found.size >= 2) {
           found.forEach((label) => options.add(label));
