@@ -160,21 +160,14 @@
     const addCandidate = (rawUrl, element, mediaBonus = 0) => {
       const url = normalizeImageUrl(rawUrl);
       if (!url || isProductUiElement(element)) return;
-      const rect = element?.getBoundingClientRect?.();
-      const width = Math.max(
-        element?.naturalWidth || 0,
-        Number(element?.getAttribute?.("width")) || 0,
-        rect?.width || 0,
-      );
-      const height = Math.max(
-        element?.naturalHeight || 0,
-        Number(element?.getAttribute?.("height")) || 0,
-        rect?.height || 0,
-      );
-      if (width > 0 && width < 90 || height > 0 && height < 90) return;
       const galleryContext = Boolean(element?.closest(
-        "[class*='gallery' i], [class*='image' i], [class*='photo' i], [class*='picture' i], [class*='sku' i], [class*='video' i]"
+        "[class*='gallery' i], [class*='photo' i], [class*='picture' i], [class*='sku' i], [class*='video' i]"
       ));
+      if (element && !galleryContext && mediaBonus === 0) return;
+      const rect = element?.getBoundingClientRect?.();
+      const width = rect?.width || Number(element?.getAttribute?.("width")) || element?.naturalWidth || 0;
+      const height = rect?.height || Number(element?.getAttribute?.("height")) || element?.naturalHeight || 0;
+      if (width > 0 && width < 90 || height > 0 && height < 90) return;
       const score = Math.min(width * height, 2500000) + (galleryContext ? 500000 : 0) + mediaBonus;
       candidates.set(url, Math.max(candidates.get(url) || 0, score));
     };
@@ -848,8 +841,8 @@
       structuredData.title,
     ]);
     structuredData.images = Array.from(new Set([
-      ...collectImages(),
       ...structuredData.images,
+      ...collectImages(),
     ])).slice(0, 32);
     structuredData.video_urls = Array.from(new Set([
       ...structuredData.video_urls,
