@@ -4,6 +4,7 @@ import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, P
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 import { ProductShareButton } from './ProductShareButton';
+import { cleanProductDescription, extractProductColors, extractProductColorImages } from '../utils/productDescription';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -22,17 +23,52 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 }) => {
   const { t } = useI18n();
   const variants = product?.variants || [];
+  const productSpecs = useMemo(() => {
+    if (!product?.specifications) return [];
+    if (Array.isArray(product.specifications)) return product.specifications;
+    if (typeof product.specifications === 'string') {
+      try {
+        const parsed = JSON.parse(product.specifications);
+        if (Array.isArray(parsed)) return parsed;
+        if (typeof parsed === 'object' && parsed !== null) {
+          return Object.entries(parsed).map(([name, value]) => ({ name, value: String(value) }));
+        }
+      } catch {
+        return product.specifications.split('\n').filter(Boolean).map((line) => {
+          const [name, ...rest] = line.split(/[:：]/);
+          return { name: (name || '').trim(), value: rest.join(':').trim() || '' };
+        }).filter((item) => item.name && item.value);
+      }
+    }
+    return [];
+  }, [product?.specifications]);
+
+  const specificationColors = useMemo(
+    () => extractProductColors(productSpecs, product?.description),
+    [productSpecs, product?.description],
+  );
+  const colorImageMappings = useMemo(
+    () => extractProductColorImages(productSpecs),
+    [productSpecs],
+  );
 
   // Уникальные цвета и размеры
   const availableColors = useMemo(() => {
     const map = new Map<string, { name: string; img?: string }>();
     variants.forEach((v) => {
-      if (v.color && !map.has(v.color)) {
+      if (v.color && !/^(?:стандарт|standard|основной цвет)$/i.test(v.color.trim()) && !map.has(v.color)) {
         map.set(v.color, { name: v.color, img: v.image_url });
       }
     });
+    specificationColors.forEach((name) => {
+      if (!map.has(name)) map.set(name, { name });
+    });
+    colorImageMappings.forEach(({ color, imageUrl }) => {
+      const existing = Array.from(map.keys()).find((name) => name.toLocaleLowerCase('ru') === color.toLocaleLowerCase('ru'));
+      map.set(existing || color, { name: existing || color, img: imageUrl });
+    });
     return Array.from(map.values());
-  }, [variants]);
+  }, [variants, specificationColors, colorImageMappings]);
 
   // Выбранный цвет
   const [selectedColor, setSelectedColor] = useState<string>(
@@ -120,6 +156,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     return (
       variants.find((v) => v.color === selectedColor && v.size === selectedSize) ||
       variants.find((v) => v.color === selectedColor) ||
+      variants.find((v) => v.size === selectedSize) ||
       variants[0]
     );
   }, [variants, selectedColor, selectedSize]);
@@ -142,8 +179,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     variants.forEach((v) => {
       if (v.image_url && !list.includes(v.image_url)) list.push(v.image_url);
     });
+    availableColors.forEach((color) => {
+      if (color.img && !list.includes(color.img)) list.push(color.img);
+    });
     return list;
-  }, [product, variants]);
+  }, [product, variants, availableColors]);
 
   const mediaSlides = useMemo(
     () => [
@@ -185,14 +225,17 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     setIsPhotoZoomed(false);
   };
 
+  const selectedColorImage = availableColors.find((color) => color.name === selectedColor)?.img;
+
   useEffect(() => {
-    if (activeVariant?.image_url) {
+    const imageUrl = selectedColorImage || activeVariant?.image_url;
+    if (imageUrl) {
       const variantImageIndex = mediaSlides.findIndex(
-        (slide) => slide.type === 'photo' && slide.src === activeVariant.image_url
+        (slide) => slide.type === 'photo' && slide.src === imageUrl
       );
       if (variantImageIndex >= 0) setSelectedMediaIndex(variantImageIndex);
     }
-  }, [activeVariant, mediaSlides]);
+  }, [activeVariant, mediaSlides, selectedColorImage]);
 
   const currentMedia = mediaSlides[selectedMediaIndex];
   useEffect(() => {
@@ -201,28 +244,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
   const currentImage = currentMedia?.type === 'photo'
     ? currentMedia.src
-    : activeVariant?.image_url || product?.main_image || allGalleryImages[0] || '';
-
-  // Характеристики товара (спецификации)
-  const productSpecs = useMemo(() => {
-    if (!product?.specifications) return [];
-    if (Array.isArray(product.specifications)) return product.specifications;
-    if (typeof product.specifications === 'string') {
-      try {
-        const parsed = JSON.parse(product.specifications);
-        if (Array.isArray(parsed)) return parsed;
-        if (typeof parsed === 'object' && parsed !== null) {
-          return Object.entries(parsed).map(([name, value]) => ({ name, value: String(value) }));
-        }
-      } catch (_) {
-        return product.specifications.split('\n').filter(Boolean).map((line) => {
-          const [name, ...rest] = line.split(/[:：]/);
-          return { name: (name || '').trim(), value: rest.join(':').trim() || '' };
-        }).filter((item) => item.name && item.value);
-      }
-    }
-    return [];
-  }, [product?.specifications]);
+    : selectedColorImage || activeVariant?.image_url || product?.main_image || allGalleryImages[0] || '';
 
   // Статус добавления
   const [added, setAdded] = useState(false);
@@ -271,16 +293,16 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     if (!activeVariant) return null;
 
     return {
-      id: `${product.id}_${activeVariant.variant_sku}`,
+      id: `${product.id}_${activeVariant.variant_sku}_${selectedColor}_${selectedSize}`,
       product_id: product.id,
       variant_id: activeVariant.id,
       base_sku: product.base_sku,
       variant_sku: activeVariant.variant_sku,
       title: product.title,
-      color: activeVariant.color || 'Стандарт',
-      size: activeVariant.size || 'One Size',
+      color: selectedColor || activeVariant.color || 'Стандарт',
+      size: selectedSize || activeVariant.size || 'One Size',
       price_tjs: activeVariant.price_tjs,
-      image: activeVariant.image_url || product.main_image,
+      image: selectedColorImage || activeVariant.image_url || product.main_image,
       quantity: selectedQuantity,
       stock: activeVariant.stock,
       delivery_type: product.delivery_type || 'order',
@@ -566,7 +588,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     <span className="font-bold text-slate-900">
                       {t('selectedColor')} <span className="font-medium text-emerald-800">{selectedColor}</span>
                     </span>
-                    <span className="text-slate-400 text-[11px]">{availableColors.length} вар.</span>
+                    <span className="text-slate-400 text-[11px]">Цветов: {availableColors.length}</span>
                   </div>
 
                   <div className="flex flex-wrap gap-1 sm:gap-1.5">
@@ -644,7 +666,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 </div>
                 <div className="product-description-panel bg-gradient-to-br from-amber-50/40 via-slate-50 to-emerald-50/20 p-2.5 sm:p-3 rounded-xl sm:rounded-2xl border border-slate-200/80 shadow-xs">
                   <div className="product-description-text text-[11px] sm:text-sm text-slate-700 leading-relaxed font-normal whitespace-pre-line">
-                    {product.description || 'Качественные фабричные материалы, продуманная эргономика и надежность в повседневном использовании.'}
+                    {cleanProductDescription(product.description || '') || 'Подробные характеристики товара уточняются.'}
                   </div>
                 </div>
               </div>

@@ -255,7 +255,7 @@
       if (scriptText.length > 1000000 || !/video|playurl|mediaurl/i.test(scriptText)) continue;
 
       const candidates = [];
-      const assignment = /(?:window\.)?(?:context|__INIT_DATA__|runParams|__INITIAL_DATA__)\s*=/gi;
+      const assignment = /(?:window\.)?(?:context|__INIT_DATA__|__INITIAL_STATE__|runParams|__INITIAL_DATA__|initialState|detailData|offerData)\s*=/gi;
       let assignmentMatch;
       while ((assignmentMatch = assignment.exec(scriptText)) !== null) {
         const afterAssignment = assignment.lastIndex;
@@ -352,6 +352,16 @@
               break;
             }
           }
+        }
+      }
+
+      const trimmedSource = source.trim();
+      if (trimmedSource.startsWith("{") && trimmedSource.endsWith("}")) {
+        try {
+          const parsed = JSON.parse(trimmedSource);
+          if (parsed && typeof parsed === "object") return parsed;
+        } catch {
+          continue;
         }
       }
     }
@@ -531,10 +541,14 @@
     if (!root) return null;
 
     const objects = getNestedObjects(root);
-    const skuOwner = objects.find((item) => {
-      const map = item.skuInfoMap || item.skuMap || item.sku?.skuInfoMap;
-      return map && typeof map === "object" && !Array.isArray(map);
-    });
+    const skuMaps = objects.flatMap((item) => [
+      item.skuInfoMap,
+      item.skuMap,
+      item.sku?.skuInfoMap,
+      item.skuInfo,
+      item.skuList,
+    ]).filter((map) => map && typeof map === "object");
+    const skuMap = skuMaps.sort((left, right) => Object.keys(right).length - Object.keys(left).length)[0];
     const offer = objects.find((item) => item.subject && (
       item.featureAttributes || item.productAttributes || item.skuInfoMap
     ));
@@ -568,26 +582,30 @@
       if (specifications.length >= 100) break;
     }
 
-    const skuMap = skuOwner?.skuInfoMap || skuOwner?.skuMap || skuOwner?.sku?.skuInfoMap;
     const variants = [];
     if (skuMap && typeof skuMap === "object") {
-      for (const [skuKey, rawSku] of Object.entries(skuMap)) {
+      const skuEntries = Array.isArray(skuMap)
+        ? skuMap.map((sku, index) => [String(sku?.skuId || sku?.specId || index), sku])
+        : Object.entries(skuMap);
+      for (const [skuKey, rawSku] of skuEntries) {
         if (!rawSku || typeof rawSku !== "object") continue;
         const sku = rawSku;
-        const attributes = cleanStructuredText(sku.specAttrs || skuKey)
-          .split(/\s*(?:>|;|；|\|)\s*/)
+        const attributeSource = sku.specAttrs || sku.skuAttrs || sku.specValues || sku.skuName || skuKey;
+        const attributes = cleanStructuredText(attributeSource)
+          .split(/\s*(?:>|;|；|\||,|，)\s*/)
           .filter(Boolean);
-        const rawPrice = getStructuredNumber(sku.price ?? sku.discountPrice ?? sku.retailPrice);
+        const rawPriceValue = sku.price ?? sku.discountPrice ?? sku.retailPrice ?? sku.salePrice ?? sku.priceInfo?.price;
+        const rawPrice = getStructuredNumber(rawPriceValue);
         const rawStock = sku.canBookCount ?? sku.amountOnSale ?? sku.quantity ?? sku.stock;
         const stock = Number(rawStock);
-        let imageUrl = normalizeImageUrl(sku.skuImageUrl || sku.picUrl || sku.imageUrl || "");
+        const imageUrl = normalizeImageUrl(sku.skuImageUrl || sku.picUrl || sku.imageUrl || sku.image || "");
         variants.push({
-          color: attributes[0] || cleanStructuredText(skuKey) || "Стандарт",
-          size: attributes.slice(1).join(" / ") || "Стандарт",
+          color: cleanStructuredText(sku.color || attributes[0]) || "Стандарт",
+          size: cleanStructuredText(sku.size || attributes.slice(1)) || "Стандарт",
           price_cny: rawPrice,
           stock: Number.isFinite(stock) && stock >= 0 ? Math.floor(stock) : 0,
           image_url: imageUrl,
-          sku_id: cleanStructuredText(sku.skuId || sku.specId || ""),
+          sku_id: cleanStructuredText(sku.skuId || sku.specId || skuKey),
         });
         if (variants.length >= 500) break;
       }
@@ -716,32 +734,40 @@
       .sort((left, right) => left - right)[0];
     const priceCny = structuredPrice || basePrice || null;
 
-    if (domData.sizes.length > 0) {
+    if (structuredData.variants.length === 0 && domData.sizes.length > 0) {
+      structuredData.variants = domData.sizes.map((size) => ({
+        color: "Стандарт",
+        size,
+        price_cny: priceCny || 0,
+        stock: 0,
+        weight_kg: structuredData.weight_kg || 0.5,
+        image_url: "",
+        sku_id: "",
+      }));
+    } else if (structuredData.variants.length === 0 && domData.colors.length > 0) {
+      structuredData.variants = domData.colors.map((color) => ({
+        color,
+        size: "Стандарт",
+        price_cny: priceCny || 0,
+        stock: 0,
+        weight_kg: structuredData.weight_kg || 0.5,
+        image_url: visualSkuMap.find((item) => item.raw_color === color)?.image_url || "",
+        sku_id: "",
+      }));
+    } else if (domData.sizes.length > 0) {
       const exactStructuredVariants = structuredData.variants.filter((variant) =>
         variant.size && !/^(?:стандарт|standard)$/i.test(variant.size.trim())
       );
-      if (exactStructuredVariants.length > 0) {
-        structuredData.variants = exactStructuredVariants;
-      } else {
-        const fallbackColor = productColors.length === 1 ? productColors[0] : "Стандарт";
-        structuredData.variants = domData.sizes.map((size) => {
-          const existing = structuredData.variants.find((variant) =>
-            variant.size.toLocaleLowerCase().includes(size.toLocaleLowerCase())
-          );
-          const visual = visualSkuMap.find((item) =>
-            fallbackColor !== "Стандарт"
-            && (item.raw_color === fallbackColor || item.raw_color.toLocaleLowerCase().includes(fallbackColor.toLocaleLowerCase()))
-          );
-          return {
-            color: fallbackColor,
-            size,
-            price_cny: existing?.price_cny || priceCny || 0,
-            stock: existing?.stock ?? 25,
-            weight_kg: existing?.weight_kg || structuredData.weight_kg || 0.5,
-            image_url: existing?.image_url || visual?.image_url || "",
-            sku_id: existing?.sku_id || "",
-          };
-        }).slice(0, 500);
+      if (exactStructuredVariants.length === 0) {
+        structuredData.variants = domData.sizes.map((size) => ({
+          color: "Стандарт",
+          size,
+          price_cny: priceCny || 0,
+          stock: 0,
+          weight_kg: structuredData.weight_kg || 0.5,
+          image_url: "",
+          sku_id: "",
+        }));
       }
     }
 

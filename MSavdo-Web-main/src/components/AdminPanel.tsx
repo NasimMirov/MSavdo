@@ -45,6 +45,7 @@ import { ExportCodeModal } from './ExportCodeModal';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { calculatePriceTjs } from '../utils/pricing';
+import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors } from '../utils/productDescription';
 
 interface TelegramLoginResult {
   id_token?: string;
@@ -109,6 +110,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
+  const editingColorOptions = useMemo(() => {
+    if (!editingProduct) return [];
+    const specificationColors = extractProductColors(
+      editingProduct.specifications || [],
+      editingProduct.description || '',
+    );
+    const variantColors = (editingProduct.variants || [])
+      .map((variant: ProductVariant) => String(variant.color || '').trim())
+      .filter((color: string) => color && !/^(?:стандарт|standard|основной цвет)$/i.test(color));
+    return Array.from(new Set([...specificationColors, ...variantColors]));
+  }, [editingProduct]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
@@ -799,6 +811,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const curSpecs = [...(editingProduct.specifications || [])];
     curSpecs[index] = { ...curSpecs[index], [field]: val };
     setEditingProduct({ ...editingProduct, specifications: curSpecs });
+  };
+
+  const handleUpdateColorImage = (color: string, imageUrl: string) => {
+    if (!editingProduct) return;
+    const specifications = [...(editingProduct.specifications || [])];
+    const name = `${COLOR_IMAGE_SPEC_PREFIX}${color}`;
+    const existingIndex = specifications.findIndex((spec) => spec.name === name);
+    if (imageUrl && existingIndex >= 0) {
+      specifications[existingIndex] = { ...specifications[existingIndex], value: imageUrl };
+    } else if (imageUrl) {
+      specifications.push({ name, value: imageUrl });
+    } else if (existingIndex >= 0) {
+      specifications.splice(existingIndex, 1);
+    }
+    setEditingProduct({ ...editingProduct, specifications });
   };
 
   const handleRemoveSpecification = (index: number) => {
@@ -3204,6 +3231,50 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
                 )}
               </div>
+
+              {editingColorOptions.length > 0 && (
+                <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+                  <div>
+                    <label className="font-bold text-slate-800 text-xs">Фото для цветов</label>
+                    <p className="mt-1 text-[10px] text-slate-500">
+                      Назначьте фото каждому цвету. Оно появится рядом с названием цвета в карточке товара.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {editingColorOptions.map((color) => {
+                      const colorImageSpec = (editingProduct.specifications || []).find(
+                        (spec: { name: string; value: string }) => spec.name === `${COLOR_IMAGE_SPEC_PREFIX}${color}`,
+                      );
+                      return (
+                        <label key={color} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                          {colorImageSpec?.value ? (
+                            <img
+                              src={colorImageSpec.value}
+                              alt=""
+                              className="h-10 w-10 shrink-0 rounded-lg border border-slate-200 object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <span className="h-10 w-10 shrink-0 rounded-lg bg-slate-200" />
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-800">{color}</span>
+                          <select
+                            value={colorImageSpec?.value || ''}
+                            onChange={(event) => handleUpdateColorImage(color, event.target.value)}
+                            aria-label={`Фото для цвета ${color}`}
+                            className="max-w-36 rounded-lg border border-slate-300 bg-white p-2 text-[10px]"
+                          >
+                            <option value="">Не назначено</option>
+                            {(editingProduct.images || []).map((image: string, imageIndex: number) => (
+                              <option key={`${imageIndex}-${image}`} value={image}>Фото {imageIndex + 1}</option>
+                            ))}
+                          </select>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* МАТРИЦА ВАРИАНТОВ SKU */}
               <div className="space-y-3 pt-2 border-t border-slate-200">

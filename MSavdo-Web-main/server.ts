@@ -10,7 +10,7 @@ import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
-import { ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
+import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3343,27 +3343,27 @@ app.post('/api/parse-product-html', async (req, res) => {
     }
 
     // Совмещаем характеристики: featureAttributes из контекста имеют высокий приоритет
-    const combinedSpecs: Array<{ name: string; value: string }> = [...(analysis.specifications || [])];
-    if (structured.specifications && structured.specifications.length > 0) {
-      for (const st of structured.specifications) {
-        if (!combinedSpecs.some((s) => s.name.toLowerCase() === st.name.toLowerCase())) {
-          combinedSpecs.push(st);
-        }
+    const combinedSpecs: Array<{ name: string; value: string }> = [];
+    for (const spec of [...(analysis.specifications || []), ...(structured.specifications || [])]) {
+      const name = cleanProductDescription(translateVariantName(spec.name));
+      const value = cleanProductDescription(translateVariantName(spec.value));
+      if (!name || !value || combinedSpecs.some((existing) => existing.name.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'))) {
+        continue;
       }
+      combinedSpecs.push({ name, value });
     }
 
     // Формируем варианты с соблюдением цен и остатков (Правило 2)
     let finalVariants = analysis.variants;
     if (structured.variants && structured.variants.length > 0) {
       finalVariants = structured.variants.map((sv, idx) => {
-        const matchingAiVar = analysis.variants[idx];
         return {
-          color: sv.color || matchingAiVar?.color || `Модификация ${idx + 1}`,
-          size: sv.size || matchingAiVar?.size || 'Стандарт',
-          price_cny: sv.price_cny > 0 ? sv.price_cny : (matchingAiVar?.price_cny || baseCny),
+          color: cleanProductDescription(translateVariantName(sv.color || `Модификация ${idx + 1}`)) || 'Стандарт',
+          size: cleanProductDescription(translateVariantName(sv.size || 'Стандарт')) || 'Стандарт',
+          price_cny: sv.price_cny > 0 ? sv.price_cny : baseCny,
           stock: Number.isFinite(Number(sv.stock)) && Number(sv.stock) >= 0 ? Math.floor(Number(sv.stock)) : 25,
           weight_kg: sv.weight_kg || initialWeight,
-          image_url: sv.image_url || matchingAiVar?.image_url || structured.images[0] || '',
+          image_url: sv.image_url || '',
         };
       });
     }
@@ -3399,17 +3399,23 @@ app.post('/api/parse-product-html', async (req, res) => {
 
     // Требование 8: характеристики ИИ добавляет текстовым способом вместе с описанием
     if (combinedSpecs.length > 0 && !finalDesc.includes('Характеристики:')) {
-      const specsLines = combinedSpecs.map((s) => `• ${s.name}: ${s.value}`).join('\n');
-      finalDesc = `${finalDesc.trim()}\n\nХарактеристики:\n${specsLines}`;
+      const specsLines = combinedSpecs
+        .filter((spec) => !/цвет|color|colour|颜色|顏色/i.test(spec.name))
+        .map((spec) => `• ${spec.name}: ${spec.value}`)
+        .join('\n');
+      if (specsLines) {
+        finalDesc = `${finalDesc.trim()}\n\nХарактеристики:\n${specsLines}`;
+      }
     }
 
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
-    finalDesc = cleanBannedWordsAndPhrases(finalDesc);
+    finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
+    const searchableSpecs = combinedSpecs.filter((spec) => !/^Фото цвета:/i.test(spec.name));
     finalDesc = appendSearchKeywords(
       finalDesc,
       finalTitle,
       analysis.category_name,
-      combinedSpecs,
+      searchableSpecs,
     );
     finalDesc = ensureOrderDeliveryNotice(finalDesc);
 
