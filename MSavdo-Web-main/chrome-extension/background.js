@@ -96,39 +96,74 @@ async function handleImportProduct(payload, sender) {
     : typeof payload?.raw_html_text === "string"
       ? payload.raw_html_text
       : null;
-  const images = Array.isArray(payload?.images) ? payload.images : [];
-  const videoUrls = payload?.video_urls === undefined
-    ? []
-    : Array.isArray(payload.video_urls)
-      ? payload.video_urls
-      : null;
-  const structuredData = payload?.structured_data === undefined ? null : payload.structured_data;
-  let structuredDataSize = 0;
-  try {
-    structuredDataSize = structuredData === null ? 0 : JSON.stringify(structuredData).length;
-  } catch {
-    return { success: false, error: "Структурированные данные товара повреждены." };
+  if (!payload || typeof rawText !== "string") {
+    return { success: false, error: "Страница не передала текст товара для импорта." };
   }
-  if (
-    !payload
-    || typeof rawText !== "string"
-    || rawText.length > 200000
-    || images.length > 50
-    || !videoUrls
-    || videoUrls.length > 12
-    || videoUrls.some((url) => typeof url !== "string" || url.length > 2048)
-    || (structuredData !== null && (
-      typeof structuredData !== "object"
-      || Array.isArray(structuredData)
-      || structuredDataSize > 1000000
-      || (structuredData.variants !== undefined && (!Array.isArray(structuredData.variants) || structuredData.variants.length > 500))
-      || (structuredData.specifications !== undefined && (!Array.isArray(structuredData.specifications) || structuredData.specifications.length > 100))
-      || (structuredData.images !== undefined && (!Array.isArray(structuredData.images) || structuredData.images.length > 32))
-      || (structuredData.video_urls !== undefined && (!Array.isArray(structuredData.video_urls) || structuredData.video_urls.length > 12))
-    ))
-    || !Number.isFinite(payload.price_cny)
-  ) {
-    return { success: false, error: "Данные товара неполные или превышают допустимый размер." };
+  if (rawText.length > 200000) {
+    return { success: false, error: "Данные страницы слишком большие. Обновите страницу товара и повторите импорт." };
+  }
+
+  const images = (Array.isArray(payload.images) ? payload.images : [])
+    .filter((url) => typeof url === "string" && url.length <= 2048)
+    .slice(0, 50);
+  const videoUrls = (Array.isArray(payload.video_urls) ? payload.video_urls : [])
+    .filter((url) => typeof url === "string" && url.length <= 2048)
+    .slice(0, 12);
+
+  let structuredData = null;
+  const sourceStructuredData = payload.structured_data;
+  if (sourceStructuredData !== undefined && sourceStructuredData !== null) {
+    if (typeof sourceStructuredData !== "object" || Array.isArray(sourceStructuredData)) {
+      return { success: false, error: "Структурированные данные страницы имеют неверный формат." };
+    }
+
+    structuredData = {
+      title: typeof sourceStructuredData.title === "string" ? sourceStructuredData.title.slice(0, 500) : "",
+      title_candidates: (Array.isArray(sourceStructuredData.title_candidates) ? sourceStructuredData.title_candidates : [])
+        .filter((title) => typeof title === "string")
+        .slice(0, 5)
+        .map((title) => title.slice(0, 500)),
+      specifications: (Array.isArray(sourceStructuredData.specifications) ? sourceStructuredData.specifications : [])
+        .filter((item) => item && typeof item.name === "string" && typeof item.value === "string")
+        .slice(0, 100)
+        .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) })),
+      variants: (Array.isArray(sourceStructuredData.variants) ? sourceStructuredData.variants : [])
+        .filter((item) => item && typeof item === "object")
+        .slice(0, 500)
+        .map((item) => ({
+          color: typeof item.color === "string" ? item.color.slice(0, 120) : "",
+          size: typeof item.size === "string" ? item.size.slice(0, 120) : "",
+          price_cny: Number.isFinite(Number(item.price_cny)) ? Number(item.price_cny) : 0,
+          stock: Number.isFinite(Number(item.stock)) ? Number(item.stock) : 0,
+          weight_kg: Number.isFinite(Number(item.weight_kg)) ? Number(item.weight_kg) : 0,
+          image_url: typeof item.image_url === "string" ? item.image_url.slice(0, 2048) : "",
+          sku_id: typeof item.sku_id === "string" ? item.sku_id.slice(0, 120) : "",
+        })),
+      images: (Array.isArray(sourceStructuredData.images) ? sourceStructuredData.images : [])
+        .filter((url) => typeof url === "string" && url.length <= 2048)
+        .slice(0, 32),
+      video_urls: (Array.isArray(sourceStructuredData.video_urls) ? sourceStructuredData.video_urls : [])
+        .filter((url) => typeof url === "string" && url.length <= 2048)
+        .slice(0, 12),
+      weight_kg: Number.isFinite(Number(sourceStructuredData.weight_kg))
+        ? Number(sourceStructuredData.weight_kg)
+        : 0,
+    };
+  }
+
+  const visualSkuMap = (Array.isArray(payload.visual_sku_map) ? payload.visual_sku_map : [])
+    .filter((item) => item && typeof item.raw_color === "string" && typeof item.image_url === "string" && item.image_url.length <= 2048)
+    .slice(0, 12)
+    .map((item) => ({ raw_color: item.raw_color.slice(0, 120), image_url: item.image_url }));
+  const variantPrice = structuredData?.variants.find((variant) => variant.price_cny > 0)?.price_cny;
+  const sourcePrice = typeof payload.price_cny === "number" || typeof payload.price_cny === "string"
+    ? Number(payload.price_cny)
+    : NaN;
+  const priceCny = Number.isFinite(sourcePrice) && sourcePrice > 0
+    ? sourcePrice
+    : variantPrice;
+  if (!Number.isFinite(priceCny) || priceCny <= 0) {
+    return { success: false, error: "Не удалось определить цену товара в юанях. Проверьте цену на странице и повторите импорт." };
   }
 
   const endpoint = `${await getServerUrl()}/api/add-product`;
@@ -139,7 +174,15 @@ async function handleImportProduct(payload, sender) {
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
-      body: JSON.stringify({ ...payload, raw_text: rawText, images, video_urls: videoUrls, structured_data: structuredData })
+      body: JSON.stringify({
+        ...payload,
+        raw_text: rawText,
+        images,
+        video_urls: Array.from(new Set([...videoUrls, ...(structuredData?.video_urls || [])])).slice(0, 12),
+        visual_sku_map: visualSkuMap,
+        price_cny: priceCny,
+        structured_data: structuredData,
+      })
     });
 
     const contentType = response.headers.get("content-type") || "";

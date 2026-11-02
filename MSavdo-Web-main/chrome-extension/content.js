@@ -203,6 +203,7 @@
       const url = new URL(normalized, document.baseURI);
       if (url.protocol !== "http:" && url.protocol !== "https:") return "";
       if (/\.(?:jpe?g|png|webp|gif)(?:[?#]|$)/i.test(url.href)) return "";
+      if (url.href.length > 2048) return "";
       return url.href;
     } catch {
       return "";
