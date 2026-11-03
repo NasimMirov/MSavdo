@@ -110,6 +110,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
+  const [categoryEditorProduct, setCategoryEditorProduct] = useState<any | null>(null);
+  const [categoryDraftId, setCategoryDraftId] = useState('');
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
   const editingColorOptions = useMemo(() => {
     if (!editingProduct) return [];
     const specificationColors = extractProductColors(
@@ -1024,6 +1027,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     try {
       const payload = {
         title: editingProduct.title.trim(),
+        category_id: editingProduct.category_id || null,
         description: editingProduct.description || '',
         delivery_type: editingProduct.delivery_type || 'order',
         status: editingProduct.status || 'active',
@@ -1064,6 +1068,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setProductSaveError(err.message || 'Ошибка сети');
     } finally {
       setIsSavingProduct(false);
+    }
+  };
+
+  const openCategoryEditor = (product: any) => {
+    setCategoryEditorProduct(product);
+    setCategoryDraftId(product.category_id ? String(product.category_id) : '');
+  };
+
+  const handleSaveProductCategory = async () => {
+    if (!categoryEditorProduct || !categoryDraftId) return;
+    setIsSavingCategory(true);
+    try {
+      const response = await adminFetch(`/api/admin/products/${categoryEditorProduct.id}/category`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category_id: Number(categoryDraftId) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось изменить категорию');
+      setAdminProducts((previous) => previous.map((product) => (
+        product.id === categoryEditorProduct.id
+          ? { ...product, category_id: data.category_id, category_name: data.category_name }
+          : product
+      )));
+      setCategoryEditorProduct(null);
+      onRefreshCatalog();
+      showNotice(`Категория товара обновлена: ${data.category_name}`);
+    } catch (error: any) {
+      console.error('Ошибка смены категории товара:', error);
+      showNotice(error.message || 'Не удалось изменить категорию товара');
+    } finally {
+      setIsSavingCategory(false);
     }
   };
 
@@ -1812,6 +1848,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             <td className="p-3.5 text-right whitespace-nowrap">
                               <div className="inline-flex items-center gap-1.5">
                                 <button
+                                  onClick={() => openCategoryEditor(p)}
+                                  className="p-1.5 rounded-lg text-slate-600 transition-colors hover:bg-amber-50 hover:text-amber-700"
+                                  title="Изменить категорию товара"
+                                  aria-label={`Изменить категорию товара ${p.title}`}
+                                >
+                                  <Layers className="h-3.5 w-3.5" />
+                                </button>
+                                <button
                                   onClick={() => handleOpenEditModal(p)}
                                   className="p-1.5 bg-slate-900 hover:bg-emerald-700 text-white rounded-lg transition-colors shadow-xs"
                                   title="Редактировать товар"
@@ -1954,6 +1998,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => openCategoryEditor(p)}
+                          className="p-1.5 text-slate-600 hover:bg-amber-50 hover:text-amber-700 rounded-lg"
+                          title="Изменить категорию товара"
+                          aria-label={`Изменить категорию товара ${p.title}`}
+                        >
+                          <Layers className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={() => handleOpenEditModal(p)}
                           className="px-3 py-1.5 bg-slate-900 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-xs flex items-center gap-1"
@@ -3125,19 +3177,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <label className="font-bold text-slate-800 text-xs">Категория каталога</label>
                     <span className="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1">
                       <Sparkles className="w-2.5 h-2.5 text-purple-600" />
-                      <span>ИИ Gemini</span>
+                      <span>ИИ или вручную</span>
                     </span>
                   </div>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      disabled
-                      readOnly
-                      value={editingProduct.category_name || 'Определится автоматически через Gemini 3.8 Flash'}
-                      className="w-full p-2.5 bg-slate-100 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 cursor-not-allowed pl-8 shadow-inner"
-                    />
-                    <Lock className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-3" />
-                  </div>
+                  <select
+                    value={editingProduct.category_id ? String(editingProduct.category_id) : ''}
+                    onChange={(event) => {
+                      const selectedCategory = categories
+                        .flatMap((category) => category.subcategories || [])
+                        .find((category) => String(category.id) === event.target.value);
+                      setEditingProduct({
+                        ...editingProduct,
+                        category_id: selectedCategory?.id || null,
+                        category_name: selectedCategory?.name || '',
+                      });
+                    }}
+                    className="w-full rounded-xl border border-slate-300 bg-white p-2.5 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-amber-500 outline-none"
+                  >
+                    <option value="">
+                      {editingProduct.id === 0 ? 'Выберите категорию или оставьте для ИИ' : 'Выберите подкатегорию'}
+                    </option>
+                    {categories.map((category) => (
+                      <optgroup key={category.id} label={category.name}>
+                        {(category.subcategories || []).map((subcategory) => (
+                          <option key={subcategory.id} value={subcategory.id}>{subcategory.name}</option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <p className="text-[10px] text-slate-500">
+                    {editingProduct.id === 0
+                      ? 'Если оставить поле пустым, ИИ подберёт категорию по названию.'
+                      : 'Выбранная подкатегория будет сохранена вместо автоматической классификации.'}
+                  </p>
                 </div>
 
                 <div className="space-y-1">
@@ -3551,6 +3623,68 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {categoryEditorProduct && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/60 p-4" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-category-dialog-title"
+            className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 id="product-category-dialog-title" className="text-base font-bold text-slate-900">Изменить категорию</h2>
+                <p className="mt-1 line-clamp-2 text-xs text-slate-500">{categoryEditorProduct.title}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCategoryEditorProduct(null)}
+                disabled={isSavingCategory}
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+                aria-label="Закрыть"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold text-slate-700">Подкатегория каталога</span>
+              <select
+                value={categoryDraftId}
+                onChange={(event) => setCategoryDraftId(event.target.value)}
+                className="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-800 focus:ring-2 focus:ring-amber-500"
+              >
+                <option value="" disabled>Выберите подкатегорию</option>
+                {categories.map((category) => (
+                  <optgroup key={category.id} label={category.name}>
+                    {(category.subcategories || []).map((subcategory) => (
+                      <option key={subcategory.id} value={subcategory.id}>{subcategory.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCategoryEditorProduct(null)}
+                disabled={isSavingCategory}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSaveProductCategory()}
+                disabled={isSavingCategory || !categoryDraftId}
+                className="rounded-xl bg-amber-400 px-4 py-2 text-sm font-bold text-slate-950 hover:bg-amber-500 disabled:opacity-50"
+              >
+                {isSavingCategory ? 'Сохранение…' : 'Сохранить'}
+              </button>
+            </div>
+          </section>
         </div>
       )}
 

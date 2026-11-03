@@ -134,7 +134,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       showStatus("Не удалось открыть на этой вкладке. Обновите страницу 1688 (F5) и нажмите кнопку снова.<br><small>Ошибка: " + err.message + "</small>", "error");
     } finally {
       btnOpenPanel.disabled = false;
-      btnOpenPanel.innerHTML = "<span>🚀 Открыть Co-Pilot на странице</span>";
+      btnOpenPanel.innerHTML = "<span>Открыть помощник на странице</span>";
     }
   });
 
@@ -201,7 +201,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       // Отправляем через background worker
       chrome.runtime.sendMessage({ action: "importProduct", payload }, (res) => {
         btnQuickImport.disabled = false;
-        btnQuickImport.innerHTML = "<span>⚡ Импортировать товар через ИИ</span>";
+        btnQuickImport.innerHTML = "<span>Импортировать товар</span>";
 
         if (res && res.success) {
           showStatus(`✓ <strong>Товар успешно импортирован!</strong><br>• ${res.product?.title || manualTitle || 'Товар добавлен'}<br>• Категория: ${res.product?.category_name || 'Каталог'}<br>• Вариантов: ${res.product?.variants_count || 1} шт.`, "success");
@@ -211,7 +211,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
     } catch (err) {
       btnQuickImport.disabled = false;
-      btnQuickImport.innerHTML = "<span>⚡ Импортировать товар через ИИ</span>";
+      btnQuickImport.innerHTML = "<span>Импортировать товар</span>";
       showStatus(`✕ <strong>Ошибка импорта:</strong> ${err.message}<br><small>Вы можете вставить исходный код страницы (HTML / window.context) в поле выше.</small>`, "error");
     }
   });

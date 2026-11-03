@@ -398,11 +398,17 @@
 
   function chooseBestTitle(candidates) {
     const cleanCandidates = candidates
-      .map((candidate) => cleanStructuredText(candidate).replace(/\s+/g, " ").trim())
+      .map((candidate) => cleanStructuredText(candidate)
+        .replace(/\s*(?:[-|—–_])\s*[^|]*?(?:有限公司|责任公司|集团公司|商行|经营部|旗舰店|专营店|专卖店|官方店|1688|taobao|alibaba|pinduoduo).*$/i, "")
+        .replace(/\s+/g, " ")
+        .trim())
       .filter((candidate) => candidate && candidate.length <= 250)
       .filter((candidate) => !/^(?:1688|taobao|alibaba|pinduoduo)(?:\.com)?$/i.test(candidate));
-    const translatedTitle = cleanCandidates.find((candidate) => /[а-яё]{3}/i.test(candidate));
-    return translatedTitle || cleanCandidates.find((candidate) => /[\u3400-\u9fff]{2}/.test(candidate)) || cleanCandidates[0] || "";
+    const productCandidates = cleanCandidates.filter((candidate) =>
+      !/有限公司|责任公司|集团公司|商行|经营部|旗舰店|专营店|专卖店|官方店|欢迎光临|店铺首页|(?:^|\W)(?:ооо|ип|ао|оао|зао)(?:\W|$)|(?:^|\W)(?:co\.?,?\s*ltd|limited|company|trading\s+co\.?)(?:\W|$)/i.test(candidate)
+    );
+    const translatedTitle = productCandidates.find((candidate) => /[а-яё]{3}/i.test(candidate));
+    return translatedTitle || productCandidates.find((candidate) => /[\u3400-\u9fff]{2}/.test(candidate)) || productCandidates[0] || "";
   }
 
   function collectVisibleOptions(headingPattern, labelMatcher) {
@@ -601,9 +607,16 @@
       return undefined;
     };
 
-    const title = cleanStructuredText(
-      offer?.subject ?? firstField(["subject", "productTitle", "offerTitle", "title"])
-    );
+    const titleCandidates = [
+      offer?.subject,
+      firstField(["subject"]),
+      firstField(["productTitle"]),
+      firstField(["offerTitle"]),
+      ...objects
+        .filter((item) => item.featureAttributes || item.productAttributes || item.skuInfoMap || item.skuMap || item.offerId || item.productId)
+        .map((item) => item.title),
+    ];
+    const title = chooseBestTitle(titleCandidates);
     const specifications = [];
     const seenSpecifications = new Set();
     for (const object of objects) {
@@ -700,7 +713,7 @@
     const weight = getStructuredNumber(firstField(["unitWeight", "grossWeight", "weight", "productWeight", "netWeight"]));
     return {
       title,
-      title_candidates: [title],
+      title_candidates: [...new Set([title, ...titleCandidates.map(cleanStructuredText).filter(Boolean)])].slice(0, 5),
       specifications,
       variants,
       images: Array.from(images).slice(0, 32),

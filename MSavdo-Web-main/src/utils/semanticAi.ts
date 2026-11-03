@@ -157,6 +157,14 @@ function findFieldValue(objects: Record<string, any>[], fieldNames: string[]): u
   return undefined;
 }
 
+export function isLikelyProductTitle(value: unknown): value is string {
+  if (typeof value !== 'string' || value.trim().length < 3) return false;
+  const title = decodeHtmlEntities(value).trim();
+  if (/有限公司|责任公司|集团公司|商行|经营部|旗舰店|专营店|专卖店|官方店|欢迎光临|首页|(?:^|\W)(?:ооо|ип|ао|оао|зао)(?:\W|$)|(?:^|\W)(?:co\.?,?\s*ltd|limited|company|trading\s+co\.?)(?:\W|$)/i.test(title)) return false;
+  const cleaned = cleanProductTitle(title);
+  return cleaned.length >= 3 && !/^(?:首页|店铺首页|企业介绍|商品详情|产品中心)$/i.test(cleaned);
+}
+
 function normalizePositiveNumber(value: unknown): number {
   if (typeof value !== 'string' && typeof value !== 'number') return 0;
   const match = String(value).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
@@ -533,9 +541,23 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
       entry.featureAttributes || entry.productAttributes || entry.skuInfoMap
     ));
 
-    const titleValue = offerDetail?.subject
-      ?? findFieldValue(nestedObjects, ['subject', 'productTitle', 'offerTitle', 'title']);
-    result.title = stringValue(titleValue);
+    const structuredTitleCandidates = [
+      offerDetail?.subject,
+      findFieldValue(nestedObjects, ['subject', 'productTitle', 'offerTitle']),
+      ...nestedObjects
+        .filter((entry) => (
+          entry.featureAttributes ||
+          entry.productAttributes ||
+          entry.skuInfoMap ||
+          entry.skuMap ||
+          entry.offerId ||
+          entry.productId
+        ))
+        .map((entry) => entry.title),
+    ];
+    result.title = structuredTitleCandidates
+      .map(stringValue)
+      .find(isLikelyProductTitle) || '';
     result.images = extractImageUrls(parsedJson);
     result.videoUrls = collectVideoUrls(parsedJson);
     result.videoUrl = result.videoUrls[0];
@@ -595,12 +617,18 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
 
   // 3. Дополнительный / Резервный сбор из HTML (если JSON неполный или поврежден — Правило 3)
   if (!result.title) {
-    const titleMatch = rawInput.match(/<title[^>]*>([\s\S]*?)<\/title>/i) ||
-                       rawInput.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
-                       rawInput.match(/<h1[^>]*class=["'][^"']*title[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i);
-    if (titleMatch && titleMatch[1]) {
-      result.title = cleanProductTitle(titleMatch[1].replace(/<[^>]+>/g, '').trim());
-    }
+    const htmlTitleCandidates = [
+      rawInput.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1],
+      rawInput.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i)?.[1],
+      rawInput.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1],
+    ];
+    result.title = htmlTitleCandidates
+      .map((candidate) => candidate?.replace(/<[^>]+>/g, '').trim() || '')
+      .find(isLikelyProductTitle)
+      ? cleanProductTitle(htmlTitleCandidates
+        .map((candidate) => candidate?.replace(/<[^>]+>/g, '').trim() || '')
+        .find(isLikelyProductTitle) || '')
+      : '';
   }
 
   // Извлечение картинок из HTML (Alicdn)
@@ -671,16 +699,17 @@ export function analyzeSemantically(
   basePriceCny: number = 50,
   weightKg: number = 0.5
 ): SemanticAnalysisResult {
-  const fullText = ((rawTitle || '') + ' ' + (rawText || '')).toLowerCase();
-  const cleanedTitle = cleanProductTitle(rawTitle || '');
+  const usableRawTitle = isLikelyProductTitle(rawTitle) ? rawTitle : '';
+  const fullText = ((usableRawTitle || '') + ' ' + (rawText || '')).toLowerCase();
+  const cleanedTitle = cleanProductTitle(usableRawTitle);
 
   // 1. ОПРЕДЕЛЕНИЕ РЕАЛЬНОГО НАЗВАНИЯ ТОВАРА
   let finalTitle = '';
-  const isRussianTitle = /[а-яА-ЯёЁ]{3,}/.test(rawTitle || '');
+  const isRussianTitle = /[а-яА-ЯёЁ]{3,}/.test(usableRawTitle);
 
-  if (isRussianTitle && rawTitle) {
+  if (isRussianTitle && usableRawTitle) {
     // Если страница уже переведена браузером на русский или передан русский заголовок
-    finalTitle = cleanProductTitle(rawTitle);
+    finalTitle = cleanProductTitle(usableRawTitle);
   } else if (cleanedTitle && !/[\u4e00-\u9fa5]/.test(cleanedTitle)) {
     finalTitle = cleanedTitle;
   } else {
@@ -713,6 +742,27 @@ export function analyzeSemantically(
     fullText.includes('туфл') || fullText.includes('обув') || fullText.includes('sneaker')
   );
 
+  const isElectronicComponent = (
+    fullText.includes('电子元器件') || fullText.includes('电子元件') ||
+    fullText.includes('集成电路') || fullText.includes('电阻') ||
+    fullText.includes('电容') || fullText.includes('二极管') ||
+    fullText.includes('三极管') || fullText.includes('芯片') ||
+    fullText.includes('传感器') || fullText.includes('开发板') ||
+    fullText.includes('микроконтрол') || fullText.includes('микросхем') ||
+    fullText.includes('резистор') || fullText.includes('конденсатор') ||
+    fullText.includes('диод') || fullText.includes('транзистор') ||
+    fullText.includes('датчик') || fullText.includes('печатн') ||
+    fullText.includes('arduino') || fullText.includes('esp32') ||
+    fullText.includes('raspberry pi') || fullText.includes('микроконтроллер') ||
+    fullText.includes('электронный компонент') || fullText.includes('электронные компоненты') ||
+    fullText.includes('resistor') || fullText.includes('capacitor') ||
+    fullText.includes('inductor') || fullText.includes('diode') ||
+    fullText.includes('transistor') || fullText.includes('microcontroller') ||
+    fullText.includes('development board') || fullText.includes('integrated circuit') ||
+    fullText.includes('sensor') || fullText.includes('connector') ||
+    fullText.includes('breadboard')
+  );
+
   const isApparel = !isRcOrDroneOrToy && !isFootwear && (
     fullText.includes('卫衣') || fullText.includes('外套') || fullText.includes('裤') ||
     fullText.includes('裙') || fullText.includes('худи') || fullText.includes('куртк') ||
@@ -729,7 +779,9 @@ export function analyzeSemantically(
     (fullText.includes('копировальн') && fullText.includes('бумаг'))
   );
 
-  if (isRcOrDroneOrToy) {
+  if (isElectronicComponent) {
+    category = 'Электронные модули и датчики';
+  } else if (isRcOrDroneOrToy) {
     category = 'Игрушки и игры';
     finalWeight = 0.35;
   } else if (isFootwear) {
@@ -759,7 +811,7 @@ export function analyzeSemantically(
       color: 'Стандартная комплектация',
       size: 'Стандарт',
       price_cny: basePriceCny,
-      stock: 50,
+      stock: 0,
       weight_kg: finalWeight
     }
   ];

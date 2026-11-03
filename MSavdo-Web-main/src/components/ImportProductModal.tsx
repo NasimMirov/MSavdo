@@ -205,6 +205,25 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
     }
   };
 
+  const handleOpenMarketplacePage = () => {
+    try {
+      const url = new URL(productLink.trim());
+      const allowedDomains = ['1688.com', 'yangkeduo.com', 'pinduoduo.com', 'taobao.com', 'tmall.com', 'alibaba.com'];
+      const isSupportedMarketplace = allowedDomains.some((domain) =>
+        url.hostname === domain || url.hostname.endsWith(`.${domain}`)
+      ) || url.hostname.endsWith('.translate.goog');
+      if (!['http:', 'https:'].includes(url.protocol) || !isSupportedMarketplace) {
+        throw new Error('Укажите ссылку на товар с поддерживаемой торговой площадки.');
+      }
+
+      window.open(url.href, '_blank', 'noopener,noreferrer');
+      setErrorMsg('');
+      setSuccessMsg('Страница товара открыта. Запустите расширение M.Savdo на этой вкладке для импорта.');
+    } catch (error: any) {
+      setErrorMsg(error.message || 'Проверьте ссылку на товар.');
+    }
+  };
+
   // Загрузка файла .html / .txt / .json
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -330,21 +349,12 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
         {/* Шапка */}
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-slate-900 to-black text-white">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-amber-400 text-black flex items-center justify-center font-black shadow-lg shadow-amber-400/20">
+            <div className="w-9 h-9 rounded-xl bg-amber-400 text-black flex items-center justify-center font-black">
               <Code2 className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-black text-white tracking-tight">
-                  Анализ и импорт исходного кода страницы
-                </h2>
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
-                  Строгий парсер v4.0
-                </span>
-              </div>
-              <p className="text-xs text-slate-400">
-                Анализ HTML-кода, window.context, featureAttributes и skuInfoMap строго без галлюцинаций
-              </p>
+              <h2 className="text-base font-bold text-white tracking-tight">Импорт товара</h2>
+              <p className="text-xs text-slate-400">Извлечение характеристик из кода страницы</p>
             </div>
           </div>
           <button
@@ -394,7 +404,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
         </div>
 
         {/* Тело модального окна */}
-        <div className="p-6 overflow-y-auto space-y-5 text-xs flex-1">
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-3 text-xs flex-1">
           
           {/* Сообщения об ошибках / успехе */}
           {errorMsg && (
@@ -416,30 +426,28 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
             <div className="space-y-4">
               
               {/* Блок правил безопасности и точности ИИ */}
-              <div className="p-3.5 bg-amber-50/70 border border-amber-200/80 rounded-2xl space-y-1.5">
-                <div className="flex items-center gap-2 font-black text-amber-900 text-xs">
+              <details className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <summary className="flex cursor-pointer items-center gap-2 font-semibold text-slate-700">
                   <ShieldCheck className="w-4 h-4 text-amber-600" />
-                  <span>3 строгих правила анализа ИИ (Без галлюцинаций):</span>
+                  <span>Как работает точный разбор</span>
+                </summary>
+                <div className="mt-2 grid grid-cols-1 gap-1.5 text-[11px] text-slate-600 leading-snug">
+                  <div className="rounded-lg bg-white p-2">
+                    Категория, название и характеристики берутся из данных именно выбранного товара.
+                  </div>
+                  <div className="rounded-lg bg-white p-2">
+                    Цены и остатки извлекаются из <code className="font-mono">skuInfoMap</code>, если они есть на странице.
+                  </div>
+                  <div className="rounded-lg bg-white p-2">
+                    Если структурированные данные отсутствуют, используются видимые характеристики страницы.
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] text-amber-800 leading-snug pt-1">
-                  <div className="bg-white/80 p-2 rounded-xl border border-amber-200/50">
-                    <strong>1. Соответствие категории:</strong> Плотность, формат и материалы проверяются строго по целевому товару (например, офисная бумага никогда не путается с чернилами).
-                  </div>
-                  <div className="bg-white/80 p-2 rounded-xl border border-amber-200/50">
-                    <strong>2. Точные SKU и цены:</strong> Извлечение реальных цен и складских остатков из массива <code className="text-amber-900 font-mono">skuInfoMap</code>.
-                  </div>
-                  <div className="bg-white/80 p-2 rounded-xl border border-amber-200/50">
-                    <strong>3. Восстановление данных:</strong> При сбое сериализации парсер опирается на видимые HTML-таблицы характеристик и веса.
-                  </div>
-                </div>
-              </div>
+              </details>
 
               {/* Панель быстрых тестовых пресетов */}
-              <div>
-                <label className="block font-bold text-slate-700 mb-1.5">
-                  Быстрые проверочные пресеты (1 клик для вставки реального кода):
-                </label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <details className="rounded-xl border border-slate-200 px-3 py-2">
+                <summary className="cursor-pointer font-semibold text-slate-600">Загрузить пример для проверки</summary>
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {samplePresets.map((sp) => (
                     <button
                       key={sp.id}
@@ -463,7 +471,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                     </button>
                   ))}
                 </div>
-              </div>
+              </details>
 
               {/* Поле для вставки HTML-кода */}
               <div className="space-y-1.5">
@@ -699,7 +707,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
             <div className="space-y-4">
               <div>
                 <label className="block font-bold text-slate-700 mb-1.5">
-                  Вставьте ссылку на товар с 1688.com или Pinduoduo:
+                  Ссылка на страницу товара
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -710,11 +718,11 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                     className="flex-1 px-3.5 py-2.5 border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-amber-500 focus:outline-none"
                   />
                   <button
-                    onClick={() => handleParseHtmlCode(true)}
+                    onClick={handleOpenMarketplacePage}
                     disabled={isLoading || !productLink}
-                    className="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-black font-black rounded-xl transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                    className="px-4 py-2.5 bg-amber-400 hover:bg-amber-500 text-black font-bold rounded-xl transition-colors disabled:opacity-50 flex items-center gap-1.5"
                   >
-                    <span>{isLoading ? 'Импорт...' : 'Импортировать'}</span>
+                    <span>Открыть для импорта</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>

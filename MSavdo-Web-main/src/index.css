@@ -127,3 +127,41 @@ html[data-theme="dark"] option {
   background: #171717;
   color: #f3f4f6;
 }
+
+body {
+  font-size: 103%;
+  -webkit-text-size-adjust: 103%;
+  text-size-adjust: 103%;
+}
+
+@theme {
+  --text-xs: calc(0.75rem * 1.03);
+  --text-sm: calc(0.875rem * 1.03);
+  --text-base: calc(1rem * 1.03);
+  --text-lg: calc(1.125rem * 1.03);
+  --text-xl: calc(1.25rem * 1.03);
+  --text-2xl: calc(1.5rem * 1.03);
+  --text-3xl: calc(1.875rem * 1.03);
+  --text-4xl: calc(2.25rem * 1.03);
+  --text-5xl: calc(3rem * 1.03);
+  --text-6xl: calc(3.75rem * 1.03);
+}
+
+#root [class~="text-[7px]"] { font-size: 7.21px; }
+#root [class~="text-[8px]"] { font-size: 8.24px; }
+#root [class~="text-[9px]"] { font-size: 9.27px; }
+#root [class~="text-[10px]"] { font-size: 10.3px; }
+#root [class~="text-[11px]"] { font-size: 11.33px; }
+#root [class~="text-[12px]"] { font-size: 12.36px; }
+#root [class~="text-[17px]"] { font-size: 17.51px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

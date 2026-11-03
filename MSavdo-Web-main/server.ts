@@ -7,7 +7,7 @@ import fs from 'fs';
 import crypto from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
-import { analyzeSemantically, cleanProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
+import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
 import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
@@ -18,7 +18,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_IMPORT_TEXT_LENGTH = 50000;
-const GEMINI_IMPORT_MODEL = 'gemini-3.5-flash-lite';
+const GEMINI_IMPORT_MODEL = 'gemini-3.8-flash';
 const GEMINI_IMPORT_TIMEOUT_MS = 10000;
 const trustProxyHops = process.env.TRUST_PROXY_HOPS;
 if (trustProxyHops) {
@@ -514,6 +514,19 @@ const FIXED_CATEGORY_TREE = [
     ],
   },
   {
+    name: 'Электронные компоненты',
+    subcategories: [
+      'Микроконтроллеры и отладочные платы',
+      'Электронные модули и датчики',
+      'Микросхемы и полупроводники',
+      'Резисторы, конденсаторы и катушки',
+      'Разъёмы, провода и монтажные платы',
+      'Реле, переключатели и защита цепей',
+      'Источники питания и DC-DC модули',
+      'Наборы для пайки и разработки',
+    ],
+  },
+  {
     name: 'Бытовая техника',
     subcategories: [
       'Техника для приготовления пищи',
@@ -609,6 +622,16 @@ for (const root of FIXED_CATEGORY_TREE) {
 
 function determineSubcategoryRuleBased(productText: string): string {
   const lower = productText.toLowerCase();
+  if (/(电子元器件|电子元件|集成电路|芯片|电阻|电容|二极管|三极管|mosfet|晶体管|pcb板|电路板|开发板|传感器|arduino|esp32|stm32|raspberry\s*pi|микроконтрол|микросхем|резистор|конденсатор|диод|транзистор|печатн.{0,10}плат|электрон.{0,12}компонент|пайк|датчик|resistor|capacitor|inductor|diode|transistor|integrated circuit|microcontroller|development board|breadboard|soldering kit|\bsensor\b|\bconnector\b)/i.test(lower)) {
+    if (/(arduino|esp32|stm32|raspberry\s*pi|микроконтрол|microcontroller|development board|开发板)/i.test(lower)) return 'Микроконтроллеры и отладочные платы';
+    if (/(电阻|电容|резистор|конденсатор|катушк|индуктив|resistor|capacitor|inductor)/i.test(lower)) return 'Резисторы, конденсаторы и катушки';
+    if (/(二极管|三极管|集成电路|芯片|mosfet|晶体管|диод|транзистор|микросхем|diode|transistor|integrated circuit)/i.test(lower)) return 'Микросхемы и полупроводники';
+    if (/(连接器|разъ[её]м|провод|монтажн.{0,8}плат|pcb板|电路板|connector|breadboard)/i.test(lower)) return 'Разъёмы, провода и монтажные платы';
+    if (/(继电器|реле|переключател|предохранител|\brelay\b)/i.test(lower)) return 'Реле, переключатели и защита цепей';
+    if (/(电源|dc.?dc|питани|преобразовател|power supply)/i.test(lower)) return 'Источники питания и DC-DC модули';
+    if (/(набор.{0,10}пайк|комплект.{0,10}разработ|набор.{0,10}электрон|soldering kit)/i.test(lower)) return 'Наборы для пайки и разработки';
+    return 'Электронные модули и датчики';
+  }
   if (/(квадроцикл|багги|вездеход|atv|utv)/i.test(lower)) return 'Квадроциклы, багги и вездеходы (ATV / UTV)';
   if (/(электросамокат|электровелосипед|электроскутер|электротранспорт)/i.test(lower)) return 'Электротранспорт (персональный и городской)';
   if (/(мотоэкип|мотозапчаст|мототюнинг|мотошлем|мотоперчат)/i.test(lower)) return 'Мотоэкипировка, тюнинг и мотозапчасти';
@@ -1002,6 +1025,64 @@ interface GeminiAnalysisResult {
   specifications: Array<{ name: string; value: string }>;
 }
 
+function isClothingCategory(categoryName: string): boolean {
+  return /одежд|бель|плать|сарафан|футбол|блуз|рубаш|свитер|худи|брюк|юбк|шорт|пижам|носк|колгот|купальник|термобель|верхняя одежда/i.test(categoryName);
+}
+
+function buildVerifiedProductDescription(title: string, specifications: Array<{ name: string; value: string }>): string {
+  const details: string[] = [];
+  for (const item of specifications) {
+    if (!item.name || !item.value || /^Фото цвета:/i.test(item.name)) continue;
+    const detail = `${item.name}: ${item.value}`.slice(0, 100);
+    const candidate = `${title}. По данным карточки товара: ${[...details, detail].join('; ')}.`;
+    if ((candidate.match(/[\p{L}\p{N}]+/gu)?.length || 0) > 45) break;
+    details.push(detail);
+    if (details.length === 3) break;
+  }
+  return details.length > 0
+    ? `${title}. По данным карточки товара: ${details.join('; ')}.`
+    : `${title}. Характеристики указаны только по сведениям из карточки товара.`;
+}
+
+function isVerifiedProductDescription(description: string): boolean {
+  const text = description.trim();
+  const wordCount = text.match(/[\p{L}\p{N}]+/gu)?.length || 0;
+  const sentenceCount = text.split(/(?<=[.!?])\s+(?=[А-ЯA-ZЁ])/).filter(Boolean).length;
+  return wordCount > 0 && wordCount <= 45 && sentenceCount >= 2 && sentenceCount <= 3 &&
+    !/высокое качество|идеальный выбор|надежный|надежная|лучший выбор|покупайте|заказывайте/i.test(text);
+}
+
+function normalizeImportVariants(
+  variants: ParsedVariant[],
+  sourceVariants: ParsedVariant[],
+  categoryName: string,
+  basePriceCny: number,
+  weightKg: number,
+  mainImage = '',
+): Array<ParsedVariant & { weight_kg: number }> {
+  if (isClothingCategory(categoryName)) {
+    return (sourceVariants.length > 0 ? sourceVariants : variants).map((variant) => ({
+      ...variant,
+      weight_kg: Number(variant.weight_kg) > 0 ? Number(variant.weight_kg) : weightKg,
+    }));
+  }
+
+  const sourcePrices = sourceVariants
+    .map((variant) => Number(variant.price_cny))
+    .filter((price) => Number.isFinite(price) && price > 0);
+  const sourceStocks = sourceVariants
+    .map((variant) => Number(variant.stock))
+    .filter((stock) => Number.isFinite(stock) && stock >= 0);
+  return [{
+    color: 'Основной вариант',
+    size: 'Стандарт',
+    price_cny: sourcePrices.length > 0 ? Math.min(...sourcePrices) : basePriceCny,
+    stock: sourceStocks.length > 0 ? sourceStocks.reduce((total, stock) => total + Math.floor(stock), 0) : 0,
+    weight_kg: weightKg,
+    image_url: mainImage || sourceVariants.find((variant) => variant.image_url)?.image_url || '',
+  }];
+}
+
 function cleanRawTitle(raw: string): string {
   return raw
     .replace(/【.*?】/g, '')
@@ -1012,8 +1093,9 @@ function cleanRawTitle(raw: string): string {
 }
 
 function fallbackAnalysis(rawText: string, rawTitle?: string, baseCny: number = 50, weightKg: number = 0.5): GeminiAnalysisResult {
-  const analysis = analyzeSemantically(rawText, rawTitle, baseCny, weightKg);
-  analysis.category_name = normalizeSubcategoryName(analysis.category_name, `${rawTitle || ''} ${rawText}`);
+  const safeTitle = isLikelyProductTitle(rawTitle) ? rawTitle : '';
+  const analysis = analyzeSemantically(rawText, safeTitle, baseCny, weightKg);
+  analysis.category_name = normalizeSubcategoryName(analysis.category_name, `${safeTitle} ${rawText}`);
   return analysis;
 }
 
@@ -1085,7 +1167,8 @@ async function analyzeProductWithGemini(
   }
   textSnippet = (structuredContext?.rawSnippetForAi || rawText).slice(0, 30000);
 
-  const effectiveTitle = structuredContext?.title || rawTitle || '';
+  const titleCandidate = structuredContext?.title || rawTitle || '';
+  const effectiveTitle = isLikelyProductTitle(titleCandidate) ? titleCandidate : '';
 
   if (!aiClient) {
     console.log('[Gemini] GEMINI_API_KEY отсутствует, используется автономный семантический анализ v4.0.');
@@ -1094,9 +1177,14 @@ async function analyzeProductWithGemini(
     if (structuredContext?.specifications && structuredContext.specifications.length > 0) {
       fallback.specifications = structuredContext.specifications;
     }
-    if (structuredContext?.variants && structuredContext.variants.length > 0) {
-      fallback.variants = structuredContext.variants;
-    }
+    fallback.description = buildVerifiedProductDescription(fallback.title, fallback.specifications);
+    fallback.variants = normalizeImportVariants(
+      fallback.variants,
+      structuredContext?.variants || [],
+      fallback.category_name,
+      basePriceCny,
+      fallback.weight_kg,
+    );
     for (const v of fallback.variants) {
       const matchedImg = matchColorWithVisualMap(v.color, visualSkuMap);
       if (matchedImg) v.image_url = matchedImg;
@@ -1133,6 +1221,7 @@ async function analyzeProductWithGemini(
 
 ТРЕБОВАНИЯ К ПОЛЯМ:
 1. "title": Строго переведи фактический смысл исходного названия на русский язык и сформулируй краткий заголовок для клиентской витрины. Не добавляй свойства, бренды или сведения, которых нет в исходных данных.
+   Бери название именно из заголовка карточки товара (приоритет: subject/productTitle, затем видимый h1/og:title). Не используй название компании, магазина, продавца или бренд страницы вместо товара.
    СТРОГО удали: слова Alibaba, 1688, оптом, 2026, 2025, фабрика, завод, производитель, рекламный спам, китайские иероглифы.
 2. "description": Напиши 2–3 коротких, естественных предложения на русском языке (не более 45 слов). Кратко объясни, что это за товар, и назови только 1–3 самые важные подтвержденные особенности. Не повторяй список характеристик и вариантов, которые возвращаются отдельно. Не добавляй общие фразы вроде «высокое качество», «надежный», «идеальный выбор», призывы к покупке, сведения о доставке или другие рекламные слова. Не заполняй текст ради нужного количества предложений.
 3. "specifications": Извлеки доступные технические параметры, свойства и характеристики (featureAttributes, таблицы параметров, материал, сезон, размеры, плотность, совместимость, комплектация и т.д.) и переведи их на русский язык.
@@ -1140,13 +1229,13 @@ async function analyzeProductWithGemini(
 4. "category_name": Выбери одну наиболее подходящую ПОДКАТЕГОРИЮ строго из этого фиксированного списка. Новые категории создавать запрещено:
    - ${categoryOptions}
 5. "weight_kg": Извлеки вес единицы товара в кг.
-6. "variants": Сформируй полную матрицу модификаций товара. Каждый SKU из переданных структурированных данных должен остаться отдельным вариантом; не объединяй размеры и цвета.
-   - "color": Название модификации или цвета на русском языке.
-   - "size": Размер или фасовка ("Стандарт" или реальный размер/комплектация).
-   - "price_cny": Индивидуальная цена в юанях из skuInfoMap или текста. Не придумывай цену.
-   - "stock": Реальный остаток из canBookCount / amountOnSale / quantity. Не придумывай остаток.
-   - "weight_kg": Вес варианта в кг.
-   - "image_url": Прямая ссылка на фото модификации.
+6. "variants": Создавай варианты только для одежды и белья: каждый подтвержденный размер и цвет из SKU должен остаться отдельным вариантом.
+   Для обуви, электроники, комплектующих, товаров дома и всех остальных категорий возвращай один вариант "Основной вариант" / "Стандарт".
+   Вариации не-одежды (цвет, объем, комплектация, фасовка, память и т.п.) сохраняй как подтвержденные характеристики, а не как варианты.
+   - "price_cny": Используй только цену, явно найденную в источнике; не придумывай цену и остаток.
+   - "stock": Реальный остаток из canBookCount / amountOnSale / quantity; если его нет, верни 0.
+   - "weight_kg": Вес варианта в кг, если он указан.
+   - "image_url": Прямая ссылка на фото только при точном соответствии модификации.
 
 Карта соответствия цветов и фотографий visual_sku_map:
 ${skuMapSnippet}
@@ -1208,8 +1297,14 @@ ${textSnippet}
 
     const parsed = JSON.parse(responseText);
 
-    const title = cleanBannedWordsAndPhrases(parsed.title?.trim() || cleanRawTitle(rawTitle || rawText.slice(0, 80)));
-    const description = cleanBannedWordsAndPhrases(parsed.description?.trim() || `${title}. Основные характеристики указаны в карточке.`);
+    const parsedTitle = cleanBannedWordsAndPhrases(parsed.title?.trim() || '');
+    const usableParsedTitle = isLikelyProductTitle(parsedTitle) && !/[\u4e00-\u9fa5]/.test(parsedTitle)
+      ? parsedTitle
+      : '';
+    const sourceTitle = isLikelyProductTitle(rawTitle) ? cleanProductTitle(rawTitle) : '';
+    const semanticFallbackTitle = analyzeSemantically(textSnippet, '', basePriceCny, weightKg).title;
+    const title = usableParsedTitle || cleanBannedWordsAndPhrases(sourceTitle) ||
+      cleanBannedWordsAndPhrases(semanticFallbackTitle);
     const category_name = normalizeSubcategoryName(
       typeof parsed.category_name === 'string' ? parsed.category_name : '',
       `${effectiveTitle} ${textSnippet}`
@@ -1232,6 +1327,10 @@ ${textSnippet}
       fb.category_name = normalizeSubcategoryName(fb.category_name, `${rawTitle || ''} ${rawText}`);
       specifications = fb.specifications || [];
     }
+    const candidateDescription = cleanBannedWordsAndPhrases(parsed.description?.trim() || '');
+    const description = isVerifiedProductDescription(candidateDescription)
+      ? candidateDescription
+      : buildVerifiedProductDescription(title, specifications);
 
     const variants: ParsedVariant[] = [];
     if (Array.isArray(parsed.variants) && parsed.variants.length > 0) {
@@ -1247,7 +1346,7 @@ ${textSnippet}
           color: String(v.color || 'Основной цвет').trim(),
           size: String(v.size || 'Стандарт').trim(),
           price_cny: parseFloat(v.price_cny) || basePriceCny,
-          stock: Number.isFinite(Number(v.stock)) && Number(v.stock) >= 0 ? Math.floor(Number(v.stock)) : 25,
+          stock: Number.isFinite(Number(v.stock)) && Number(v.stock) >= 0 ? Math.floor(Number(v.stock)) : 0,
           weight_kg: parseFloat(v.weight_kg) || weight_kg,
           image_url: vImg,
         });
@@ -1257,18 +1356,26 @@ ${textSnippet}
         color: 'Основной цвет',
         size: 'Стандарт',
         price_cny: basePriceCny,
-        stock: 25,
+        stock: 0,
         weight_kg: weight_kg,
         image_url: visualSkuMap[0]?.image_url || '',
       });
     }
+
+    const normalizedVariants = normalizeImportVariants(
+      variants,
+      structuredContext?.variants || [],
+      category_name,
+      basePriceCny,
+      weight_kg,
+    );
 
     return {
       title,
       description,
       category_name,
       weight_kg,
-      variants,
+      variants: normalizedVariants,
       specifications,
     };
   } catch (err: any) {
@@ -1279,9 +1386,14 @@ ${textSnippet}
     if (structuredContext?.specifications && structuredContext.specifications.length > 0) {
       fb.specifications = structuredContext.specifications;
     }
-    if (structuredContext?.variants && structuredContext.variants.length > 0) {
-      fb.variants = structuredContext.variants;
-    }
+    fb.description = buildVerifiedProductDescription(fb.title, fb.specifications);
+    fb.variants = normalizeImportVariants(
+      fb.variants,
+      structuredContext?.variants || [],
+      fb.category_name,
+      basePriceCny,
+      fb.weight_kg,
+    );
     for (const v of fb.variants) {
       const matched = matchColorWithVisualMap(v.color, visualSkuMap);
       if (matched) v.image_url = matched;
@@ -1293,6 +1405,15 @@ ${textSnippet}
 // Привязка только к одной из фиксированных подкатегорий
 function resolveCategoryId(categoryName: string): number {
   return getFixedSubcategoryId(categoryName);
+}
+
+function findExplicitCategory(value: unknown): { id: number; name: string } | null {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) return null;
+  return db.prepare(`
+    SELECT id, name FROM categories
+    WHERE id = ? AND parent_id IS NOT NULL
+  `).get(id) as { id: number; name: string } | undefined || null;
 }
 
 function determineAdminCategoryFallback(title: string): string {
@@ -1314,7 +1435,7 @@ async function resolveCategoryWithAi(title: string): Promise<string> {
       setTimeout(() => reject(new Error('AI Category Timeout')), 6000)
     );
     const generatePromise = aiClient.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: GEMINI_IMPORT_MODEL,
       contents: prompt,
     });
 
@@ -2647,6 +2768,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
   try {
     const {
       title,
+      category_id: requestedCategoryId,
       description = '',
       delivery_type = 'order',
       status = 'active',
@@ -2661,6 +2783,11 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
 
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
+    }
+    const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '';
+    const explicitCategory = hasRequestedCategory ? findExplicitCategory(requestedCategoryId) : null;
+    if (hasRequestedCategory && !explicitCategory) {
+      return res.status(400).json({ error: 'Выберите действующую подкатегорию каталога' });
     }
     if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
       return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
@@ -2677,7 +2804,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     const cleanVideo = cleanVideos[0] || requestedVideo;
 
     // ИИ-определение категории через Gemini 3.8 Flash
-    const aiCategory = await resolveCategoryWithAi(cleanTitle);
+    const aiCategory = explicitCategory?.name || await resolveCategoryWithAi(cleanTitle);
     const categoryId = resolveCategoryId(aiCategory);
     cleanDesc = appendSearchKeywords(
       cleanDesc,
@@ -2804,6 +2931,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     const {
       title,
+      category_id: requestedCategoryId,
       description = '',
       delivery_type = 'order',
       status = 'active',
@@ -2820,6 +2948,11 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
     }
+    const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '';
+    const explicitCategory = hasRequestedCategory ? findExplicitCategory(requestedCategoryId) : null;
+    if (hasRequestedCategory && !explicitCategory) {
+      return res.status(400).json({ error: 'Выберите действующую подкатегорию каталога' });
+    }
     if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
       return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
     }
@@ -2835,7 +2968,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     const cleanVideo = cleanVideos[0] || requestedVideo;
 
     // ИИ-определение точной категории через Gemini 3.8 Flash
-    const aiCategory = await resolveCategoryWithAi(cleanTitle);
+    const aiCategory = explicitCategory?.name || await resolveCategoryWithAi(cleanTitle);
     const categoryId = resolveCategoryId(aiCategory);
     cleanDesc = appendSearchKeywords(
       cleanDesc,
@@ -2933,6 +3066,29 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
   }
 });
 
+app.put('/api/admin/products/:id/category', requireAdmin, (req, res) => {
+  try {
+    const productId = Number(req.params.id);
+    if (!Number.isSafeInteger(productId) || productId <= 0) {
+      return res.status(400).json({ error: 'Некорректный идентификатор товара' });
+    }
+
+    const category = findExplicitCategory(req.body?.category_id);
+    if (!category) {
+      return res.status(400).json({ error: 'Выберите действующую подкатегорию каталога' });
+    }
+
+    const result = db.prepare('UPDATE products SET category_id = ? WHERE id = ?').run(category.id, productId);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Товар не найден' });
+    }
+    return res.json({ success: true, category_id: category.id, category_name: category.name });
+  } catch (error: any) {
+    console.error('[Admin Product Category Error]', error);
+    return res.status(500).json({ error: 'Не удалось изменить категорию товара' });
+  }
+});
+
 // 6. РЕДАКТИРОВАНИЕ КОНКРЕТНОГО ВАРИАНТА В АДМИНКЕ
 app.put('/api/admin/variants/:id', requireAdmin, (req, res) => {
   try {
@@ -3005,9 +3161,12 @@ app.post('/api/add-product', async (req, res) => {
     const fullRawText = (raw_html_text || raw_text || '').trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
     const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
     if (structured_data && typeof structured_data === 'object' && !Array.isArray(structured_data)) {
-      if (typeof structured_data.title === 'string' && structured_data.title.trim()) {
-        structuredMedia.title = structured_data.title.trim().slice(0, 500);
-      }
+      const structuredTitleCandidates = [
+        structured_data.title,
+        ...(Array.isArray(structured_data.title_candidates) ? structured_data.title_candidates : []),
+      ];
+      const productTitle = structuredTitleCandidates.find(isLikelyProductTitle);
+      if (productTitle) structuredMedia.title = productTitle.trim().slice(0, 500);
       if (Array.isArray(structured_data.specifications)) {
         structuredMedia.specifications = structured_data.specifications
           .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
@@ -3061,7 +3220,8 @@ app.post('/api/add-product', async (req, res) => {
       ].filter(Boolean);
       structuredMedia.rawSnippetForAi = structuredLines.join('\n\n').slice(0, 30000);
     }
-    const effectiveTitle = (structuredMedia.title || inputRawTitle || inputTitle || '').trim();
+    const titleCandidate = (structuredMedia.title || inputRawTitle || inputTitle || '').trim();
+    const effectiveTitle = isLikelyProductTitle(titleCandidate) ? titleCandidate : '';
     const baseCny = parseFloat(price_cny) || structuredMedia.variants.find((variant) => variant.price_cny > 0)?.price_cny || 50;
     const initialWeight = parseFloat(weight_kg) || structuredMedia.weightKg || 0.5;
     const visualSkuMap: VisualSkuItem[] = [];
@@ -3165,7 +3325,7 @@ app.post('/api/add-product', async (req, res) => {
       finalTitle.includes('温县') ||
       finalTitle.includes('中山市')
     ) {
-      if (effectiveTitle && /[а-яА-ЯёЁ]{4,}/.test(effectiveTitle)) {
+      if (isLikelyProductTitle(effectiveTitle) && /[а-яА-ЯёЁ]{4,}/.test(effectiveTitle)) {
         finalTitle = cleanRawTitle(effectiveTitle);
       } else {
         const semantic = analyzeSemantically(fullRawText, effectiveTitle, baseCny, initialWeight);
@@ -3198,6 +3358,9 @@ app.post('/api/add-product', async (req, res) => {
 
     // Привязываем категорию
     finalCategory = normalizeSubcategoryName(finalCategory, `${finalTitle} ${fullRawText}`);
+    if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
+      finalDesc = buildVerifiedProductDescription(finalTitle, specificationsToProcess);
+    }
     finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
     finalDesc = ensureOrderDeliveryNotice(finalDesc);
     const categoryId = resolveCategoryId(finalCategory);
@@ -3216,6 +3379,14 @@ app.post('/api/add-product', async (req, res) => {
       allImages = cleanImgArr.join(',');
       mainImage = cleanImgArr[0] || '';
     }
+    variantsToProcess = normalizeImportVariants(
+      variantsToProcess,
+      structuredMedia.variants,
+      finalCategory,
+      baseCny,
+      finalWeight,
+      mainImage,
+    );
 
     // Сохраняем товар в базу со всеми фото, видео и характеристиками
     const specsJson = JSON.stringify(specificationsToProcess);
@@ -3364,7 +3535,7 @@ app.post('/api/parse-product-html', async (req, res) => {
           color: cleanProductDescription(translateVariantName(sv.color || `Модификация ${idx + 1}`)) || 'Стандарт',
           size: cleanProductDescription(translateVariantName(sv.size || 'Стандарт')) || 'Стандарт',
           price_cny: sv.price_cny > 0 ? sv.price_cny : baseCny,
-          stock: Number.isFinite(Number(sv.stock)) && Number(sv.stock) >= 0 ? Math.floor(Number(sv.stock)) : 25,
+          stock: Number.isFinite(Number(sv.stock)) && Number(sv.stock) >= 0 ? Math.floor(Number(sv.stock)) : 0,
           weight_kg: sv.weight_kg || initialWeight,
           image_url: sv.image_url || '',
         };
@@ -3390,6 +3561,14 @@ app.post('/api/parse-product-html', async (req, res) => {
 
     const imagesList = structured.images.length > 0 ? structured.images : (analysis.variants.map((v) => v.image_url).filter(Boolean));
     const mainImg = imagesList[0] || (finalVariants[0]?.image_url) || '';
+    finalVariants = normalizeImportVariants(
+      finalVariants,
+      structured.variants,
+      analysis.category_name,
+      baseCny,
+      finalWeight,
+      mainImg,
+    );
 
     // Название и описание: приоритет ручного ввода (если заполнен), иначе ИИ
     let finalTitle = (manual_title && typeof manual_title === 'string' && manual_title.trim())
@@ -3403,6 +3582,9 @@ app.post('/api/parse-product-html', async (req, res) => {
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
     finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
     const searchableSpecs = combinedSpecs.filter((spec) => !/^Фото цвета:/i.test(spec.name));
+    if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
+      finalDesc = buildVerifiedProductDescription(finalTitle, searchableSpecs);
+    }
     finalDesc = appendSearchKeywords(
       finalDesc,
       finalTitle,

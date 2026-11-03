@@ -3,13 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { Product, Category, CartItem } from './types';
 import { ProductCard } from './components/ProductCard';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { CartDrawer } from './components/CartDrawer';
 import { RulesView } from './components/RulesView';
-import { AdminPanel } from './components/AdminPanel';
 import { ToastContainer, ToastItem } from './components/Toast';
 import { apiFetch } from './api';
 import { useI18n } from './i18n';
@@ -32,6 +31,7 @@ import {
 } from 'lucide-react';
 
 const BRAND_LOGO_URL = '/msavdo-logo.jpg';
+const AdminPanel = lazy(() => import('./components/AdminPanel').then((module) => ({ default: module.AdminPanel })));
 
 function getCategoryIllustration(name: string): string {
   const category = name.toLocaleLowerCase('ru');
@@ -42,6 +42,7 @@ function getCategoryIllustration(name: string): string {
   if (/сумки, рюкзаки/.test(category)) return '👜';
   if (/аксессуары, часы/.test(category)) return '⌚';
   if (/электроника и гаджеты/.test(category)) return '📱';
+  if (/электронные компоненты/.test(category)) return '🔌';
   if (/бытовая техника/.test(category)) return '🔌';
   if (/товары для дома/.test(category)) return '🏠';
   if (/мебель, ремонт/.test(category)) return '🛋️';
@@ -739,10 +740,12 @@ export default function App() {
 
         {/* ЭКРАН 2: АДМИН-ПАНЕЛЬ (ТОЛЬКО ЗДЕСЬ ИМПОРТ И УПРАВЛЕНИЕ) */}
         {currentView === 'admin' && (
-          <AdminPanel
-            onBack={() => setCurrentView('catalog')}
-            onRefreshCatalog={fetchCatalog}
-          />
+          <Suspense fallback={<div className="p-6 text-center text-sm text-slate-500">Загрузка панели администратора…</div>}>
+            <AdminPanel
+              onBack={() => setCurrentView('catalog')}
+              onRefreshCatalog={fetchCatalog}
+            />
+          </Suspense>
         )}
 
         {/* ЭКРАН 3: ПУБЛИЧНЫЙ КАТАЛОГ (КОМПАКТНЫЙ, БЫСТРЫЙ, МОБИЛЬНЫЙ) */}

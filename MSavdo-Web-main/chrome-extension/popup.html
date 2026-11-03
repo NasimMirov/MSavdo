@@ -238,6 +238,117 @@
       color: #FACC15;
     }
   </style>
+  <style>
+    body {
+      width: 380px;
+      max-height: 640px;
+      overflow-y: auto;
+      padding: 14px;
+      background: #0c0d10;
+    }
+
+    .header {
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+    }
+
+    .badge {
+      background: #272a31;
+      color: #d4d7de;
+      font-size: 9px;
+      letter-spacing: .04em;
+    }
+
+    .current-tab-card {
+      padding: 10px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+
+    .action-btn {
+      min-height: 38px;
+      padding: 9px 11px;
+      border-radius: 9px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      box-shadow: none;
+    }
+
+    .btn-copilot {
+      background: #facc15;
+      color: #18181b;
+    }
+
+    .btn-fast-import {
+      background: #facc15;
+      color: #18181b;
+      font-weight: 800;
+    }
+
+    .btn-fast-import:hover,
+    .btn-copilot:hover {
+      background: #eab308;
+    }
+
+    #btn-open-panel,
+    #btn-open-site {
+      min-height: 34px;
+      padding: 7px 10px !important;
+      font-size: 11px !important;
+    }
+
+    #btn-open-site {
+      border-color: transparent;
+      color: #a1a1aa;
+      background: transparent;
+    }
+
+    #btn-open-site:hover {
+      color: #facc15;
+      background: #18181b;
+    }
+
+    body > div[style*="background:#18181b"] {
+      padding: 10px !important;
+      margin-bottom: 8px !important;
+      border-color: #292b31 !important;
+      border-radius: 10px !important;
+    }
+
+    #manual-title,
+    #manual-description,
+    #page-code-input {
+      font-size: 12px !important;
+      border-color: #363943 !important;
+    }
+
+    #manual-title,
+    #manual-description {
+      padding: 8px 9px !important;
+    }
+
+    #page-code-input {
+      min-height: 72px;
+    }
+
+    .accordion-toggle {
+      padding: 7px 0 3px;
+    }
+
+    .settings-panel {
+      border-color: #292b31;
+      padding: 9px;
+    }
+
+    .status-msg {
+      margin-top: 6px;
+      padding: 9px;
+    }
+
+    .footer {
+      margin-top: 8px;
+    }
+  </style>
 </head>
 <body>
   <!-- ХЕДЕР -->
@@ -260,10 +371,10 @@
     <div id="tab-title" class="tab-title-text">Загрузка информации о странице...</div>
   </div>
 
-  <!-- РУЧНОЕ ДОБАВЛЕНИЕ НАЗВАНИЯ И ОПИСАНИЯ (ПУНКТ 8) -->
+  <!-- Данные товара -->
   <div style="background:#18181b; border:1px solid #27272a; border-radius:12px; padding:10px; margin-bottom:12px;">
     <div style="font-size:11px; font-weight:700; color:#FACC15; margin-bottom:8px; display:flex; align-items:center; gap:5px;">
-      <span>✏️ Ручные данные (если пусто — сгенерирует ИИ):</span>
+      <span>Данные товара <span style="color:#a1a1aa;font-weight:500;">(необязательно)</span></span>
     </div>
     
     <label style="display:block; font-size:10px; color:#a1a1aa; font-weight:600; margin-bottom:3px;">
@@ -310,12 +421,12 @@
 
   <!-- БЫСТРЫЙ ИМПОРТ ИЗ ОКНА РАСШИРЕНИЯ -->
   <button id="btn-quick-import" class="action-btn btn-fast-import">
-    <span>⚡ Импортировать товар через ИИ</span>
+    <span>Импортировать товар</span>
   </button>
 
   <!-- ГЛАВНАЯ КНОПКА ОТКРЫТИЯ ПАНЕЛИ -->
   <button id="btn-open-panel" class="action-btn btn-outline" style="font-size:11px; padding:8px;">
-    <span>🔍 Открыть модальное окно на странице 1688</span>
+    <span>Открыть помощник на странице</span>
   </button>
 
   <!-- ОТКРЫТЬ ВИТРИНУ -->
