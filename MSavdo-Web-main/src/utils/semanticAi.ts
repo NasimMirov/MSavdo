@@ -598,7 +598,12 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
       result.variants = extractVariants(skuMap, result.weightKg || 0.5, skuProps);
     }
 
-    const category = findFieldValue(nestedObjects, ['categoryName', 'category']);
+    const productCategory = nestedObjects.find((entry) => (
+      entry.categoryName &&
+      (entry.subject || entry.featureAttributes || entry.productAttributes || entry.skuInfoMap)
+    ));
+    const category = productCategory?.categoryName
+      ?? findFieldValue(nestedObjects, ['categoryName', 'category_name', 'category']);
     result.categoryHint = stringValue(category) || undefined;
   }
 

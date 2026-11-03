@@ -30,6 +30,20 @@ test('prefers the product h1 over the company page title', () => {
   assert.equal(parsed.title, 'Умный датчик температуры');
 });
 
+test('extracts the source product category from structured marketplace data', () => {
+  const parsed = extractStructuredFromHtmlOrJson(`window.context = {
+    "company": { "categoryName": "Женская одежда" },
+    "data": {
+      "offerDetail": {
+        "subject": "Понижающий DC-DC преобразователь",
+        "categoryName": "Источники питания и DC-DC модули"
+      }
+    }
+  };`);
+
+  assert.equal(parsed.categoryHint, 'Источники питания и DC-DC модули');
+});
+
 test('rejects company names as product titles', () => {
   assert.equal(isLikelyProductTitle('ACME Company Limited'), false);
   assert.equal(isLikelyProductTitle('Мужская хлопковая футболка'), true);

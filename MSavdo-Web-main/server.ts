@@ -644,7 +644,8 @@ function determineSubcategoryRuleBased(productText: string): string {
   if (/(канцеляр|тетрад|блокнот|ежедневник|ручк.{0,8}(шариков|пишущ)|школьн.{0,8}(товар|принадлеж))/i.test(lower)) return 'Школьная и офисная канцелярия';
   if (/(рисован|лепк|рукодел|товар.{0,8}для творч|набор.{0,8}для творч)/i.test(lower)) return 'Рисование, творчество и рукоделие';
   if (/(праздник|подарочн|новогодн|декорац.{0,8}(праздник|шар)|музыкальн.{0,8}(инструмент|гитар)|гитар|синтезатор)/i.test(lower)) return 'Товары для праздников и подарков';
-  if (/(детск.{0,12}(телефон|планшет|часы|гаджет)|детские часы|новорожден|младен|для мам|детск.{0,8}(товар|игр|одежд))/i.test(lower)) return 'Одежда для девочек и мальчиков';
+  if (/(новорожден|младен|для мам|подгузник|уход.{0,8}(младен|ребен))/i.test(lower)) return 'Товары для мам и ухода за младенцами';
+  if (/(детск|мальчик|девочк).{0,14}(одежд|футболк|плать|куртк|брюк|рубашк|пижам)|(?:одежд|футболк|плать|куртк|брюк|рубашк|пижам).{0,14}(детск|мальчик|девочк)/i.test(lower)) return 'Одежда для девочек и мальчиков';
   if (/(женск.{0,10}(нижн.{0,8}бель|бюстгальтер)|бюстгальтер|лифчик|трусы жен|купальник)/i.test(lower)) return 'Женское нижнее белье';
   if (/(мужск.{0,10}(нижн.{0,8}бель|трусы)|боксеры муж)/i.test(lower)) return 'Мужское нижнее белье';
   if (/(термобель)/i.test(lower)) return 'Термобелье';
@@ -699,12 +700,39 @@ function determineSubcategoryRuleBased(productText: string): string {
   if (/(рыбалк|охот)/i.test(lower)) return 'Рыбалка и охота';
   if (/(туризм|кемпинг|палатк|спальн.{0,8}мешок|походн)/i.test(lower)) return 'Туризм, кемпинг и пикник';
   if (/(фитнес|гантел|эспандер|скакалк|йога|тренажер)/i.test(lower)) return 'Фитнес, йога и домашние тренажеры';
-  if (/(спортивн|спорт|тренировочн|футбол|мяч)/i.test(lower)) return 'Командные игры и единоборства';
+  if (/(спортивн|спорт|тренировочн|футбольн.{0,8}(мяч|форма|бутс)|футбольный мяч|мяч)/i.test(lower)) return 'Командные игры и единоборства';
   if (/(плаван|лыж|сноуборд|зимн.{0,8}спорт)/i.test(lower)) return 'Плавание, водный и зимний спорт';
-  if (/(женск|женщин|девушк|платье|юбк|блузк|сарафан)/i.test(lower)) return 'Платья и сарафаны';
-  if (/(детск|мальчик|девочк)/i.test(lower)) return 'Одежда для девочек и мальчиков';
-  if (/(мужск|мужчин)/i.test(lower)) return 'Мужские футболки, майки и поло';
-  return 'Мужские футболки, майки и поло';
+  if (/(плать|сарафан)/i.test(lower)) return 'Платья и сарафаны';
+  if (/(женск|женщин|девушк).{0,14}(верхн.{0,8}одежд|куртк|пальто|пуховик|плащ|ветровк)|(?:верхн.{0,8}одежд|куртк|пальто|пуховик|плащ|ветровк).{0,14}(женск|женщин|девушк)/i.test(lower)) return 'Женская верхняя одежда';
+  if (/(мужск|мужчин).{0,14}(верхн.{0,8}одежд|куртк|пальто|пуховик|плащ|ветровк)|(?:верхн.{0,8}одежд|куртк|пальто|пуховик|плащ|ветровк).{0,14}(мужск|мужчин)/i.test(lower)) return 'Мужская верхняя одежда';
+  if (/(блузк|женск.{0,10}рубашк|рубашк.{0,10}женск)/i.test(lower)) return 'Женские блузки и рубашки';
+  if (/(мужск.{0,10}рубашк|рубашк.{0,10}мужск|сорочк)/i.test(lower)) return 'Мужские рубашки и сорочки';
+  if (/(худи|толстовк|свитер|свитшот|кардиган)/i.test(lower)) {
+    return /(женск|женщин|девушк)/i.test(lower)
+      ? 'Женские свитеры, худи и трикотаж'
+      : 'Мужские худи, толстовки и свитеры';
+  }
+  if (/(джинс|брюк|леггинс|лосин)/i.test(lower)) {
+    return /(женск|женщин|девушк)/i.test(lower)
+      ? 'Женские брюки, джинсы и леггинсы'
+      : 'Мужские брюки и джинсы';
+  }
+  if (/(юбк|шорт)/i.test(lower)) {
+    return /(женск|женщин|девушк)/i.test(lower)
+      ? 'Женские юбки и шорты'
+      : 'Мужские шорты и бриджи';
+  }
+  if (/(костюм|жакет|пиджак|комбинезон)/i.test(lower)) {
+    return /(женск|женщин|девушк)/i.test(lower)
+      ? 'Женские костюмы, жакеты и комбинезоны'
+      : 'Мужские костюмы и пиджаки';
+  }
+  if (/(футболк|майк|поло|топ\b|боди)/i.test(lower)) {
+    return /(женск|женщин|девушк)/i.test(lower)
+      ? 'Футболки, топы и боди'
+      : 'Мужские футболки, майки и поло';
+  }
+  return 'Хозяйственные мелочи';
 }
 
 function normalizeSubcategoryName(categoryName: string, productText: string = ''): string {
@@ -713,6 +741,49 @@ function normalizeSubcategoryName(categoryName: string, productText: string = ''
     if (subcategory.toLocaleLowerCase('ru') === normalized) return subcategory;
   }
   return determineSubcategoryRuleBased(`${categoryName} ${productText}`);
+}
+
+function inferSpecificSubcategory(productText: string): string | null {
+  const text = String(productText || '').trim();
+  if (!text) return null;
+  const category = determineSubcategoryRuleBased(text);
+  if (category !== 'Хозяйственные мелочи') return category;
+  return null;
+}
+
+function resolveImportSubcategory(
+  modelCategory: string,
+  productTitle: string,
+  context?: ExtractedHtmlContext | null,
+): string {
+  const titleCategory = inferSpecificSubcategory(productTitle)
+    || inferSpecificSubcategory(context?.title || '');
+  if (titleCategory) return titleCategory;
+
+  const hint = String(context?.categoryHint || '').trim();
+  const normalizedHint = hint.toLocaleLowerCase('ru');
+  const exactHint = STRICT_ALLOWED_CATEGORIES.find(
+    (category) => category.toLocaleLowerCase('ru') === normalizedHint,
+  );
+  if (exactHint) return exactHint;
+
+  const matchingHint = STRICT_ALLOWED_CATEGORIES.find((category) =>
+    normalizedHint.includes(category.toLocaleLowerCase('ru')),
+  );
+  if (matchingHint) return matchingHint;
+
+  const hintedCategory = inferSpecificSubcategory(hint);
+  if (hintedCategory && !/(женск|мужск|детск).{0,12}одежд|女装|男装|服装|электроника|数码产品/i.test(hint)) {
+    return hintedCategory;
+  }
+
+  const specificationText = (context?.specifications || [])
+    .map((item) => `${item.name} ${item.value}`)
+    .join(' ');
+  const specificationCategory = inferSpecificSubcategory(specificationText);
+  if (specificationCategory) return specificationCategory;
+
+  return normalizeSubcategoryName(modelCategory, productTitle);
 }
 
 function getFixedSubcategoryId(categoryName: string): number {
@@ -1095,7 +1166,8 @@ function cleanRawTitle(raw: string): string {
 function fallbackAnalysis(rawText: string, rawTitle?: string, baseCny: number = 50, weightKg: number = 0.5): GeminiAnalysisResult {
   const safeTitle = isLikelyProductTitle(rawTitle) ? rawTitle : '';
   const analysis = analyzeSemantically(rawText, safeTitle, baseCny, weightKg);
-  analysis.category_name = normalizeSubcategoryName(analysis.category_name, `${safeTitle} ${rawText}`);
+  const context = extractStructuredFromHtmlOrJson(rawText);
+  analysis.category_name = resolveImportSubcategory(analysis.category_name, analysis.title || safeTitle, context);
   return analysis;
 }
 
@@ -1173,7 +1245,7 @@ async function analyzeProductWithGemini(
   if (!aiClient) {
     console.log('[Gemini] GEMINI_API_KEY отсутствует, используется автономный семантический анализ v4.0.');
     const fallback = analyzeSemantically(textSnippet, effectiveTitle, basePriceCny, weightKg);
-    fallback.category_name = normalizeSubcategoryName(fallback.category_name, `${effectiveTitle} ${textSnippet}`);
+    fallback.category_name = resolveImportSubcategory(fallback.category_name, fallback.title || effectiveTitle, structuredContext);
     if (structuredContext?.specifications && structuredContext.specifications.length > 0) {
       fallback.specifications = structuredContext.specifications;
     }
@@ -1228,6 +1300,8 @@ async function analyzeProductWithGemini(
    Верни все подтвержденные данными страницы характеристики. Не придумывай значения и не требуй минимум характеристик, если страница их не содержит.
 4. "category_name": Выбери одну наиболее подходящую ПОДКАТЕГОРИЮ строго из этого фиксированного списка. Новые категории создавать запрещено:
    - ${categoryOptions}
+   Категория источника (если извлечена): ${JSON.stringify(structuredContext?.categoryHint || 'не указана')}.
+   Определяй категорию по самому товару из заголовка и его характеристик. Подсказка категории источника и текст страницы могут содержать общие разделы, рекомендации или товары продавца — не позволяй им перевесить ясное название целевого товара.
 5. "weight_kg": Извлеки вес единицы товара в кг.
 6. "variants": Создавай варианты только для одежды и белья: каждый подтвержденный размер и цвет из SKU должен остаться отдельным вариантом.
    Для обуви, электроники, комплектующих, товаров дома и всех остальных категорий возвращай один вариант "Основной вариант" / "Стандарт".
@@ -1305,9 +1379,10 @@ ${textSnippet}
     const semanticFallbackTitle = analyzeSemantically(textSnippet, '', basePriceCny, weightKg).title;
     const title = usableParsedTitle || cleanBannedWordsAndPhrases(sourceTitle) ||
       cleanBannedWordsAndPhrases(semanticFallbackTitle);
-    const category_name = normalizeSubcategoryName(
+    const category_name = resolveImportSubcategory(
       typeof parsed.category_name === 'string' ? parsed.category_name : '',
-      `${effectiveTitle} ${textSnippet}`
+      title || effectiveTitle,
+      structuredContext,
     );
     const weight_kg = typeof parsed.weight_kg === 'number' && parsed.weight_kg > 0 ? parsed.weight_kg : weightKg;
 
@@ -1324,7 +1399,7 @@ ${textSnippet}
     }
     if (specifications.length === 0) {
       const fb = fallbackAnalysis(rawText, rawTitle, basePriceCny, weightKg);
-      fb.category_name = normalizeSubcategoryName(fb.category_name, `${rawTitle || ''} ${rawText}`);
+      fb.category_name = resolveImportSubcategory(fb.category_name, fb.title || rawTitle || '', structuredContext);
       specifications = fb.specifications || [];
     }
     const candidateDescription = cleanBannedWordsAndPhrases(parsed.description?.trim() || '');
@@ -3167,6 +3242,9 @@ app.post('/api/add-product', async (req, res) => {
       ];
       const productTitle = structuredTitleCandidates.find(isLikelyProductTitle);
       if (productTitle) structuredMedia.title = productTitle.trim().slice(0, 500);
+      if (typeof structured_data.category_hint === 'string') {
+        structuredMedia.categoryHint = structured_data.category_hint.trim().slice(0, 500);
+      }
       if (Array.isArray(structured_data.specifications)) {
         structuredMedia.specifications = structured_data.specifications
           .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
@@ -3210,6 +3288,7 @@ app.post('/api/add-product', async (req, res) => {
       if (sourceWeight > 0) structuredMedia.weightKg = sourceWeight;
       const structuredLines = [
         structuredMedia.title ? `ИСТОЧНИКОВОЕ НАЗВАНИЕ: ${structuredMedia.title}` : '',
+        structuredMedia.categoryHint ? `КАТЕГОРИЯ ИЗ ИСТОЧНИКА: ${structuredMedia.categoryHint}` : '',
         structuredMedia.specifications.length
           ? `ХАРАКТЕРИСТИКИ ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.specifications.map((item) => `• ${item.name}: ${item.value}`).join('\n')}`
           : '',
@@ -3357,7 +3436,7 @@ app.post('/api/add-product', async (req, res) => {
     finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
 
     // Привязываем категорию
-    finalCategory = normalizeSubcategoryName(finalCategory, `${finalTitle} ${fullRawText}`);
+    finalCategory = resolveImportSubcategory(finalCategory, finalTitle, structuredMedia);
     if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
       finalDesc = buildVerifiedProductDescription(finalTitle, specificationsToProcess);
     }
@@ -3510,6 +3589,11 @@ app.post('/api/parse-product-html', async (req, res) => {
         initialWeight
       );
     }
+    analysis.category_name = resolveImportSubcategory(
+      analysis.category_name,
+      analysis.title || effectiveTitle,
+      structured,
+    );
 
     // Совмещаем характеристики: featureAttributes из контекста имеют высокий приоритет
     const combinedSpecs: Array<{ name: string; value: string }> = [];

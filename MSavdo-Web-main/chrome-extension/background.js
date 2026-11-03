@@ -119,6 +119,9 @@ async function handleImportProduct(payload, sender) {
 
     structuredData = {
       title: typeof sourceStructuredData.title === "string" ? sourceStructuredData.title.slice(0, 500) : "",
+      category_hint: typeof sourceStructuredData.category_hint === "string"
+        ? sourceStructuredData.category_hint.slice(0, 500)
+        : "",
       title_candidates: (Array.isArray(sourceStructuredData.title_candidates) ? sourceStructuredData.title_candidates : [])
         .filter((title) => typeof title === "string")
         .slice(0, 5)

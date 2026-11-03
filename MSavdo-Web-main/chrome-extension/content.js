@@ -617,6 +617,7 @@
         .map((item) => item.title),
     ];
     const title = chooseBestTitle(titleCandidates);
+    const categoryHint = cleanStructuredText(offer?.categoryName ?? firstField(["categoryName", "category_name", "category"]));
     const specifications = [];
     const seenSpecifications = new Set();
     for (const object of objects) {
@@ -713,6 +714,7 @@
     const weight = getStructuredNumber(firstField(["unitWeight", "grossWeight", "weight", "productWeight", "netWeight"]));
     return {
       title,
+      category_hint: categoryHint,
       title_candidates: [...new Set([title, ...titleCandidates.map(cleanStructuredText).filter(Boolean)])].slice(0, 5),
       specifications,
       variants,
@@ -782,6 +784,7 @@
     const extracted = extractStructuredProductData();
     const structuredData = extracted || {
       title: "",
+      category_hint: "",
       title_candidates: [],
       specifications: [],
       variants: [],
@@ -863,6 +866,7 @@
     ])).slice(0, MAX_VIDEOS);
     const structuredDetails = [
       structuredData.title ? `НАЗВАНИЕ ТОВАРА: ${structuredData.title}` : "",
+      structuredData.category_hint ? `КАТЕГОРИЯ ИЗ ИСТОЧНИКА: ${structuredData.category_hint}` : "",
       ...structuredData.specifications.map((item) => `ХАРАКТЕРИСТИКА: ${item.name}: ${item.value}`),
       ...structuredData.variants.map((item) =>
         `ВАРИАНТ SKU: ${item.color} | ${item.size} | цена ¥${item.price_cny || priceCny || "не указана"} | остаток ${item.stock}`
