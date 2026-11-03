@@ -19,7 +19,7 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_IMPORT_TEXT_LENGTH = 50000;
 const GEMINI_IMPORT_MODEL = 'gemini-3.8-flash';
-const GEMINI_IMPORT_TIMEOUT_MS = 10000;
+const GEMINI_IMPORT_TIMEOUT_MS = 30000;
 const trustProxyHops = process.env.TRUST_PROXY_HOPS;
 if (trustProxyHops) {
   const parsedTrustProxyHops = Number(trustProxyHops);
@@ -755,7 +755,14 @@ function resolveImportSubcategory(
   modelCategory: string,
   productTitle: string,
   context?: ExtractedHtmlContext | null,
+  trustModelCategory = false,
 ): string {
+  const normalizedModelCategory = String(modelCategory || '').trim().toLocaleLowerCase('ru');
+  const validModelCategory = STRICT_ALLOWED_CATEGORIES.find(
+    (category) => category.toLocaleLowerCase('ru') === normalizedModelCategory,
+  );
+  if (trustModelCategory && validModelCategory) return validModelCategory;
+
   const titleCategory = inferSpecificSubcategory(productTitle)
     || inferSpecificSubcategory(context?.title || '');
   if (titleCategory) return titleCategory;
@@ -1383,6 +1390,7 @@ ${textSnippet}
       typeof parsed.category_name === 'string' ? parsed.category_name : '',
       title || effectiveTitle,
       structuredContext,
+      true,
     );
     const weight_kg = typeof parsed.weight_kg === 'number' && parsed.weight_kg > 0 ? parsed.weight_kg : weightKg;
 
@@ -3335,6 +3343,7 @@ app.post('/api/add-product', async (req, res) => {
     let finalTitle = effectiveTitle;
     let finalDesc = inputDesc;
     let finalCategory = 'Мужские футболки, майки и поло';
+    let aiCategoryTrusted = false;
     let finalWeight = initialWeight;
     let variantsToProcess: ParsedVariant[] = [];
     let specificationsToProcess: Array<{ name: string; value: string }> = [];
@@ -3353,6 +3362,7 @@ app.post('/api/add-product', async (req, res) => {
       finalTitle = aiAnalysis.title || effectiveTitle;
       finalDesc = inputDesc || aiAnalysis.description;
       finalCategory = aiAnalysis.category_name;
+      aiCategoryTrusted = true;
       finalWeight = aiAnalysis.weight_kg;
       variantsToProcess = aiAnalysis.variants;
       specificationsToProcess = aiAnalysis.specifications || [];
@@ -3411,6 +3421,7 @@ app.post('/api/add-product', async (req, res) => {
         finalTitle = semantic.title;
         if (!inputDesc || /[\u4e00-\u9fa5]/.test(inputDesc)) finalDesc = semantic.description;
         finalCategory = normalizeSubcategoryName(semantic.category_name, `${semantic.title} ${fullRawText}`);
+        aiCategoryTrusted = false;
         if (specificationsToProcess.length === 0) specificationsToProcess = semantic.specifications || [];
       }
     }
@@ -3436,7 +3447,7 @@ app.post('/api/add-product', async (req, res) => {
     finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
 
     // Привязываем категорию
-    finalCategory = resolveImportSubcategory(finalCategory, finalTitle, structuredMedia);
+    finalCategory = resolveImportSubcategory(finalCategory, finalTitle, structuredMedia, aiCategoryTrusted);
     if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
       finalDesc = buildVerifiedProductDescription(finalTitle, specificationsToProcess);
     }
@@ -3593,6 +3604,7 @@ app.post('/api/parse-product-html', async (req, res) => {
       analysis.category_name,
       analysis.title || effectiveTitle,
       structured,
+      Boolean(aiClient),
     );
 
     // Совмещаем характеристики: featureAttributes из контекста имеют высокий приоритет
