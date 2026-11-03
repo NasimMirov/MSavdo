@@ -7,6 +7,8 @@ RUN npm install --force
 
 COPY . .
 
+RUN npm run build
+
 ENV NODE_ENV=production
 ENV PORT=3000
 
