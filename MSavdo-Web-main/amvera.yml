@@ -1,15 +1,17 @@
+---
 meta:
-  environment: node
+  environment: docker
   toolchain:
-    name: npm
-    version: 22
+    name: docker
+    version: latest
 build:
-  requirements:
-    - package.json
-  steps:
-    - npm install --force
+  dockerfile: Dockerfile
+  skip: false
 run:
-  persistence:
-    - msavdo.db
-  command: npx tsx server.ts
-  port: 3000
+  persistenceMount: /data
+  image: null
+  command: null
+  args: null
+  containerPort: 3000
+  singleton: true
+  zeroDowntime: false
