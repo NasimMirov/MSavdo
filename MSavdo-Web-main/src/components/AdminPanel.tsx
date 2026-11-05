@@ -166,12 +166,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     timer: null,
   });
   const editingProductRef = useRef<any | null>(null);
-  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
-
-  const syncHistoryState = () => {
-    const h = editHistoryRef.current;
-    setHistoryState({ canUndo: h.past.length > 0, canRedo: h.future.length > 0 });
-  };
 
   const flushPendingHistory = () => {
     const h = editHistoryRef.current;
@@ -206,7 +200,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     h.timer = window.setTimeout(() => {
       h.timer = null;
       flushPendingHistory();
-      syncHistoryState();
     }, 400);
 
     function resetHistory() {
@@ -214,7 +207,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       h.future = [];
       h.committed = null;
       h.timer = null;
-      setHistoryState({ canUndo: false, canRedo: false });
     }
   }, [editingProduct]);
 
@@ -223,13 +215,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const h = editHistoryRef.current;
     const previous = h.past.pop();
     if (!previous || !h.committed) {
-      syncHistoryState();
       return;
     }
     h.future.push(h.committed);
     h.committed = previous;
     setEditingProduct(previous);
-    syncHistoryState();
   };
 
   const redoProductEdit = () => {
@@ -237,13 +227,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const h = editHistoryRef.current;
     const next = h.future.pop();
     if (!next || !h.committed) {
-      syncHistoryState();
       return;
     }
     h.past.push(h.committed);
     h.committed = next;
     setEditingProduct(next);
-    syncHistoryState();
   };
 
   const isProductEditorOpen = Boolean(editingProduct);
@@ -3206,32 +3194,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   Описание с характеристиками, фото вариантов из файлов/буфера и матрица SKU
                 </p>
               </div>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={undoProductEdit}
-                  disabled={!historyState.canUndo}
-                  title="Отменить (Ctrl+Z)"
-                  className="px-2 py-1 text-[11px] font-bold text-slate-600 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-                >
-                  ↶ Отменить
-                </button>
-                <button
-                  type="button"
-                  onClick={redoProductEdit}
-                  disabled={!historyState.canRedo}
-                  title="Вернуть (Ctrl+Y)"
-                  className="px-2 py-1 text-[11px] font-bold text-slate-600 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
-                >
-                  ↷ Вернуть
-                </button>
-                <button 
-                  onClick={() => setEditingProduct(null)} 
-                  className="p-1.5 text-slate-400 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors"
-                >
-                  ✕
-                </button>
-              </div>
+              <button 
+                onClick={() => setEditingProduct(null)} 
+                className="p-1.5 text-slate-400 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                ✕
+              </button>
             </div>
 
             {productSaveError && (
