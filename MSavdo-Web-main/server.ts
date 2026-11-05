@@ -2224,10 +2224,16 @@ app.get('/api/products', (req, res) => {
       where += ' AND (p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))';
       params.push(categoryId, categoryId);
     }
+    const whereNoDelivery = where;
     if (deliveryType === 'stock') where += " AND p.delivery_type = 'stock'";
-    if (deliveryType === 'order') where += " AND (p.delivery_type IS NULL OR p.delivery_type != 'stock')";
-
+    if (deliveryType === 'order') where += " AND (p.delivery_type IS NULL OR p.delivery_type != 'stock')"; 
     const total = (db.prepare(`SELECT COUNT(*) AS count FROM products p WHERE ${where}`).get(...params) as { count: number }).count;
+    const stockCount = (db.prepare(`SELECT COUNT(*) AS count FROM products p WHERE ${whereNoDelivery} AND p.delivery_type = 'stock'`).get(...params) as { count: number }).count;
+    const delivery_counts = {
+      all: (db.prepare(`SELECT COUNT(*) AS count FROM products p WHERE ${whereNoDelivery}`).get(...params) as { count: number }).count,
+      stock: stockCount,
+    } as { all: number; stock: number; order?: number };
+    delivery_counts.order = delivery_counts.all - stockCount;
     const orderBy = sort === 'popular'
       ? 'p.views_count DESC, p.id DESC'
       : sort === 'price_asc'
@@ -2315,6 +2321,7 @@ app.get('/api/products', (req, res) => {
     return res.json({
       products: enriched,
       total,
+      delivery_counts,
       limit,
       offset,
       has_more: offset + products.length < total,

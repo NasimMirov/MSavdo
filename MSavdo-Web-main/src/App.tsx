@@ -107,6 +107,7 @@ export default function App() {
   const [expandedCategoryId, setExpandedCategoryId] = useState<number | null>(null);
   const [isCategoryBrowserOpen, setIsCategoryBrowserOpen] = useState(false);
   const [isCategoriesOpen, setIsCategoriesOpen] = useState(false);
+  const [deliveryCounts, setDeliveryCounts] = useState<{ all: number; order: number; stock: number } | null>(null);
   const [browsingCategoryId, setBrowsingCategoryId] = useState<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastTrackedSearch = useRef('');
@@ -262,6 +263,13 @@ export default function App() {
         ? [...current, ...page.filter((product) => !current.some((item) => item.id === product.id))]
         : page);
       setTotalProductCount(Number(data?.total) || 0);
+      if (data?.delivery_counts) {
+        setDeliveryCounts({
+          all: Number(data.delivery_counts.all) || 0,
+          order: Number(data.delivery_counts.order) || 0,
+          stock: Number(data.delivery_counts.stock) || 0,
+        });
+      }
       setHasMoreProducts(Boolean(data?.has_more));
     } catch (error) {
       if (requestId === catalogRequestId.current) {
@@ -856,18 +864,21 @@ export default function App() {
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'all' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
                 {t('allProducts')}
+                {deliveryCounts && <span className="ml-1 text-[8px] font-medium opacity-70">({deliveryCounts.all})</span>}
               </button>
               <button
                 onClick={() => setDeliveryFilter('order')}
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'order' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
                 {t('delivery18to30')}
+                {deliveryCounts && <span className="ml-1 text-[8px] font-medium opacity-70">({deliveryCounts.order})</span>}
               </button>
               <button
                 onClick={() => setDeliveryFilter('stock')}
                 className={`shrink-0 rounded-lg px-2.5 py-1.5 transition-colors ${deliveryFilter === 'stock' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
               >
                 {t('inStockOneDay')}
+                {deliveryCounts && <span className="ml-1 text-[8px] font-medium opacity-70">({deliveryCounts.stock})</span>}
               </button>
             </div>
 
