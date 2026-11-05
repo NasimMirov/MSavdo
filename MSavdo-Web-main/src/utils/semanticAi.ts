@@ -485,7 +485,7 @@ export function cleanProductTitle(rawTitle: string): string {
   }
 
   clean = clean.replace(/[-|_].*(阿里巴巴|淘宝网|拼多多|1688|alibaba|taobao).*$/i, '');
-  clean = clean.replace(/\s+/g, ' ').trim();
+  clean = clean.replace(/\s+/g, ' ').replace(/^[\s\-–—|_:;,.]+|[\s\-–—|_:;,.]+$/g, '').trim();
   return clean;
 }
 

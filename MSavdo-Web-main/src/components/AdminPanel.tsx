@@ -158,6 +158,111 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Реф для загрузки файлов
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // История изменений редактора товара: Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z)
+  const editHistoryRef = useRef<{ past: any[]; future: any[]; committed: any | null; timer: number | null }>({
+    past: [],
+    future: [],
+    committed: null,
+    timer: null,
+  });
+  const editingProductRef = useRef<any | null>(null);
+  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
+
+  const syncHistoryState = () => {
+    const h = editHistoryRef.current;
+    setHistoryState({ canUndo: h.past.length > 0, canRedo: h.future.length > 0 });
+  };
+
+  const flushPendingHistory = () => {
+    const h = editHistoryRef.current;
+    if (h.timer !== null) {
+      window.clearTimeout(h.timer);
+      h.timer = null;
+    }
+    const current = editingProductRef.current;
+    if (current && h.committed && current !== h.committed) {
+      h.past.push(h.committed);
+      if (h.past.length > 60) h.past.shift();
+      h.committed = current;
+      h.future = [];
+    }
+  };
+
+  useEffect(() => {
+    editingProductRef.current = editingProduct;
+    const h = editHistoryRef.current;
+    if (!editingProduct) {
+      if (h.timer !== null) window.clearTimeout(h.timer);
+      resetHistory();
+      return;
+    }
+    if (!h.committed || h.committed.id !== editingProduct.id) {
+      resetHistory();
+      h.committed = editingProduct;
+      return;
+    }
+    if (editingProduct === h.committed) return;
+    if (h.timer !== null) window.clearTimeout(h.timer);
+    h.timer = window.setTimeout(() => {
+      h.timer = null;
+      flushPendingHistory();
+      syncHistoryState();
+    }, 400);
+
+    function resetHistory() {
+      h.past = [];
+      h.future = [];
+      h.committed = null;
+      h.timer = null;
+      setHistoryState({ canUndo: false, canRedo: false });
+    }
+  }, [editingProduct]);
+
+  const undoProductEdit = () => {
+    flushPendingHistory();
+    const h = editHistoryRef.current;
+    const previous = h.past.pop();
+    if (!previous || !h.committed) {
+      syncHistoryState();
+      return;
+    }
+    h.future.push(h.committed);
+    h.committed = previous;
+    setEditingProduct(previous);
+    syncHistoryState();
+  };
+
+  const redoProductEdit = () => {
+    flushPendingHistory();
+    const h = editHistoryRef.current;
+    const next = h.future.pop();
+    if (!next || !h.committed) {
+      syncHistoryState();
+      return;
+    }
+    h.past.push(h.committed);
+    h.committed = next;
+    setEditingProduct(next);
+    syncHistoryState();
+  };
+
+  const isProductEditorOpen = Boolean(editingProduct);
+  useEffect(() => {
+    if (!isProductEditorOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (event.code === 'KeyZ' && !event.shiftKey) {
+        event.preventDefault();
+        undoProductEdit();
+      } else if (event.code === 'KeyY' || (event.code === 'KeyZ' && event.shiftKey)) {
+        event.preventDefault();
+        redoProductEdit();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isProductEditorOpen]);
+
   // Настройки ценообразования и логистики
   const [settings, setSettings] = useState({
     whatsapp_phone: '992444431',
@@ -713,6 +818,40 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showNotice('Фото по ссылке успешно добавлено!');
   };
 
+  // Фото сжимаются в браузере, чтобы запрос сохранения не превышал лимиты сервера
+  const readImageFile = (file: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error);
+      reader.onload = () => {
+        const original = String(reader.result || '');
+        if (!/^data:image\/(png|jpe?g|webp)/i.test(original)) {
+          resolve(original);
+          return;
+        }
+        const img = new Image();
+        img.onerror = () => resolve(original);
+        img.onload = () => {
+          const scale = Math.min(1, 1400 / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(original);
+            return;
+          }
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.8);
+          resolve(compressed.length < original.length ? compressed : original);
+        };
+        img.src = original;
+      };
+      reader.readAsDataURL(file);
+    });
+
   // 2. Загрузка фото из файлов на компьютере
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -720,9 +859,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     Array.from(files).forEach((file) => {
       if (!file.type.startsWith('image/')) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const dataUrl = ev.target?.result as string;
+      readImageFile(file).then((dataUrl) => {
         if (dataUrl) {
           setEditingProduct((prev: any) => {
             if (!prev) return prev;
@@ -737,8 +874,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             return prev;
           });
         }
-      };
-      reader.readAsDataURL(file);
+      });
     });
 
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -758,9 +894,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           const blob = items[i].getAsFile();
           if (blob) {
             e.preventDefault();
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-              const dataUrl = ev.target?.result as string;
+            readImageFile(blob).then((dataUrl) => {
               if (dataUrl) {
                 setEditingProduct((prev: any) => {
                   if (!prev) return prev;
@@ -773,8 +907,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 });
                 showNotice('📸 Фото из буфера обмена вставлено в галерею!');
               }
-            };
-            reader.readAsDataURL(blob);
+            });
             break;
           }
         }
@@ -1054,9 +1187,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const raw = await res.text();
+      let data: any = {};
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch {
+        data = {};
+      }
       if (!res.ok) {
-        throw new Error(data.error || 'Ошибка при сохранении товара');
+        if (res.status === 413) {
+          throw new Error('Слишком большой запрос: на сервере (nginx) нужен client_max_body_size 20m или удалите тяжёлые фото из галереи');
+        }
+        throw new Error(data.error || `Сервер вернул ошибку ${res.status}. Повторите попытку`);
       }
 
       setEditingProduct(null);
@@ -3064,12 +3206,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   Описание с характеристиками, фото вариантов из файлов/буфера и матрица SKU
                 </p>
               </div>
-              <button 
-                onClick={() => setEditingProduct(null)} 
-                className="p-1.5 text-slate-400 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                ✕
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={undoProductEdit}
+                  disabled={!historyState.canUndo}
+                  title="Отменить (Ctrl+Z)"
+                  className="px-2 py-1 text-[11px] font-bold text-slate-600 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                >
+                  ↶ Отменить
+                </button>
+                <button
+                  type="button"
+                  onClick={redoProductEdit}
+                  disabled={!historyState.canRedo}
+                  title="Вернуть (Ctrl+Y)"
+                  className="px-2 py-1 text-[11px] font-bold text-slate-600 rounded-lg hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                >
+                  ↷ Вернуть
+                </button>
+                <button 
+                  onClick={() => setEditingProduct(null)} 
+                  className="p-1.5 text-slate-400 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
 
             {productSaveError && (

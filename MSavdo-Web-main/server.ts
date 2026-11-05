@@ -1109,14 +1109,25 @@ function isClothingCategory(categoryName: string): boolean {
 
 function buildVerifiedProductDescription(title: string, specifications: Array<{ name: string; value: string }>): string {
   const details: string[] = [];
+  const seen = new Set<string>();
   for (const item of specifications) {
-    if (!item.name || !item.value || /^Фото цвета:/i.test(item.name)) continue;
-    details.push(`${item.name.trim()}: ${item.value.trim()}`.slice(0, 90));
+    const name = String(item.name || '').replace(/[\u4e00-\u9fa5]+/g, '').replace(/[\s:;·,.\-–—]+$/g, '').trim();
+    const value = String(item.value || '')
+      .replace(/[\u4e00-\u9fa5]+/g, '')
+      .replace(/(?:\s*[·;,]\s*)+/g, ', ')
+      .replace(/^[\s,.:;\-–—]+|[\s,.:;\-–—]+$/g, '')
+      .trim();
+    if (!name || !value || /^Фото цвета:/i.test(name) || !/[\p{L}\p{N}]/u.test(value)) continue;
+    const key = name.toLocaleLowerCase('ru');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    details.push(`${name}: ${value}`.slice(0, 90));
     if (details.length === 6) break;
   }
+  const cleanTitle = String(title || '').replace(/[\s\-–—|:;,.]+$/g, '').trim();
   return details.length > 0
-    ? `${title}. Основные характеристики: ${details.join('; ')}.`
-    : `${title}. Подробные характеристики уточняйте у менеджера.`;
+    ? `${cleanTitle}. Основные характеристики: ${details.join('; ')}.`
+    : `${cleanTitle}. Подробные характеристики уточняйте у менеджера.`;
 }
 
 function isVerifiedProductDescription(description: string): boolean {
