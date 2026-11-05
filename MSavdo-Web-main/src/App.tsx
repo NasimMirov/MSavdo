@@ -737,7 +737,7 @@ export default function App() {
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}
       {/* ======================================================== */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-2.5 sm:py-6">
+      <main className={`flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 pb-2.5 sm:pb-6 ${currentView === 'catalog' ? 'pt-1' : 'pt-2.5 sm:pt-6'}`}>
         
         {/* ЭКРАН 1: ПРАВИЛА СЕРВИСА */}
         {currentView === 'rules' && (
@@ -759,7 +759,7 @@ export default function App() {
 
         {/* ЭКРАН 3: ПУБЛИЧНЫЙ КАТАЛОГ (КОМПАКТНЫЙ, БЫСТРЫЙ, МОБИЛЬНЫЙ) */}
         {currentView === 'catalog' && (
-          <div className="space-y-3 sm:space-y-6">
+          <div className="space-y-2 sm:space-y-4">
             
             {/* Compact category sections: icons belong to sections, not their subcategories. */}
             <section aria-label={t('allCategories')} className="space-y-2">
