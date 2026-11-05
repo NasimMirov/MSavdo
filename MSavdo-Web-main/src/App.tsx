@@ -106,6 +106,7 @@ export default function App() {
   const [sortBy, setSortBy] = useState<'popular' | 'price_asc' | 'price_desc' | 'newest'>('popular');
   const [expandedCategoryId, setExpandedCategoryId] = useState<number | null>(null);
   const [isCategoryBrowserOpen, setIsCategoryBrowserOpen] = useState(false);
+  const [isCategoriesOpen, setIsCategoriesOpen] = useState(false);
   const [browsingCategoryId, setBrowsingCategoryId] = useState<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastTrackedSearch = useRef('');
@@ -754,12 +755,28 @@ export default function App() {
             
             {/* Compact category sections: icons belong to sections, not their subcategories. */}
             <section aria-label={t('allCategories')} className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setIsCategoriesOpen((open) => !open)}
+                aria-expanded={isCategoriesOpen}
+                className="flex h-8 max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-bold text-slate-800 transition-colors hover:border-amber-400"
+              >
+                <span aria-hidden="true">☰</span>
+                <span className="truncate">
+                  {selectedCategoryId === null
+                    ? t('allCategories')
+                    : (categoriesTree.flatMap((c) => [c, ...(c.subcategories || [])]).find((c) => c.id === selectedCategoryId)?.name || t('allCategories'))}
+                </span>
+                <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${isCategoriesOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {isCategoriesOpen && (
               <div className="grid w-max max-w-full auto-cols-[132px] grid-flow-col grid-rows-2 gap-1 overflow-x-auto pb-1 scrollbar-none sm:auto-cols-[160px]">
                 <button
                   type="button"
                   onClick={() => {
                     setSelectedCategoryId(null);
                     setExpandedCategoryId(null);
+                    setIsCategoriesOpen(false);
                   }}
                   aria-pressed={selectedCategoryId === null}
                   className={`flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 py-1 text-left transition-colors ${
@@ -801,8 +818,9 @@ export default function App() {
                   );
                 })}
               </div>
+              )}
 
-              {expandedCategoryId !== null && (() => {
+              {isCategoriesOpen && expandedCategoryId !== null && (() => {
                 const section = categoriesTree.find((category) => category.id === expandedCategoryId);
                 if (!section?.subcategories?.length) return null;
                 return (
@@ -811,9 +829,10 @@ export default function App() {
                       <button
                         key={category.id}
                         type="button"
-                        onClick={() => setSelectedCategoryId(
-                          selectedCategoryId === category.id ? section.id : category.id,
-                        )}
+                        onClick={() => {
+                          setSelectedCategoryId(selectedCategoryId === category.id ? section.id : category.id);
+                          setIsCategoriesOpen(false);
+                        }}
                         aria-pressed={selectedCategoryId === category.id}
                         title={category.name}
                         className={`min-w-0 truncate rounded-md px-1.5 py-1 text-left text-[9px] font-semibold transition-colors ${
