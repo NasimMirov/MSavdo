@@ -186,11 +186,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   }, [product, variants, availableColors]);
 
   const mediaSlides = useMemo(
-    () => [
-      ...allGalleryImages.map((src) => ({ type: 'photo' as const, src })),
-      ...productVideos.map((src) => ({ type: 'video' as const, src })),
-    ],
-    [allGalleryImages, productVideos]
+    () => {
+      const photos = allGalleryImages.map((src) => ({ type: 'photo' as const, src }));
+      const videos = productVideos.map((src) => ({ type: 'video' as const, src }));
+      return product?.video_first ? [...videos, ...photos] : [...photos, ...videos];
+    },
+    [allGalleryImages, productVideos, product?.video_first]
   );
   const [selectedMediaIndex, setSelectedMediaIndex] = useState(0);
   const galleryTouchStart = useRef<{ x: number; y: number } | null>(null);

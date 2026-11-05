@@ -225,6 +225,9 @@ try {
   db.exec('ALTER TABLE products ADD COLUMN youtube_url TEXT;');
 } catch (_) {}
 try {
+  db.exec('ALTER TABLE products ADD COLUMN video_first INTEGER DEFAULT 0;');
+} catch (_) {}
+try {
   db.exec("ALTER TABLE products ADD COLUMN delivery_type TEXT DEFAULT 'order';");
 } catch (_) {}
 try {
@@ -2243,7 +2246,7 @@ app.get('/api/products', (req, res) => {
           : 'p.id DESC';
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
-             p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.specifications, p.created_at,
+             p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications, p.created_at,
              c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
@@ -2340,7 +2343,7 @@ app.get('/api/products/:id', (req, res) => {
 
     const product = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
-             p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.specifications,
+             p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications,
              p.created_at, p.views_count, c.name AS category_name,
              COALESCE(MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS min_price_tjs,
              COALESCE(MAX(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS max_price_tjs
@@ -3057,6 +3060,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       video_url = '',
       video_urls = [],
       youtube_url = '',
+      video_first = false,
       default_weight_kg,
       specifications,
       variants,
@@ -3128,10 +3132,10 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     // Обновляем карточку товара
     db.prepare(`
       UPDATE products
-      SET title = ?, description = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, video_urls = ?, youtube_url = ?,
+      SET title = ?, description = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, video_urls = ?, youtube_url = ?, video_first = ?,
           specifications = CASE WHEN ? IS NOT NULL THEN ? ELSE specifications END
       WHERE id = ?
-    `).run(cleanTitle, cleanDesc, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs, cleanSpecs, id);
+    `).run(cleanTitle, cleanDesc, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs, id);
 
     // Если передан полный обновленный массив вариантов: синхронизируем матрицу
     if (Array.isArray(variants) && variants.length > 0) {

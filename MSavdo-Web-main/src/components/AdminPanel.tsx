@@ -661,6 +661,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const [newImageUrl, setNewImageUrl] = useState('');
+  const [newVideoUrl, setNewVideoUrl] = useState('');
+  const [dragImageIndex, setDragImageIndex] = useState<number | null>(null);
+  const [dragVideoIndex, setDragVideoIndex] = useState<number | null>(null);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [productSaveError, setProductSaveError] = useState('');
 
@@ -783,6 +786,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         ? p.video_urls
         : (p.video_url ? [p.video_url] : []),
       youtube_url: p.youtube_url || p.video_url || '',
+      video_first: Boolean(p.video_first),
       default_weight_kg: varList[0]?.weight_kg || 0.5,
       specifications: specList,
       variants: varList,
@@ -905,6 +909,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
   }, [editingProduct]);
+
+  // Перестановка фото: первое фото всегда главное
+  const moveGalleryImage = (from: number, to: number) => {
+    if (!editingProduct) return;
+    const curImgs = [...(editingProduct.images || [])];
+    if (from === to || from < 0 || to < 0 || from >= curImgs.length || to >= curImgs.length) return;
+    const [moved] = curImgs.splice(from, 1);
+    curImgs.splice(to, 0, moved);
+    setEditingProduct({ ...editingProduct, images: curImgs, main_image: curImgs[0] || '' });
+  };
+
+  const getEditingVideos = (): string[] => (
+    Array.isArray(editingProduct?.video_urls) ? editingProduct.video_urls : []
+  );
+
+  const setEditingVideos = (videos: string[]) => {
+    if (!editingProduct) return;
+    setEditingProduct({
+      ...editingProduct,
+      video_urls: videos,
+      video_url: videos[0] || '',
+      youtube_url: videos[0] || '',
+      video_first: videos.length > 0 ? editingProduct.video_first : false,
+    });
+  };
+
+  const moveVideo = (from: number, to: number) => {
+    const videos = [...getEditingVideos()];
+    if (from === to || to < 0 || to >= videos.length) return;
+    const [moved] = videos.splice(from, 1);
+    videos.splice(to, 0, moved);
+    setEditingVideos(videos);
+  };
 
   // Удаление фото из галереи
   const handleRemoveGalleryImage = (index: number) => {
@@ -1157,8 +1194,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         video_urls: Array.isArray(editingProduct.video_urls)
           ? editingProduct.video_urls
           : String(editingProduct.video_urls || '').split(/\r?\n/).map((url: string) => url.trim()).filter(Boolean),
-        video_url: editingProduct.video_url || editingProduct.video_urls?.[0] || '',
-        youtube_url: editingProduct.youtube_url || editingProduct.video_urls?.[0] || '',
+        video_url: (Array.isArray(editingProduct.video_urls) ? editingProduct.video_urls[0] : '') || '',
+        youtube_url: (Array.isArray(editingProduct.video_urls) ? editingProduct.video_urls[0] : '') || '',
+        video_first: Boolean(editingProduct.video_first),
         default_weight_kg: editingProduct.default_weight_kg || 0.5,
         specifications: (editingProduct.specifications || []).filter((s: any) => s.name.trim() && s.value.trim()),
         variants: editingProduct.variants || [],
@@ -3355,29 +3393,83 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
               </div>
 
-              {/* ВНЕШНИЕ ВИДЕО */}
-              <div className="space-y-1">
-                <label className="block font-bold text-slate-800 text-xs">
-                  Ссылки на видео (по одной на строку)
-                </label>
-                <textarea
-                  rows={3}
-                  value={Array.isArray(editingProduct.video_urls)
-                    ? editingProduct.video_urls.join('\n')
-                    : (editingProduct.video_urls || editingProduct.youtube_url || '')}
-                  onChange={(e) => {
-                    const videoUrls = e.target.value.split(/\r?\n/).map((url) => url.trim()).filter(Boolean);
-                    setEditingProduct({
-                      ...editingProduct,
-                      video_urls: videoUrls,
-                      video_url: videoUrls[0] || '',
-                      youtube_url: videoUrls[0] || '',
-                    });
-                  }}
-                  placeholder="Вставьте прямые ссылки или YouTube URL, каждую с новой строки"
-                  className="w-full resize-y rounded-xl border border-slate-300 p-2.5 text-xs text-slate-800 focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-                <p className="text-[10px] text-slate-500">Видео воспроизводятся по внешней ссылке и не загружаются на сервер.</p>
+              {/* ВИДЕО: порядок и добавление */}
+              <div className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="block font-bold text-slate-800 text-xs">
+                    Видео ({getEditingVideos().length}) — порядок воспроизведения
+                  </label>
+                  {getEditingVideos().length > 0 && (
+                    <label className="flex cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(editingProduct.video_first)}
+                        onChange={(e) => setEditingProduct({ ...editingProduct, video_first: e.target.checked })}
+                        className="h-3.5 w-3.5 accent-amber-500"
+                      />
+                      Видео перед фото
+                    </label>
+                  )}
+                </div>
+
+                {getEditingVideos().map((url: string, idx: number, all: string[]) => (
+                  <div
+                    key={`${url}-${idx}`}
+                    draggable
+                    onDragStart={() => setDragVideoIndex(idx)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => {
+                      if (dragVideoIndex !== null) moveVideo(dragVideoIndex, idx);
+                      setDragVideoIndex(null);
+                    }}
+                    className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white p-1.5"
+                  >
+                    <span className="cursor-grab select-none px-1 text-slate-400" title="Перетащите">⋮⋮</span>
+                    <span className="w-5 shrink-0 text-center text-[10px] font-black text-slate-500">{idx + 1}</span>
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-slate-800" title={url}>{url}</span>
+                    {idx === 0 && <span className="shrink-0 rounded bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-black">★ Главное</span>}
+                    <button type="button" onClick={() => moveVideo(idx, idx - 1)} disabled={idx === 0} className="h-6 w-6 shrink-0 rounded bg-slate-100 text-xs font-bold disabled:opacity-30" title="Выше">↑</button>
+                    <button type="button" onClick={() => moveVideo(idx, idx + 1)} disabled={idx === all.length - 1} className="h-6 w-6 shrink-0 rounded bg-slate-100 text-xs font-bold disabled:opacity-30" title="Ниже">↓</button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingVideos(all.filter((_, i) => i !== idx))}
+                      className="h-6 w-6 shrink-0 rounded bg-red-600 text-white"
+                      title="Удалить видео"
+                    >
+                      <Trash2 className="mx-auto h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={newVideoUrl}
+                    onChange={(e) => setNewVideoUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        (e.currentTarget.nextElementSibling as HTMLButtonElement | null)?.click();
+                      }
+                    }}
+                    placeholder="Ссылка на видео (mp4 или YouTube)"
+                    className="flex-1 rounded-xl border border-slate-300 bg-white p-2 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = newVideoUrl.trim();
+                      if (!/^https?:\/\//i.test(url)) return;
+                      const current = getEditingVideos();
+                      if (!current.includes(url)) setEditingVideos([...current, url]);
+                      setNewVideoUrl('');
+                    }}
+                    className="shrink-0 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800"
+                  >
+                    + Видео
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500">Первое видео — главное. Видео воспроизводятся по внешней ссылке и не загружаются на сервер.</p>
               </div>
 
               {/* ======================================================== */}
@@ -3392,7 +3484,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </label>
                   </div>
                   <span className="text-[10px] text-slate-500">
-                    Нажмите «Сделать главным», чтобы назначить обложку
+                    Перетащите фото или используйте стрелки. Первое фото — главное (★)
                   </span>
                 </div>
 
@@ -3445,33 +3537,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 {editingProduct.images && editingProduct.images.length > 0 && (
                   <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2.5 pt-2">
                     {editingProduct.images.map((img: string, idx: number) => {
-                      const isMain = editingProduct.main_image === img || (idx === 0 && !editingProduct.main_image);
+                      const isMain = idx === 0;
                       return (
-                        <div key={idx} className="relative group rounded-xl overflow-hidden border border-slate-300 aspect-square bg-slate-200 shadow-xs">
-                          <img src={img} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                          {isMain && (
-                            <span className="absolute top-1 left-1 bg-amber-400 text-black text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs">
-                              ★ Главное
-                            </span>
-                          )}
-                          <div className="absolute inset-0 bg-black/75 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1 p-1">
+                        <div
+                          key={`${img}-${idx}`}
+                          draggable
+                          onDragStart={() => setDragImageIndex(idx)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={() => {
+                            if (dragImageIndex !== null) moveGalleryImage(dragImageIndex, idx);
+                            setDragImageIndex(null);
+                          }}
+                          className={`relative cursor-grab overflow-hidden rounded-xl border bg-slate-200 shadow-xs aspect-square ${isMain ? 'border-amber-400 ring-2 ring-amber-300' : 'border-slate-300'}`}
+                        >
+                          <img src={img} alt="" draggable={false} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <span className="absolute top-1 left-1 rounded bg-slate-900/80 px-1.5 py-0.5 text-[9px] font-black text-white">
+                            {isMain ? '★ Главное' : idx + 1}
+                          </span>
+                          <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-0.5 bg-black/70 p-0.5">
+                            <button type="button" onClick={() => moveGalleryImage(idx, idx - 1)} disabled={idx === 0} className="h-6 w-6 rounded bg-white/90 text-xs font-bold text-black disabled:opacity-30" title="Влево">←</button>
                             {!isMain && (
-                              <button
-                                type="button"
-                                onClick={() => setEditingProduct({ ...editingProduct, main_image: img })}
-                                className="px-2 py-0.5 bg-amber-400 text-black text-[9px] font-bold rounded shadow-xs hover:bg-amber-300"
-                              >
-                                Сделать главным
-                              </button>
+                              <button type="button" onClick={() => moveGalleryImage(idx, 0)} className="h-6 rounded bg-amber-400 px-1.5 text-[10px] font-black text-black" title="Сделать главным">★</button>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveGalleryImage(idx)}
-                              className="p-1 bg-red-600 text-white rounded hover:bg-red-700"
-                              title="Удалить фото"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
+                            <button type="button" onClick={() => handleRemoveGalleryImage(idx)} className="h-6 w-6 rounded bg-red-600 text-white" title="Удалить фото">
+                              <Trash2 className="mx-auto h-3 w-3" />
                             </button>
+                            <button type="button" onClick={() => moveGalleryImage(idx, idx + 1)} disabled={idx === editingProduct.images.length - 1} className="h-6 w-6 rounded bg-white/90 text-xs font-bold text-black disabled:opacity-30" title="Вправо">→</button>
                           </div>
                         </div>
                       );

@@ -27,6 +27,7 @@ export interface Product {
   video_url?: string;
   video_urls?: string[];
   youtube_url?: string;
+  video_first?: number | boolean;
   created_at?: string;
   views_count?: number;
   specifications?: Array<{ name: string; value: string }> | string;
