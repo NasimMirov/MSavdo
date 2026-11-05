@@ -125,6 +125,24 @@ const dbPath = process.env.NODE_ENV === 'production'
   : path.join(__dirname, 'msavdo.db');
 const db = new DatabaseSync(dbPath);
 
+// Фото, вставленные в админке (data:image), сохраняются файлами, а в БД попадают обычные ссылки
+const uploadsDir = path.join(path.dirname(dbPath), 'uploads');
+fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static(uploadsDir, { maxAge: '365d', immutable: true }));
+
+function persistInlineImage(value: string, req: express.Request): string {
+  const match = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=\s]+)$/i.exec(value.trim());
+  if (!match) return value;
+  const extension = match[1].toLowerCase() === 'jpeg' ? 'jpg' : match[1].toLowerCase();
+  const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+  if (buffer.length === 0 || buffer.length > 8 * 1024 * 1024) return value;
+  const fileName = `${crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 32)}.${extension}`;
+  const filePath = path.join(uploadsDir, fileName);
+  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, buffer);
+  const base = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  return `${base}/uploads/${fileName}`;
+}
+
 db.exec('PRAGMA foreign_keys = ON;');
 
 // Миграция таблиц: categories, products, product_variants, admin_users, settings
@@ -2919,11 +2937,11 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
 
     // Нормализация изображений
     let allImages = '';
-    let mImage = (main_image || '').trim();
+    let mImage = persistInlineImage(typeof main_image === 'string' ? main_image.trim() : '', req);
     if (Array.isArray(images) && images.length > 0) {
       const cleanImgArr: string[] = [];
       for (const img of images) {
-        if (typeof img === 'string' && img.trim()) cleanImgArr.push(img.trim());
+        if (typeof img === 'string' && img.trim()) cleanImgArr.push(persistInlineImage(img, req));
       }
       allImages = cleanImgArr.join(',');
       if (!mImage && cleanImgArr.length > 0) mImage = cleanImgArr[0];
@@ -2965,7 +2983,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
         const vSku = typeof v.variant_sku === 'string' && v.variant_sku.trim()
           ? v.variant_sku.trim()
           : generateVariantSku(baseSku, vColor, vSize);
-        const vImg = typeof v.image_url === 'string' ? v.image_url.trim() : mImage;
+        const vImg = typeof v.image_url === 'string' ? persistInlineImage(v.image_url, req) : mImage;
 
         insertVar.run(productId, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg);
         createdVars.push({
@@ -3080,11 +3098,11 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
 
     // Нормализация изображений
     let allImages = '';
-    let mImage = (main_image || '').trim();
+    let mImage = persistInlineImage(typeof main_image === 'string' ? main_image.trim() : '', req);
     if (Array.isArray(images) && images.length > 0) {
       const cleanImgArr: string[] = [];
       for (const img of images) {
-        if (typeof img === 'string' && img.trim()) cleanImgArr.push(img.trim());
+        if (typeof img === 'string' && img.trim()) cleanImgArr.push(persistInlineImage(img, req));
       }
       allImages = cleanImgArr.join(',');
       if (!mImage && cleanImgArr.length > 0) mImage = cleanImgArr[0];
@@ -3130,7 +3148,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
         const parsedStock = Number(v.stock);
         const vStock = Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 10;
         const vSku = v.variant_sku || generateVariantSku(baseSku, vColor, vSize);
-        const vImg = typeof v.image_url === 'string' ? v.image_url.trim() : mImage;
+        const vImg = typeof v.image_url === 'string' ? persistInlineImage(v.image_url, req) : mImage;
 
         insertVar.run(id, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg);
       }
