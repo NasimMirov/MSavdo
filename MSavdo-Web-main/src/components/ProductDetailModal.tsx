@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, ProductVariant, CartItem } from '../types';
 import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play } from 'lucide-react';
-import { apiFetch } from '../api';
+import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { ProductShareButton } from './ProductShareButton';
 import { cleanProductDescription, extractProductColors, extractProductColorImages } from '../utils/productDescription';
@@ -402,7 +402,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   }
                   return (
                     <video
-                      src={targetVideo}
+                      src={/^https:\/\/[^/]*(taobao|alicdn|tbcdn|1688|tmall|alibaba|aliyuncs)\./i.test(targetVideo) ? apiUrl(`/api/video-proxy?url=${encodeURIComponent(targetVideo)}`) : targetVideo}
+                      preload="metadata"
                       controls
                       autoPlay
                       playsInline
@@ -436,10 +437,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   <ZoomIn className="h-4 w-4" />
                 </button>
               )}
-
-              <div className="absolute top-2 left-2 bg-slate-900/75 text-white text-[9px] font-mono font-bold px-2 py-0.5 rounded-md shadow-xs">
-                {activeVariant?.variant_sku || product.base_sku}
-              </div>
 
               {productVideos.length > 0 && (
                 <button

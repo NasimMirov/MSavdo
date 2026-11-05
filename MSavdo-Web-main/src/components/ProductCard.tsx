@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Product } from '../types';
 import { Eye, Truck, Clock } from 'lucide-react';
 import { useI18n } from '../i18n';
-import { ProductShareButton } from './ProductShareButton';
 
 interface ProductCardProps {
   product: Product;
@@ -70,8 +69,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           </div>
         )}
 
-        <ProductShareButton product={product} className="absolute left-2 top-2 z-20" />
-
         {/* Срок доставки */}
         {isStock ? (
           <div className="absolute top-2 right-2 max-w-[72%] whitespace-nowrap bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-0.5">
@@ -84,10 +81,6 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             <span className="min-w-0 leading-tight">{t('delivery18to30')}</span>
           </div>
         )}
-
-        <div className="absolute bottom-2 right-2 rounded-md border border-slate-200/70 bg-white/95 px-1.5 py-0.5 text-[7px] font-mono font-bold text-slate-800 shadow-xs sm:text-[8px]">
-          {product.base_sku}
-        </div>
 
         {/* Быстрый выбор при наведении */}
         <div className="pointer-events-none absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

@@ -4294,6 +4294,58 @@ app.post('/api/admin/upload-image', requireAdmin, (req, res) => {
   }
 });
 
+const VIDEO_PROXY_HOSTS = ['taobao.com', 'alicdn.com', 'tbcdn.cn', '1688.com', 'tmall.com', 'alibaba.com', 'aliyuncs.com'];
+
+function isAllowedVideoHost(url: URL): boolean {
+  return url.protocol === 'https:' && VIDEO_PROXY_HOSTS.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
+}
+
+// Видео 1688/Taobao отдаются только с их Referer, поэтому браузер не может играть их напрямую
+app.get('/api/video-proxy', async (req, res) => {
+  try {
+    let target: URL;
+    try {
+      target = new URL(String(req.query.url || ''));
+    } catch {
+      return res.status(400).end();
+    }
+    if (!isAllowedVideoHost(target)) return res.status(400).end();
+
+    const headers: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36',
+      Referer: 'https://detail.1688.com/',
+    };
+    if (typeof req.headers.range === 'string') headers.Range = req.headers.range;
+
+    let upstream: Response | null = null;
+    for (let hop = 0; hop < 4; hop++) {
+      upstream = await fetch(target, { headers, redirect: 'manual', signal: AbortSignal.timeout(20000) });
+      const location = upstream.headers.get('location');
+      if (upstream.status >= 300 && upstream.status < 400 && location) {
+        target = new URL(location, target);
+        if (!isAllowedVideoHost(target)) return res.status(400).end();
+        continue;
+      }
+      break;
+    }
+    if (!upstream || !upstream.body || upstream.status >= 400) return res.status(502).end();
+
+    res.status(upstream.status);
+    for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+      const value = upstream.headers.get(name);
+      if (value) res.setHeader(name, value);
+    }
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    const { Readable } = await import('node:stream');
+    const stream = Readable.fromWeb(upstream.body as any);
+    req.on('close', () => stream.destroy());
+    stream.on('error', () => res.end());
+    stream.pipe(res);
+  } catch {
+    if (!res.headersSent) res.status(502).end();
+  }
+});
+
 // Пинг-эндпоинт для Chrome-расширения
 app.get('/api/ping', (_req, res) => {
   res.json({
