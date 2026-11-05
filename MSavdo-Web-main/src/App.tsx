@@ -737,7 +737,7 @@ export default function App() {
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}
       {/* ======================================================== */}
-      <main className={`flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 pb-2.5 sm:pb-6 ${currentView === 'catalog' ? 'pt-1' : 'pt-2.5 sm:pt-6'}`}>
+      <main className={`flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 pb-2.5 sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}>
         
         {/* ЭКРАН 1: ПРАВИЛА СЕРВИСА */}
         {currentView === 'rules' && (
@@ -762,12 +762,12 @@ export default function App() {
           <div className="space-y-2 sm:space-y-4">
             
             {/* Compact category sections: icons belong to sections, not their subcategories. */}
-            <section aria-label={t('allCategories')} className="space-y-2">
+            <section aria-label={t('allCategories')} className="space-y-1">
               <button
                 type="button"
                 onClick={() => setIsCategoriesOpen((open) => !open)}
                 aria-expanded={isCategoriesOpen}
-                className="flex h-8 max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-bold text-slate-800 transition-colors hover:border-amber-400"
+                className="flex h-7 max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-bold text-slate-800 transition-colors hover:border-amber-400"
               >
                 <span aria-hidden="true">☰</span>
                 <span className="truncate">
