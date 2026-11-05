@@ -100,7 +100,7 @@ app.use('/api/admin', (req, res, next) => {
   return res.status(403).json({ error: 'Источник запроса не разрешён' });
 });
 
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '20mb' }));
 
 // ==========================================
 // ИНИЦИАЛИЗАЦИЯ GEMINI API (@google/genai)
@@ -4292,12 +4292,16 @@ app.post('/api/search-by-image', async (req, res) => {
 app.post('/api/admin/upload-image', requireAdmin, (req, res) => {
   try {
     const { image, name } = req.body;
-    if (!image || typeof image !== 'string') {
+    if (typeof image !== 'string' || !image.startsWith('data:image/')) {
       return res.status(400).json({ error: 'Изображение не предоставлено' });
+    }
+    const url = persistInlineImage(image, req);
+    if (url === image) {
+      return res.status(400).json({ error: 'Не удалось сохранить изображение. Загрузите файл в формате PNG, JPEG, WebP или GIF размером до 8 МБ.' });
     }
     return res.json({
       success: true,
-      url: image,
+      url,
       name: name || 'uploaded_image.jpg',
     });
   } catch (err: any) {

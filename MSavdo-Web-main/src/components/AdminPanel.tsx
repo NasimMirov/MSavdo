@@ -810,7 +810,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     showNotice('Фото по ссылке успешно добавлено!');
   };
 
-  // Фото сжимаются в браузере, чтобы запрос сохранения не превышал лимиты сервера
+  // Keep each image upload below common reverse-proxy request limits.
   const readImageFile = (file: Blob): Promise<string> =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -824,20 +824,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const img = new Image();
         img.onerror = () => resolve(original);
         img.onload = () => {
-          const scale = Math.min(1, 1400 / Math.max(img.width, img.height));
+          let scale = Math.min(1, 1280 / Math.max(img.width, img.height));
           const canvas = document.createElement('canvas');
-          canvas.width = Math.max(1, Math.round(img.width * scale));
-          canvas.height = Math.max(1, Math.round(img.height * scale));
           const ctx = canvas.getContext('2d');
           if (!ctx) {
             resolve(original);
             return;
           }
-          ctx.fillStyle = '#fff';
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const compressed = canvas.toDataURL('image/jpeg', 0.8);
-          resolve(compressed.length < original.length ? compressed : original);
+          for (let attempt = 0; attempt < 12; attempt++) {
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const quality = [0.78, 0.68, 0.58, 0.48][attempt % 4];
+            const compressed = canvas.toDataURL('image/jpeg', quality);
+            if (compressed.length <= 700 * 1024) {
+              resolve(original.length <= 700 * 1024 && original.length < compressed.length ? original : compressed);
+              return;
+            }
+            if (attempt % 4 === 3) scale *= 0.8;
+          }
+          resolve(original);
         };
         img.src = original;
       };
@@ -1118,17 +1126,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   // Загрузка фото варианта из файла
-  const handleVariantFileUpload = (vIdx: number, file: File) => {
+  const handleVariantFileUpload = async (vIdx: number, file: File) => {
     if (!editingProduct || !file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const dataUrl = ev.target?.result as string;
-      if (dataUrl) {
-        handleUpdateVariantField(vIdx, 'image_url', dataUrl);
-        showNotice('📸 Фото варианта загружено из файла!');
-      }
-    };
-    reader.readAsDataURL(file);
+    const dataUrl = await readImageFile(file);
+    if (dataUrl) {
+      handleUpdateVariantField(vIdx, 'image_url', dataUrl);
+      showNotice('📸 Фото варианта загружено из файла!');
+    }
   };
 
   // Вставка фото варианта из буфера обмена (картинка или ссылка)
@@ -1140,15 +1144,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           const imageType = item.types.find((t) => t.startsWith('image/'));
           if (imageType) {
             const blob = await item.getType(imageType);
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-              const dataUrl = ev.target?.result as string;
-              if (dataUrl) {
-                handleUpdateVariantField(vIdx, 'image_url', dataUrl);
-                showNotice('📸 Фото из буфера обмена добавлено в вариант!');
-              }
-            };
-            reader.readAsDataURL(blob);
+            const dataUrl = await readImageFile(blob);
+            if (dataUrl) {
+              handleUpdateVariantField(vIdx, 'image_url', dataUrl);
+              showNotice('📸 Фото из буфера обмена добавлено в вариант!');
+            }
             return;
           }
         }
@@ -1201,6 +1201,51 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         specifications: (editingProduct.specifications || []).filter((s: any) => s.name.trim() && s.value.trim()),
         variants: editingProduct.variants || [],
       };
+      const uploadedImages = new Map<string, Promise<string>>();
+      const toStoredImage = (image: string): Promise<string> => {
+        if (!image.startsWith('data:image/')) return Promise.resolve(image);
+        let uploaded = uploadedImages.get(image);
+        if (!uploaded) {
+          uploaded = (async () => {
+            let imageToUpload = image;
+            if (imageToUpload.length > 700 * 1024) {
+              const blob = await fetch(imageToUpload).then((response) => response.blob());
+              imageToUpload = await readImageFile(blob);
+            }
+            if (imageToUpload.length > 700 * 1024) {
+              throw new Error('Не удалось уменьшить размер фото. Загрузите изображение меньшего размера или добавьте его по ссылке.');
+            }
+
+            const response = await adminFetch('/api/admin/upload-image', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image: imageToUpload }),
+            });
+            if (response.status === 413) {
+              throw new Error('Фото слишком большое для загрузки даже после сжатия. Добавьте его по ссылке или выберите другое изображение.');
+            }
+            const result = await response.json();
+            if (!response.ok || typeof result.url !== 'string') {
+              throw new Error(result.error || `Не удалось загрузить фото (ошибка ${response.status})`);
+            }
+            return result.url;
+          })();
+          uploadedImages.set(image, uploaded);
+        }
+        return uploaded;
+      };
+      const storedImages = await Promise.all(payload.images.map(toStoredImage));
+      const storedMainImage = await toStoredImage(payload.main_image);
+      const storedVariants = await Promise.all(payload.variants.map(async (variant: any) => ({
+        ...variant,
+        image_url: typeof variant.image_url === 'string'
+          ? await toStoredImage(variant.image_url)
+          : variant.image_url,
+      })));
+      payload.images = storedImages;
+      payload.main_image = storedMainImage;
+      payload.variants = storedVariants;
+      const requestBody = JSON.stringify(payload);
 
       const url = editingProduct.id === 0 ? '/api/admin/products' : `/api/admin/products/${editingProduct.id}`;
       const method = editingProduct.id === 0 ? 'POST' : 'PUT';
@@ -1210,7 +1255,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(payload),
+        body: requestBody,
       });
 
       const raw = await res.text();
@@ -1222,7 +1267,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
       if (!res.ok) {
         if (res.status === 413) {
-          throw new Error('Слишком большой запрос: на сервере (nginx) нужен client_max_body_size 20m или удалите тяжёлые фото из галереи');
+          throw new Error('Слишком большой запрос. Удалите часть текста или ссылок в описании товара и повторите сохранение.');
         }
         throw new Error(data.error || `Сервер вернул ошибку ${res.status}. Повторите попытку`);
       }
