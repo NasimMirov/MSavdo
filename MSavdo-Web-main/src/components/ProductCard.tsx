@@ -112,7 +112,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         <div className="mt-1.5 flex items-center justify-between gap-1.5 px-0.5 py-0.5 sm:mt-2 sm:px-1 sm:py-1">
           <div className="min-w-0">
             <div className="text-[7px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[8px]">{t('inSomoni')}</div>
-            <div className="mt-0.5 whitespace-nowrap text-[17px] font-extrabold leading-none tracking-tight text-slate-950 sm:text-xl">
+            <div className="mt-0.5 whitespace-nowrap text-[17px] font-extrabold leading-none tracking-tight text-slate-950 price-text sm:text-xl">
               {maxPrice > minPrice && <span className="mr-0.5 text-[10px] font-bold text-slate-500 sm:text-xs">от</span>}
               {minPrice.toLocaleString('ru-RU')}
               <span className="ml-1 text-[9px] font-bold text-slate-600 sm:text-[10px]">с.</span>

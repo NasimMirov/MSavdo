@@ -55,6 +55,11 @@ html[data-theme="dark"] .text-slate-700 {
   color: #f3f4f6 !important;
 }
 
+html[data-theme="dark"] .price-text,
+html[data-theme="dark"] .price-text * {
+  color: #f4c542 !important;
+}
+
 html[data-theme="dark"] .text-slate-600 {
   color: #d1d5db !important;
 }

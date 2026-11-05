@@ -545,7 +545,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               <div className="mt-1 sm:mt-2.5 p-2 sm:p-3.5 bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200/90 rounded-xl sm:rounded-2xl flex items-center justify-between">
                 <div>
                   <div className="text-[10px] sm:text-xs text-slate-500 font-medium">{t('finalPrice')}</div>
-                  <div className="text-lg sm:text-3xl font-extrabold text-slate-900 font-mono mt-0.5">
+                  <div className="text-lg sm:text-3xl font-extrabold text-slate-900 price-text font-mono mt-0.5">
                     {currentPriceTjs} <span className="text-sm sm:text-base font-bold text-slate-600">TJS</span>
                   </div>
                 </div>
@@ -780,7 +780,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                               {related.title}
                             </p>
                             <div className="flex min-h-10 items-center justify-between gap-1">
-                              <span className="text-sm font-extrabold text-emerald-700">
+                              <span className="text-sm font-extrabold text-emerald-700 price-text">
                                 {Number(related.min_price_tjs || 0).toLocaleString('ru-RU')} TJS
                               </span>
                               <span className={`min-w-0 max-w-[65%] whitespace-normal break-words rounded-full px-2 py-1 text-right text-[9px] font-bold leading-tight ${

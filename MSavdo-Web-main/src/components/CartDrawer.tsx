@@ -388,7 +388,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             <div className="p-5 border-t border-slate-200 bg-slate-50/80 space-y-4">
               <div className="flex items-center justify-between text-base font-bold text-slate-900">
                 <span>{t('totalToPay')}</span>
-                <span className="text-2xl font-mono text-emerald-800">{totalSum} TJS</span>
+                <span className="text-2xl font-mono text-emerald-800 price-text">{totalSum} TJS</span>
               </div>
 
               {/* Авторитетный инфо-блок срока доставки */}
