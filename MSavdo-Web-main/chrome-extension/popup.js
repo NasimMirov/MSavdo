@@ -1,4 +1,4 @@
-// popup.js — Управление расширением M.Savdo Co-Pilot v5.2.3
+// popup.js — Управление расширением M.Savdo Co-Pilot v5.2.4
 
 document.addEventListener("DOMContentLoaded", async () => {
   const tabSiteType = document.getElementById("tab-site-type");
@@ -156,6 +156,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   const keyStatus = document.getElementById("key-status");
   const aiProvider = document.getElementById("ai-provider");
   const aiModel = document.getElementById("ai-model");
+  const checkTokenPlanButton = document.getElementById("btn-check-tokenplan");
+  const tokenPlanCheckStatus = document.getElementById("tokenplan-check-status");
   const saveKeyButton = document.getElementById("btn-save-key");
   const removeKeyButton = document.getElementById("btn-remove-key");
   const models = {
@@ -166,6 +168,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const provider = aiProvider.value === "tokenplan" ? "tokenplan" : "gemini";
     const prefix = provider === "tokenplan" ? "TokenPlan" : "Gemini";
     const action = operation === "get" ? `get${prefix}KeyStatus` : `${operation}${prefix}Key`;
+    if (provider === "tokenplan" && operation !== "get") tokenPlanCheckStatus.textContent = "";
     saveKeyButton.disabled = true;
     removeKeyButton.disabled = true;
     try {
@@ -195,6 +198,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   removeKeyButton.addEventListener("click", () => updateKey("remove"));
   function setProvider(provider, savedModel) {
     aiProvider.value = Object.hasOwn(models, provider) ? provider : "gemini";
+    checkTokenPlanButton.hidden = aiProvider.value !== "tokenplan";
+    tokenPlanCheckStatus.textContent = "";
     aiModel.replaceChildren();
     for (const [value, label] of models[aiProvider.value]) {
       const option = document.createElement("option");
@@ -218,9 +223,25 @@ document.addEventListener("DOMContentLoaded", async () => {
       setProvider(provider, provider === "tokenplan" ? result.tokenPlanModel : result.aiModel);
     });
   });
-  aiModel.addEventListener("change", () => chrome.storage.local.set({
-    [aiProvider.value === "tokenplan" ? "tokenPlanModel" : "aiModel"]: aiModel.value,
-  }));
+  aiModel.addEventListener("change", () => {
+    tokenPlanCheckStatus.textContent = "";
+    chrome.storage.local.set({ [aiProvider.value === "tokenplan" ? "tokenPlanModel" : "aiModel"]: aiModel.value });
+  });
+  checkTokenPlanButton.addEventListener("click", async () => {
+    checkTokenPlanButton.disabled = true;
+    tokenPlanCheckStatus.textContent = "Проверка ключа и модели…";
+    try {
+      const result = await chrome.runtime.sendMessage({ action: "checkTokenPlanKey", model: aiModel.value });
+      if (!result?.success) throw new Error(result?.error || "Не удалось проверить ключ TokenPlan.");
+      tokenPlanCheckStatus.textContent = result.modelAvailable
+        ? "Ключ принят, выбранная модель есть в списке. Доступность генерации и баланс при этом не проверены."
+        : "Ключ принят, но выбранной модели нет в списке доступных моделей TokenPlan.";
+    } catch (error) {
+      tokenPlanCheckStatus.textContent = `Ошибка: ${error.message}`;
+    } finally {
+      checkTokenPlanButton.disabled = false;
+    }
+  });
   const chatHistory = document.getElementById("chat-history");
   const proposalBox = document.getElementById("ai-proposal");
   const btnAi = document.getElementById("btn-ai");

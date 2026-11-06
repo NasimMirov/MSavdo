@@ -106,6 +106,33 @@ test("TokenPlan uses its own key and model without a logged-in tab", async () =>
   assert.match(missing.error, /ключ TokenPlan/i);
 });
 
+test("TokenPlan key check distinguishes authorization and model availability", async () => {
+  const worker = createWorker();
+  await worker.send({ action: "saveTokenPlanKey", key: "secret-tokenplan-key" });
+  worker.setBody({ data: [{ id: "gemini-3.8-flash" }] });
+  const check = { action: "checkTokenPlanKey", model: "gemini-3.8-flash" };
+  const ok = await worker.send(check);
+  assert.equal(ok.success, true);
+  assert.equal(ok.modelAvailable, true);
+  assert.equal(worker.calls.fetches[0].url, "https://tokenplan.lat/v1/models");
+  assert.equal(worker.calls.fetches[0].options.credentials, "omit");
+  assert.equal(JSON.stringify(ok).includes("secret-tokenplan-key"), false);
+  const unavailable = await worker.send({ ...check, model: "gemini-4-argon" });
+  assert.equal(unavailable.modelAvailable, false);
+  for (const status of [401, 403]) {
+    worker.setStatus(status);
+    worker.setBody({ error: "secret-tokenplan-key" });
+    const result = await worker.send(check);
+    assert.equal(result.success, false);
+    assert.match(result.error, new RegExp(String(status)));
+    assert.equal(JSON.stringify(result).includes("secret-tokenplan-key"), false);
+    const generation = await worker.send({ action: "importAssistant", payload: { ...payload, provider: "tokenplan", model: "gemini-3.8-flash" } });
+    assert.match(generation.error, new RegExp(String(status)));
+  }
+  const denied = await worker.send(check, { url: "https://1688.com/", tab: { id: 2 } });
+  assert.equal(denied.success, false);
+});
+
 test("personal key stays in trusted storage and is used only for direct Google requests", async () => {
   const worker = createWorker();
   const save = await worker.send({ action: "saveGeminiKey", key: "secret-test-key" });

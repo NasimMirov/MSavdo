@@ -357,7 +357,8 @@ async function generateWithTokenPlan(key, payload) {
     throw new Error("Не удалось связаться с TokenPlan. Проверьте соединение и повторите.");
   }
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) throw new Error("TokenPlan отклонил ключ или доступ к модели.");
+    if (response.status === 401) throw new Error("TokenPlan: HTTP 401 — ключ отклонён. Проверьте ключ и его статус в кабинете TokenPlan.");
+    if (response.status === 403) throw new Error("TokenPlan: HTTP 403 — доступ запрещён. Проверьте доступ к модели и условия ключа в кабинете TokenPlan.");
     if (response.status === 402 || response.status === 429) throw new Error("TokenPlan отклонил запрос из-за баланса или лимита. Проверьте кабинет.");
     throw new Error(`TokenPlan вернул ошибку HTTP ${response.status}. Проверьте модель и настройки сервиса.`);
   }
@@ -371,6 +372,34 @@ async function generateWithTokenPlan(key, payload) {
     throw new Error("TokenPlan вернул ответ не в формате JSON. Повторите запрос или выберите другую модель.");
   }
   return validateProposal(proposal, model, categories, variantLabels, "tokenplan");
+}
+
+async function checkTokenPlanKey(sender, model) {
+  requireExtensionPage(sender);
+  const storage = await getPrivateKeyStorage();
+  const { tokenPlanApiKey } = await storage.get("tokenPlanApiKey");
+  if (!tokenPlanApiKey) throw new Error("Сначала сохраните ключ TokenPlan.");
+  if (!["gemini-3.8-flash", "gemini-4-argon", "deepseek-v4-pro", "qwen3.8-max"].includes(model)) {
+    throw new Error("Выберите поддерживаемую модель TokenPlan.");
+  }
+  let response;
+  try {
+    response = await fetchWithTimeout("https://tokenplan.lat/v1/models", {
+      headers: { Authorization: `Bearer ${tokenPlanApiKey}`, Accept: "application/json" },
+    });
+  } catch {
+    throw new Error("Не удалось связаться с TokenPlan. Проверьте соединение.");
+  }
+  if (response.status === 401) throw new Error("TokenPlan: HTTP 401 — ключ отклонён. Проверьте ключ и его статус в кабинете TokenPlan.");
+  if (response.status === 403) throw new Error("TokenPlan: HTTP 403 — доступ запрещён. Проверьте условия ключа в кабинете TokenPlan.");
+  if (!response.ok) throw new Error(`TokenPlan: HTTP ${response.status}. Проверьте состояние сервиса и ключа.`);
+  let data;
+  try { data = await response.json(); }
+  catch { throw new Error("TokenPlan вернул некорректный список моделей."); }
+  if (!Array.isArray(data?.data) || data.data.some((item) => typeof item?.id !== "string")) {
+    throw new Error("TokenPlan вернул некорректный список моделей.");
+  }
+  return { success: true, modelAvailable: data.data.some((item) => item.id === model) };
 }
 
 async function handleImportAssistant(payload, sender) {
@@ -456,6 +485,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "importAssistant") {
     handleImportAssistant(request.payload, sender)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === "checkTokenPlanKey") {
+    checkTokenPlanKey(sender, request.model)
       .then(sendResponse)
       .catch((error) => sendResponse({ success: false, error: error.message }));
     return true;

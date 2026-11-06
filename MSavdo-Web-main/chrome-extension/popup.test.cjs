@@ -77,6 +77,7 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
           tokenPlanKey = "";
           return Promise.resolve({ success: true, hasKey: false });
         }
+        if (message.action === "checkTokenPlanKey") return Promise.resolve({ success: true, modelAvailable: true });
         if (message.action === "importAssistant") {
           aiRequest = message.payload;
           return Promise.resolve({ success: true, data: {
@@ -168,6 +169,8 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
   assert.equal(tokenPlanKey, "tokenplan-test-key");
   assert.equal(get("gemini-key").value, "");
   assert.match(get("key-status").textContent, /Ключ TokenPlan сохранён/);
+  await get("btn-check-tokenplan").click();
+  assert.match(get("tokenplan-check-status").textContent, /Ключ принят/);
   await get("btn-ai-prepare").click();
   assert.equal(aiRequest.provider, "tokenplan");
   assert.equal(aiRequest.model, "gemini-3.8-flash");

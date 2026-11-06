@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>M.Savdo — AI Merchant Co-Pilot v5.2.3</title>
+  <title>M.Savdo — AI Merchant Co-Pilot v5.2.4</title>
   <style>
     * {
       box-sizing: border-box;
@@ -360,7 +360,7 @@
         <div class="brand-name">M.<span>SAVDO</span></div>
       </div>
     </div>
-    <div class="badge">Co-Pilot v5.2.3</div>
+    <div class="badge">Co-Pilot v5.2.4</div>
   </div>
 
   <!-- КАРТОЧКА ТЕКУЩЕЙ ВКЛАДКИ -->
@@ -443,6 +443,8 @@
         <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite — экономный</option>
         <option value="gemini-3.8-flash">Gemini 3.8 Flash — сложные задачи</option>
       </select>
+      <button id="btn-check-tokenplan" type="button" class="action-btn btn-outline" style="margin-top:5px;" hidden>Проверить ключ и модель TokenPlan</button>
+      <p id="tokenplan-check-status" role="status" style="font-size:10px;color:#a1a1aa;margin:5px 0;"></p>
       <div id="chat-history" style="max-height:120px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#e4e4e7;"></div>
       <button id="btn-ai-prepare" type="button" class="action-btn btn-outline" style="margin-top:5px;">Подготовить карточку с ИИ</button>
       <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Переводятся варианты и короткие характеристики (до 120 символов); длинные значения проверьте вручную.</p>
