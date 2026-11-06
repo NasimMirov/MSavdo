@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>M.Savdo — AI Merchant Co-Pilot v5.2.2</title>
+  <title>M.Savdo — AI Merchant Co-Pilot v5.2.3</title>
   <style>
     * {
       box-sizing: border-box;
@@ -360,7 +360,7 @@
         <div class="brand-name">M.<span>SAVDO</span></div>
       </div>
     </div>
-    <div class="badge">Co-Pilot v5.2.2</div>
+    <div class="badge">Co-Pilot v5.2.3</div>
   </div>
 
   <!-- КАРТОЧКА ТЕКУЩЕЙ ВКЛАДКИ -->
@@ -420,17 +420,22 @@
       <button id="btn-add-specification" type="button" class="action-btn btn-outline">Добавить характеристику</button>
     </details>
     <div style="border-top:1px solid #27272a;margin-top:8px;padding-top:8px;">
-      <strong style="font-size:11px;color:#FACC15;">ИИ-помощник Gemini</strong>
-      <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Откройте сайт и войдите в админку выбранного сервера. Название, описание, варианты и текст товара отправляются в Gemini. Изменения применяются только после подтверждения.</p>
+      <strong style="font-size:11px;color:#FACC15;">ИИ-помощник</strong>
+      <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Название, описание, варианты и текст товара отправляются выбранному сервису ИИ. Изменения применяются только после подтверждения.</p>
       <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Бесплатный тариф Google может использовать данные запросов для улучшения продуктов. Не вставляйте секреты или личные данные в описание и чат.</p>
-      <label for="gemini-key" style="font-size:10px;color:#a1a1aa;">Личный API-ключ Gemini (необязательно):</label>
-      <input id="gemini-key" type="password" maxlength="512" autocomplete="off" placeholder="Вставьте новый ключ Gemini" style="width:100%;margin:4px 0;padding:7px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;color:white;">
+      <label for="ai-provider" style="font-size:10px;color:#a1a1aa;">Сервис ИИ:</label>
+      <select id="ai-provider" style="width:100%;margin:4px 0;padding:6px;background:#09090b;border:1px solid #3f3f46;color:white;">
+        <option value="gemini">Google Gemini / ключ сервера</option>
+        <option value="tokenplan">TokenPlan (купленный ключ)</option>
+      </select>
+      <label for="gemini-key" style="font-size:10px;color:#a1a1aa;">Личный API-ключ выбранного сервиса:</label>
+      <input id="gemini-key" type="password" maxlength="512" autocomplete="off" placeholder="Вставьте ключ выбранного сервиса" style="width:100%;margin:4px 0;padding:7px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;color:white;">
       <div style="display:flex;gap:6px;">
         <button id="btn-save-key" type="button" class="action-btn btn-outline">Сохранить ключ</button>
         <button id="btn-remove-key" type="button" class="action-btn btn-outline">Удалить ключ</button>
       </div>
       <p id="key-status" role="status" style="font-size:10px;color:#a1a1aa;margin:5px 0;">Проверка ключа…</p>
-      <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Ключ хранится локально в Chrome, не зашифрован и отправляется только Google. Вход в админку всё равно требуется. Удалите ключ, чтобы снова использовать ключ сервера.</p>
+      <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Ключ хранится локально в Chrome без шифрования и отправляется только выбранному сервису. TokenPlan получает текст товара и расходует ваши токены; вход в админку для него не требуется. Для Gemini нужен вход в админку.</p>
       <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Ключи одного проекта Google могут иметь общую квоту: замена ключа не обязательно восстановит лимит.</p>
       <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Черновики и данные товаров сохраняются локально в расширении, чтобы не потерять правки при закрытии окна.</p>
       <label for="ai-model" style="font-size:10px;color:#a1a1aa;">Модель ИИ:</label>
@@ -439,6 +444,8 @@
         <option value="gemini-3.8-flash">Gemini 3.8 Flash — сложные задачи</option>
       </select>
       <div id="chat-history" style="max-height:120px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#e4e4e7;"></div>
+      <button id="btn-ai-prepare" type="button" class="action-btn btn-outline" style="margin-top:5px;">Подготовить карточку с ИИ</button>
+      <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Переводятся варианты и короткие характеристики (до 120 символов); длинные значения проверьте вручную.</p>
       <textarea id="chat-message" maxlength="2000" rows="2" placeholder="Например: переведи и улучши название и описание" style="width:100%;padding:7px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;color:white;resize:vertical;"></textarea>
       <button id="btn-ai" type="button" class="action-btn btn-outline" style="margin-top:5px;">Спросить ИИ</button>
       <div id="ai-proposal" style="white-space:pre-wrap;font-size:11px;color:#e4e4e7;"></div>

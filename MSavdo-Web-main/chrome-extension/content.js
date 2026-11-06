@@ -60,13 +60,11 @@
       textLength += separatorLength + part.length;
     };
 
-    appendText(document.querySelector("h1")?.innerText);
+    appendText(chooseBestTitle([document.querySelector("h1")?.innerText]));
     appendText(document.querySelector('meta[property="og:title"]')?.content);
     appendText(document.title);
 
     const productDataSelectors = [
-      '[class*="price" i]',
-      '[id*="price" i]',
       '[class*="sku" i] [class*="item" i]',
       '[class*="sku" i] button',
       '[class*="sku" i] [role="radio"]',
@@ -399,13 +397,13 @@
   function chooseBestTitle(candidates) {
     const cleanCandidates = candidates
       .map((candidate) => cleanStructuredText(candidate)
-        .replace(/\s*(?:[-|—–_])\s*[^|]*?(?:有限公司|责任公司|集团公司|商行|经营部|旗舰店|专营店|专卖店|官方店|1688|taobao|alibaba|pinduoduo).*$/i, "")
+        .replace(/\s*(?:[-|—–_])\s*[^|]*?(?:有限公司|责任公司|集团公司|商行|经营部|旗舰店|专营店|专卖店|官方店|阿里巴巴|1688|taobao|alibaba|pinduoduo).*$/i, "")
         .replace(/\s+/g, " ")
         .trim())
       .filter((candidate) => candidate && candidate.length <= 250)
       .filter((candidate) => !/^(?:1688|taobao|alibaba|pinduoduo)(?:\.com)?$/i.test(candidate));
     const productCandidates = cleanCandidates.filter((candidate) =>
-      !/有限公司|责任公司|集团公司|商行|经营部|旗舰店|专营店|专卖店|官方店|欢迎光临|店铺首页|(?:^|\W)(?:ооо|ип|ао|оао|зао)(?:\W|$)|(?:^|\W)(?:co\.?,?\s*ltd|limited|company|trading\s+co\.?)(?:\W|$)/i.test(candidate)
+      !/有限公司|责任公司|集团公司|商行|经营部|旗舰店|专营店|专卖店|官方店|欢迎光临|店铺首页|厂$|(?:^|\W)(?:ооо|ип|ао|оао|зао)(?:\W|$)|(?:^|\W)(?:co\.?,?\s*ltd|limited|company|trading\s+co\.?)(?:\W|$)/i.test(candidate)
     );
     const translatedTitle = productCandidates.find((candidate) => /[а-яё]{3}/i.test(candidate));
     return translatedTitle || productCandidates.find((candidate) => /[\u3400-\u9fff]{2}/.test(candidate)) || productCandidates[0] || "";
@@ -581,6 +579,7 @@
       item.skuBase?.props,
     ]).filter(Array.isArray);
     const propertyValues = new Map();
+    const propertyValuesByName = new Map();
     for (const property of skuProperties.flat()) {
       if (!property || typeof property !== "object") continue;
       const propertyName = cleanStructuredText(property.prop || property.name || property.propName);
@@ -590,12 +589,14 @@
         if (!value || typeof value !== "object") continue;
         const valueId = String(value.valueId || value.id || value.vid || "");
         const valueName = cleanStructuredText(value.name || value.value || value.label);
-        if (valueId && valueName) {
-          propertyValues.set(valueId, {
+        if (valueName) {
+          const entry = {
             propertyName,
             valueName,
             imageUrl: normalizeImageUrl(value.imageUrl || value.picUrl || value.image || ""),
-          });
+          };
+          if (valueId) propertyValues.set(valueId, entry);
+          if (!propertyValuesByName.has(valueName)) propertyValuesByName.set(valueName, entry);
         }
       }
     }
@@ -661,6 +662,7 @@
           : attributes;
         const mappedColor = mappedAttributes.find((item) => /color|colour|颜色|顏色|цвет/i.test(item.propertyName));
         const mappedSize = mappedAttributes.find((item) => /size|尺码|尺寸|размер/i.test(item.propertyName));
+        const matchingImage = variantAttributes.map((name) => propertyValuesByName.get(name)?.imageUrl).find(Boolean);
         const rawPriceSource = sku.price ?? sku.discountPrice ?? sku.retailPrice ?? sku.salePrice ?? sku.priceInfo?.price;
         const rawPriceValue = rawPriceSource && typeof rawPriceSource === "object"
           ? rawPriceSource.price ?? rawPriceSource.value ?? rawPriceSource.amount
@@ -674,7 +676,7 @@
           size: cleanStructuredText(sku.size || mappedSize?.valueName || variantAttributes.slice(1)) || "Стандарт",
           price_cny: rawPrice,
           stock: Number.isFinite(stock) && stock >= 0 ? Math.floor(stock) : 0,
-          image_url: imageUrl || mappedColor?.imageUrl || "",
+          image_url: imageUrl || mappedColor?.imageUrl || matchingImage || "",
           sku_id: cleanStructuredText(sku.skuId || sku.specId || skuKey),
         });
       }
@@ -854,9 +856,10 @@
       ...structuredData.variants.map((item) =>
         `ВАРИАНТ SKU: ${item.color} | ${item.size} | цена ¥${item.price_cny || priceCny || "не указана"} | остаток ${item.stock}`
       ),
-      ...domData.title_candidates.map((candidate) => `НАЗВАНИЕ НА СТРАНИЦЕ: ${candidate}`),
+      ...domData.title_candidates.map((candidate) => chooseBestTitle([candidate]))
+        .filter(Boolean).map((candidate) => `НАЗВАНИЕ НА СТРАНИЦЕ: ${candidate}`),
     ].filter(Boolean).join("\n");
-    const rawText = `${pageText}\n\n${structuredDetails}`.slice(0, MAX_TEXT_LENGTH);
+    const rawText = `${structuredDetails}\n\n${pageText}`.slice(0, MAX_TEXT_LENGTH);
 
     return {
       raw_text: rawText,
@@ -921,7 +924,7 @@
     Object.assign(summary.style, { margin: "0 0 18px", color: "#475569" });
 
     const disclosure = document.createElement("p");
-    disclosure.textContent = "На сервер, указанный в настройках расширения, будут отправлены данные товарной части страницы: название, характеристики, варианты и цены, а также ссылки на найденные фото и видео.";
+    disclosure.textContent = "Быстрый импорт отправляет данные товара на сервер и не использует ключ TokenPlan из окна расширения. Для ИИ, проверки названия, описания и вариантов откройте окно расширения и используйте подготовку товара там.";
     Object.assign(disclosure.style, { margin: "0 0 14px", color: "#64748b", fontSize: "12px" });
 
     const status = document.createElement("p");

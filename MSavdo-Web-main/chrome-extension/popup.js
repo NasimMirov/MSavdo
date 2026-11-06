@@ -1,4 +1,4 @@
-// popup.js — Управление расширением M.Savdo Co-Pilot v5.2.2
+// popup.js — Управление расширением M.Savdo Co-Pilot v5.2.3
 
 document.addEventListener("DOMContentLoaded", async () => {
   const tabSiteType = document.getElementById("tab-site-type");
@@ -154,18 +154,29 @@ document.addEventListener("DOMContentLoaded", async () => {
   const chatInput = document.getElementById("chat-message");
   const keyInput = document.getElementById("gemini-key");
   const keyStatus = document.getElementById("key-status");
+  const aiProvider = document.getElementById("ai-provider");
+  const aiModel = document.getElementById("ai-model");
   const saveKeyButton = document.getElementById("btn-save-key");
   const removeKeyButton = document.getElementById("btn-remove-key");
-  async function updateKey(action, key) {
+  const models = {
+    gemini: [["gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite"], ["gemini-3.8-flash", "Gemini 3.8 Flash"]],
+    tokenplan: [["gemini-3.8-flash", "Gemini 3.8 Flash"], ["gemini-4-argon", "Gemini 4 Argon"], ["deepseek-v4-pro", "DeepSeek V4 Pro"], ["qwen3.8-max", "Qwen 3.8 Max"]],
+  };
+  async function updateKey(operation, key) {
+    const provider = aiProvider.value === "tokenplan" ? "tokenplan" : "gemini";
+    const prefix = provider === "tokenplan" ? "TokenPlan" : "Gemini";
+    const action = operation === "get" ? `get${prefix}KeyStatus` : `${operation}${prefix}Key`;
     saveKeyButton.disabled = true;
     removeKeyButton.disabled = true;
     try {
       const result = await chrome.runtime.sendMessage({ action, ...(key ? { key } : {}) });
       if (!result?.success) throw new Error(result?.error || "Не удалось изменить ключ.");
-      if (action === "saveGeminiKey" && keyInput.value.trim() === key) keyInput.value = "";
-      keyStatus.textContent = result.hasKey
-        ? "Используется личный ключ. Его работоспособность проверяется при обращении к ИИ."
-        : "Личный ключ не задан: используется ключ сервера.";
+      if (operation === "save" && keyInput.value.trim() === key) keyInput.value = "";
+      if (aiProvider.value === provider) {
+        keyStatus.textContent = result.hasKey
+          ? `Ключ ${prefix} сохранён. Работоспособность проверяется при обращении к ИИ.`
+          : provider === "tokenplan" ? "Ключ TokenPlan не задан." : "Личный ключ не задан: используется ключ сервера.";
+      }
     } catch (error) {
       keyStatus.textContent = `Ошибка: ${error.message}`;
     } finally {
@@ -176,18 +187,40 @@ document.addEventListener("DOMContentLoaded", async () => {
   saveKeyButton.addEventListener("click", () => {
     const key = keyInput.value.trim();
     if (!key || /\s/.test(key)) {
-      keyStatus.textContent = "Введите ключ Gemini без пробелов.";
+      keyStatus.textContent = "Введите ключ без пробелов.";
       return;
     }
-    return updateKey("saveGeminiKey", key);
+    return updateKey("save", key);
   });
-  removeKeyButton.addEventListener("click", () => updateKey("removeGeminiKey"));
-  void updateKey("getGeminiKeyStatus");
-  const aiModel = document.getElementById("ai-model");
-  chrome.storage.local.get(["aiModel"], (result) => {
-    if (["gemini-3.5-flash-lite", "gemini-3.8-flash"].includes(result.aiModel)) aiModel.value = result.aiModel;
+  removeKeyButton.addEventListener("click", () => updateKey("remove"));
+  function setProvider(provider, savedModel) {
+    aiProvider.value = Object.hasOwn(models, provider) ? provider : "gemini";
+    aiModel.replaceChildren();
+    for (const [value, label] of models[aiProvider.value]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      aiModel.appendChild(option);
+    }
+    aiModel.value = models[aiProvider.value].some(([value]) => value === savedModel)
+      ? savedModel : models[aiProvider.value][0][0];
+    keyInput.value = "";
+    void updateKey("get");
+  }
+  chrome.storage.local.get(["aiProvider", "aiModel", "tokenPlanModel"], (result) => {
+    const provider = result.aiProvider === "tokenplan" ? "tokenplan" : "gemini";
+    setProvider(provider, provider === "tokenplan" ? result.tokenPlanModel : result.aiModel);
   });
-  aiModel.addEventListener("change", () => chrome.storage.local.set({ aiModel: aiModel.value }));
+  aiProvider.addEventListener("change", () => {
+    const provider = aiProvider.value;
+    chrome.storage.local.set({ aiProvider: provider });
+    chrome.storage.local.get(["aiModel", "tokenPlanModel"], (result) => {
+      setProvider(provider, provider === "tokenplan" ? result.tokenPlanModel : result.aiModel);
+    });
+  });
+  aiModel.addEventListener("change", () => chrome.storage.local.set({
+    [aiProvider.value === "tokenplan" ? "tokenPlanModel" : "aiModel"]: aiModel.value,
+  }));
   const chatHistory = document.getElementById("chat-history");
   const proposalBox = document.getElementById("ai-proposal");
   const btnAi = document.getElementById("btn-ai");
@@ -328,7 +361,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  btnAi.addEventListener("click", async () => {
+  async function askAssistant() {
     if (!payload) return showStatus("Сначала извлеките товар со страницы.", "error");
     const instruction = chatInput.value.trim();
     if (!instruction) return showStatus("Напишите запрос ИИ-помощнику.", "error");
@@ -338,10 +371,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     proposalBox.textContent = "";
     const requestRevision = revision;
     const requestModel = aiModel.value;
+    const requestProvider = aiProvider.value;
     try {
-      const labels = [...new Set((payload.structured_data?.variants || [])
-        .flatMap((variant) => [variant.color, variant.size])
-        .filter((label) => typeof label === "string" && label.trim()))];
+      const labels = [...new Set([
+        ...(payload.structured_data?.variants || []).flatMap((variant) => [variant.color, variant.size]),
+        ...(payload.structured_data?.specifications || []).flatMap((item) => [item.name, item.value]),
+      ].filter((label) => typeof label === "string" && label.trim() && label.length <= 120))];
       const batches = [];
       for (let index = 0; index < labels.length; index += 100) batches.push(labels.slice(index, index + 100));
       if (!batches.length) batches.push([]);
@@ -349,11 +384,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       let firstResponse;
       const sourceText = `Характеристики: ${JSON.stringify(payload.structured_data?.specifications || [])}\n${pageCodeInput.value.trim() || payload.raw_text || ""}`.slice(0, 30000);
       for (let index = 0; index < batches.length; index += 1) {
-        if (index && index % 14 === 0) {
-          showStatus("Ожидание лимита запросов Gemini; не закрывайте окно расширения.", "success");
+        if (requestProvider === "gemini" && index && index % 14 === 0) {
+          showStatus("Ожидание лимита запросов; не закрывайте окно расширения.", "success");
           await new Promise((resolve) => setTimeout(resolve, 60000));
         }
-        showStatus(`Gemini: обработка группы ${index + 1} из ${batches.length}. Не закрывайте окно.`, "success");
+        showStatus(`ИИ: обработка группы ${index + 1} из ${batches.length}. Не закрывайте окно.`, "success");
         const response = await chrome.runtime.sendMessage({
           action: "importAssistant",
           payload: {
@@ -364,6 +399,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             history: history.slice(-6).map((entry) => entry.slice(0, 2000)),
             variant_labels: batches[index],
             model: requestModel,
+            provider: requestProvider,
           },
         });
         if (!response?.success) throw new Error(response?.error || "ИИ не ответил");
@@ -376,15 +412,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       history = history.slice(-6);
       chatHistory.textContent = history.join("\n\n");
       const translatedLabels = labels.map((label, index) => `${label} → ${translations[index]}`).join("\n");
-      proposalBox.textContent = `Предложение ${firstResponse.model || "Gemini"}:\n${proposal.title}\n${proposal.description}\nКатегория: ${proposal.category_name}${translatedLabels ? `\nВарианты:\n${translatedLabels}` : ""}`;
+      proposalBox.textContent = `Предложение ${firstResponse.model || "ИИ"}:\n${proposal.title}\n${proposal.description}\nКатегория: ${proposal.category_name}${translatedLabels ? `\nВарианты и характеристики:\n${translatedLabels}` : ""}`;
       btnApplyAi.hidden = false;
       chatInput.value = "";
-      showStatus("Gemini ответил. Проверьте предложение перед применением.", "success");
+      showStatus("ИИ ответил. Проверьте предложение перед применением.", "success");
     } catch (error) {
       showStatus(`Ошибка ИИ: ${error.message}`, "error");
     } finally {
       btnAi.disabled = false;
     }
+  }
+  btnAi.addEventListener("click", askAssistant);
+  document.getElementById("btn-ai-prepare").addEventListener("click", () => {
+    if (!payload) return showStatus("Сначала извлеките товар со страницы.", "error");
+    chatInput.value = "Переведи и подготовь название, подробное описание, подходящую категорию, названия вариантов и характеристики товара на русском языке.";
+    return askAssistant();
   });
 
   btnApplyAi.addEventListener("click", () => {
@@ -401,7 +443,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (translatedLabels.has(variant.color)) variant.color = translatedLabels.get(variant.color);
       if (translatedLabels.has(variant.size)) variant.size = translatedLabels.get(variant.size);
     }
+    for (const specification of payload.structured_data?.specifications || []) {
+      if (translatedLabels.has(specification.name)) specification.name = translatedLabels.get(specification.name);
+      if (translatedLabels.has(specification.value)) specification.value = translatedLabels.get(specification.value);
+    }
     renderVariants();
+    renderDetails();
     proposal = null;
     btnApplyAi.hidden = true;
     saveDraft();
@@ -454,6 +501,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         category_name: categoryInput.value.trim(),
         use_gemini: false,
         preserve_variant_names: true,
+        preserve_reviewed_data: true,
       };
 
       // Отправляем через background worker

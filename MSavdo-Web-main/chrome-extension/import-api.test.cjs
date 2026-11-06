@@ -33,6 +33,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     stdio: "ignore",
   });
   const base = `http://127.0.0.1:${port}`;
+  let db;
   try {
     let ready = false;
     for (let i = 0; i < 100; i += 1) {
@@ -41,6 +42,9 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     }
     assert.ok(ready, "test server did not start");
     const headers = { "Content-Type": "application/json" };
+    const categoryResponse = await fetch(`${base}/api/import-categories`);
+    assert.equal(categoryResponse.status, 200);
+    assert.ok((await categoryResponse.json()).categories.includes("Хозяйственные мелочи"));
     const assistant = { title: "Товар", description: "", source_text: "", instruction: "Улучши", history: [] };
     const unauthorized = await fetch(`${base}/api/admin/import-assistant`, { method: "POST", headers, body: JSON.stringify(assistant) });
     assert.equal(unauthorized.status, 401);
@@ -49,7 +53,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     });
     assert.equal(unauthorizedPrepare.status, 401);
 
-    const db = new DatabaseSync(path.join(temp, "msavdo.db"));
+    db = new DatabaseSync(path.join(temp, "msavdo.db"));
     db.prepare("INSERT INTO admin_users (username, password_hash) VALUES (?, ?)").run("test-admin", "unused");
     const admin = db.prepare("SELECT id FROM admin_users WHERE username = ?").get("test-admin");
     const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
@@ -86,7 +90,8 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
       body: JSON.stringify({
         raw_text: "Solar camping light", raw_title: "Jin Professional Export Outdoor Solar Camping Light LED",
         manual_title: "Солнечный фонарь для кемпинга", manual_description: "Описание, проверенное редактором.",
-        use_gemini: false, preserve_variant_names: true, structured_data: { variants },
+        use_gemini: false, preserve_variant_names: true, preserve_reviewed_data: true,
+        structured_data: { variants, specifications: [{ name: "Материал", value: "Пластик" }] },
       }),
     });
     assert.equal(response.status, 201);
@@ -94,6 +99,10 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(result.product.title, "Солнечный фонарь для кемпинга");
     assert.equal(result.product.status, "draft");
     assert.equal(result.product.variants_count, 600);
+    assert.deepEqual(result.product.specifications, [{ name: "Материал", value: "Пластик" }]);
+    const savedProduct = db.prepare("SELECT description FROM products WHERE id = ?").get(result.product.id);
+    assert.ok(savedProduct.description.includes("Описание, проверенное редактором."));
+    assert.equal(savedProduct.description.includes("Ключевые слова для поиска:"), false);
     const saved = db.prepare("SELECT color, price_cny, price_tjs FROM product_variants WHERE product_id = ? ORDER BY id").all(result.product.id);
     assert.equal(saved.length, 600);
     assert.equal(saved[599].color, "型号599");
@@ -147,8 +156,8 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const attempts = await Promise.all([1, 2].map(() => fetch(`${base}/api/orders`, { method: 'POST', headers, body: JSON.stringify(raceBody) })));
     assert.deepEqual(attempts.map((attempt) => attempt.status).sort(), [201, 409]);
     assert.equal(db.prepare('SELECT uses FROM promotions WHERE id = ?').get(racePromoId).uses, 1);
-    db.close();
   } finally {
+    if (db) db.close();
     if (child.exitCode === null) {
       child.kill();
       await new Promise((resolve) => child.once("exit", resolve));

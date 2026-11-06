@@ -670,6 +670,10 @@ for (const root of FIXED_CATEGORY_TREE) {
   }
 }
 
+app.get('/api/import-categories', (_req, res) => {
+  res.json({ categories: STRICT_ALLOWED_CATEGORIES });
+});
+
 function determineSubcategoryRuleBased(productText: string): string {
   const lower = productText.toLowerCase();
   if (/(电子元器件|电子元件|集成电路|芯片|电阻|电容|二极管|三极管|mosfet|晶体管|pcb板|电路板|开发板|传感器|arduino|esp32|stm32|raspberry\s*pi|микроконтрол|микросхем|резистор|конденсатор|диод|транзистор|печатн.{0,10}плат|электрон.{0,12}компонент|пайк|датчик|resistor|capacitor|inductor|diode|transistor|integrated circuit|microcontroller|development board|breadboard|soldering kit|\bsensor\b|\bconnector\b)/i.test(lower)) {
@@ -3617,6 +3621,7 @@ app.post('/api/add-product', async (req, res) => {
       structured_data = null,
       use_gemini = true,
       preserve_variant_names = false,
+      preserve_reviewed_data = false,
     } = req.body;
 
     const fullRawText = (raw_html_text || raw_text || '').trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
@@ -3639,10 +3644,10 @@ app.post('/api/add-product', async (req, res) => {
             const name = item.name.trim().slice(0, 120);
             const colorImageMatch = name.match(/^Фото цвета:\s*(.+)$/i);
             return {
-              name: colorImageMatch
+              name: preserve_reviewed_data === true ? name : colorImageMatch
                 ? `Фото цвета: ${translateVariantName(colorImageMatch[1])}`
                 : translateVariantName(name),
-              value: colorImageMatch
+              value: preserve_reviewed_data === true ? item.value.trim().slice(0, 500) : colorImageMatch
                 ? item.value.trim().slice(0, 2048)
                 : translateVariantName(item.value.trim().slice(0, 500)),
             };
@@ -3774,7 +3779,10 @@ app.post('/api/add-product', async (req, res) => {
       }));
     }
     const specificationMap = new Map<string, { name: string; value: string }>();
-    for (const specification of [...specificationsToProcess, ...structuredMedia.specifications]) {
+    const sourceSpecifications = preserve_reviewed_data === true && Array.isArray(structured_data?.specifications)
+      ? structuredMedia.specifications
+      : [...specificationsToProcess, ...structuredMedia.specifications];
+    for (const specification of sourceSpecifications) {
       const normalizedName = translateVariantName(specification.name).toLocaleLowerCase('ru');
       if (normalizedName && !specificationMap.has(normalizedName)) {
         specificationMap.set(normalizedName, specification);
@@ -3801,7 +3809,7 @@ app.post('/api/add-product', async (req, res) => {
         if (!inputDesc || /[\u4e00-\u9fa5]/.test(inputDesc)) finalDesc = semantic.description;
         finalCategory = normalizeSubcategoryName(semantic.category_name, `${semantic.title} ${fullRawText}`);
         aiCategoryTrusted = false;
-        if (specificationsToProcess.length === 0) specificationsToProcess = semantic.specifications || [];
+        if (specificationsToProcess.length === 0 && preserve_reviewed_data !== true) specificationsToProcess = semantic.specifications || [];
       }
     }
 
@@ -3836,7 +3844,9 @@ app.post('/api/add-product', async (req, res) => {
     if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
       finalDesc = buildVerifiedProductDescription(finalTitle, specificationsToProcess);
     }
-    finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
+    if (preserve_reviewed_data !== true || !manual_description) {
+      finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
+    }
     finalDesc = ensureOrderDeliveryNotice(finalDesc);
     const categoryId = resolveCategoryId(finalCategory);
 

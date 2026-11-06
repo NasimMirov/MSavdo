@@ -42,6 +42,9 @@ function createWorker(options = {}) {
     chrome, URL, AbortController, setTimeout, clearTimeout, console,
     fetch: async (url, options) => {
       calls.fetches.push({ url, options });
+      if (url.endsWith("/api/import-categories")) {
+        return { ok: true, status: 200, json: async () => ({ categories: ["Товары"] }) };
+      }
       return { ok: status >= 200 && status < 300, status, json: async () => body };
     },
   };
@@ -56,6 +59,7 @@ function createWorker(options = {}) {
         const asyncResponse = listener(request, sender, resolve);
         if (asyncResponse !== true) reject(new Error("No asynchronous response"));
       });
+
     },
   };
 }
@@ -64,6 +68,43 @@ const payload = {
   title: "Фонарь", description: "", source_text: "", instruction: "Переведи", history: [],
   model: "gemini-3.5-flash-lite", variant_labels: ["红色"],
 };
+
+test("TokenPlan uses its own key and model without a logged-in tab", async () => {
+  const worker = createWorker();
+  const denied = await worker.send({ action: "saveTokenPlanKey", key: "secret-tokenplan-key" }, {
+    url: "https://1688.com/", tab: { id: 2 },
+  });
+  assert.equal(denied.success, false);
+  assert.equal((await worker.send({ action: "saveTokenPlanKey", key: "secret-tokenplan-key" })).hasKey, true);
+  assert.equal((await worker.send({ action: "getTokenPlanKeyStatus" })).hasKey, true);
+  worker.setBody({ choices: [{ message: { content: '```json\n' + JSON.stringify({
+    reply: "Готово", title: "Фонарь", description: "Описание", category_name: "Товары",
+    variant_labels: ["Красный"],
+  }) + '\n```' } }] });
+  const input = { ...payload, provider: "tokenplan", model: "gemini-3.8-flash" };
+  const result = await worker.send({ action: "importAssistant", payload: input });
+  assert.equal(result.success, true);
+  assert.equal(result.data.proposal.variant_labels[0], "Красный");
+  assert.equal(worker.calls.scripts.length, 0);
+  const request = worker.calls.fetches[1];
+  assert.equal(request.url, "https://tokenplan.lat/v1/chat/completions");
+  assert.equal(request.options.headers.Authorization, `Bearer ${worker.store.tokenPlanApiKey}`);
+  assert.equal(request.options.credentials, "omit");
+  assert.equal(request.options.redirect, "error");
+  assert.equal(request.options.body.includes("secret-tokenplan-key"), false);
+  assert.equal(worker.calls.fetches[0].options.headers.Authorization, undefined);
+  assert.equal(JSON.stringify(result).includes("secret-tokenplan-key"), false);
+  worker.setStatus(429);
+  const error = await worker.send({ action: "importAssistant", payload: input });
+  assert.equal(error.success, false);
+  assert.match(error.error, /лимит/i);
+  assert.equal(worker.calls.scripts.length, 0);
+  assert.equal(JSON.stringify(error).includes("secret-tokenplan-key"), false);
+  await worker.send({ action: "removeTokenPlanKey" });
+  const missing = await worker.send({ action: "importAssistant", payload: input });
+  assert.equal(missing.success, false);
+  assert.match(missing.error, /ключ TokenPlan/i);
+});
 
 test("personal key stays in trusted storage and is used only for direct Google requests", async () => {
   const worker = createWorker();
