@@ -228,9 +228,95 @@ async function handlePing(targetUrl) {
   }
 }
 
+function requireExtensionPage(sender) {
+  if (sender.tab || sender.url !== chrome.runtime.getURL("popup.html")) {
+    throw new Error("Настройки ИИ доступны только из окна расширения.");
+  }
+}
+
+async function getPrivateKeyStorage() {
+  if (typeof chrome.storage.local.setAccessLevel !== "function") {
+    throw new Error("Обновите Chrome: безопасное хранение ключа не поддерживается.");
+  }
+  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  return chrome.storage.local;
+}
+
+async function handleKeySettings(action, key, sender) {
+  requireExtensionPage(sender);
+  const storage = await getPrivateKeyStorage();
+  if (action === "saveGeminiKey") {
+    if (typeof key !== "string" || !key.trim() || key.trim().length > 512 || /\s/.test(key.trim())) {
+      throw new Error("Введите корректный ключ Gemini без пробелов.");
+    }
+    await storage.set({ geminiApiKey: key.trim() });
+  } else if (action === "removeGeminiKey") {
+    await storage.remove("geminiApiKey");
+  }
+  const stored = await storage.get("geminiApiKey");
+  return { success: true, hasKey: Boolean(stored.geminiApiKey) };
+}
+
+async function generateWithPersonalKey(key, model, prepared, variantLabels) {
+  if (!["gemini-3.5-flash-lite", "gemini-3.8-flash"].includes(model)) {
+    throw new Error("Выберите поддерживаемую модель Gemini.");
+  }
+  if (!prepared || typeof prepared.prompt !== "string" || !Array.isArray(prepared.categories)) {
+    throw new Error("Сервер не подготовил данные для Gemini. Обновите сервер M.Savdo.");
+  }
+  let response;
+  try {
+    response = await fetchWithTimeout(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prepared.prompt }] }],
+        generationConfig: { responseMimeType: "application/json" },
+      }),
+    }, 35000);
+  } catch {
+    throw new Error("Не удалось связаться с Google Gemini. Проверьте соединение и повторите.");
+  }
+  if (!response.ok) {
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      throw new Error("Google отклонил запрос. Проверьте ключ, доступ к Gemini API и выбранную модель.");
+    }
+    if (response.status === 429) throw new Error("Лимит Gemini исчерпан. Проверьте квоту или замените ключ.");
+    throw new Error(`Google Gemini вернул ошибку HTTP ${response.status}.`);
+  }
+  let proposal;
+  try {
+    const body = await response.json();
+    const text = body.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("");
+    proposal = JSON.parse(text);
+  } catch {
+    throw new Error("Gemini вернул некорректный ответ. Попробуйте ещё раз.");
+  }
+  if (!proposal || typeof proposal.reply !== "string" || !proposal.reply.trim() ||
+      typeof proposal.title !== "string" || !proposal.title.trim() || proposal.title.length > 500 ||
+      typeof proposal.description !== "string" || !proposal.description.trim() || proposal.description.length > 20000 ||
+      typeof proposal.category_name !== "string" || !prepared.categories.includes(proposal.category_name) ||
+      (variantLabels.length && (!Array.isArray(proposal.variant_labels) || proposal.variant_labels.length !== variantLabels.length ||
+        proposal.variant_labels.some((item) => typeof item !== "string" || !item.trim() || item.length > 120)))) {
+    throw new Error("Gemini вернул неполное предложение. Попробуйте ещё раз.");
+  }
+  return { success: true, data: {
+    source: "gemini", model, reply: proposal.reply.trim().slice(0, 4000),
+    proposal: {
+      title: proposal.title.trim(), description: proposal.description.trim(),
+      category_name: proposal.category_name, variant_labels: variantLabels.length ? proposal.variant_labels : [],
+    },
+  } };
+}
+
 async function handleImportAssistant(payload, sender) {
-  if (sender.tab || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
-    throw new Error("ИИ-помощник доступен только из окна расширения.");
+  requireExtensionPage(sender);
+  const storage = typeof chrome.storage.local.setAccessLevel === "function"
+    ? await getPrivateKeyStorage()
+    : chrome.storage.local;
+  const { geminiApiKey } = await storage.get("geminiApiKey");
+  if (geminiApiKey && typeof storage.setAccessLevel !== "function") {
+    throw new Error("Обновите Chrome: безопасное хранение ключа не поддерживается.");
   }
   const base = await getServerUrl();
   const target = new URL(base);
@@ -252,7 +338,7 @@ async function handleImportAssistant(payload, sender) {
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     world: "MAIN",
-    args: [base, allowedOrigins, payload],
+    args: [base, allowedOrigins, geminiApiKey ? { ...payload, prepare_only: true } : payload],
     func: async (server, origins, data) => {
       if (!origins.includes(location.origin)) return { success: false, error: "Вкладка сайта изменилась. Повторите запрос." };
       const controller = new AbortController();
@@ -278,7 +364,9 @@ async function handleImportAssistant(payload, sender) {
       }
     },
   });
-  return results[0]?.result || { success: false, error: "Вкладка сайта не ответила." };
+  const result = results[0]?.result || { success: false, error: "Вкладка сайта не ответила." };
+  if (!result.success || !geminiApiKey) return result;
+  return generateWithPersonalKey(geminiApiKey, payload.model, result.data, payload.variant_labels || []);
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -300,6 +388,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     handleImportAssistant(request.payload, sender)
       .then(sendResponse)
       .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (["getGeminiKeyStatus", "saveGeminiKey", "removeGeminiKey"].includes(request.action)) {
+    handleKeySettings(request.action, request.key, sender)
+      .then(sendResponse)
+      .catch(() => sendResponse({ success: false, error: "Не удалось изменить настройки ключа. Проверьте ввод и поддержку безопасного хранения в Chrome." }));
     return true;
   }
 

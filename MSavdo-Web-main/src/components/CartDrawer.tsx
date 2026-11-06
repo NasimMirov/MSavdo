@@ -1,8 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CartItem, Product } from '../types';
 import { X, Trash2, Plus, Minus, Send, ShoppingBasket, ShieldAlert, Clock, Truck } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
+import type { PromotionResult } from '../utils/promotions';
+
+type Quote = PromotionResult & {
+  fingerprint: string;
+  items: Array<{ variant_id: number; title: string; color: string; size: string; quantity: number; price_tjs: number; delivery_type: string }>;
+};
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -38,6 +44,43 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [submitError, setSubmitError] = useState('');
+  const [promoCode, setPromoCode] = useState('');
+  const [quote, setQuote] = useState<Quote | null>(null);
+  const [quotedKey, setQuotedKey] = useState('');
+  const [quoteError, setQuoteError] = useState('');
+  const [offers, setOffers] = useState<Array<{ id: number; title: string }>>([]);
+  const [offersError, setOffersError] = useState('');
+  const cartKey = JSON.stringify(items.map((item) => ({ product_id: item.product_id, variant_id: item.variant_id, quantity: item.quantity })));
+  useEffect(() => {
+    if (!isOpen || !items.length) { setQuote(null); return; }
+    const controller = new AbortController();
+    setQuote(null); setQuoteError('');
+    const timer = setTimeout(async () => {
+      try {
+        const response = await apiFetch('/api/order-quote', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: JSON.parse(cartKey), code: promoCode.trim() }),
+          signal: controller.signal,
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        setQuote(data); setQuotedKey(`${cartKey}\n${promoCode}`);
+      } catch (error) {
+        if (!controller.signal.aborted) setQuoteError(error instanceof Error ? error.message : 'Не удалось рассчитать заказ.');
+      }
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [cartKey, promoCode, isOpen]);
+  useEffect(() => {
+    if (!isOpen) return;
+    const controller = new AbortController();
+    apiFetch('/api/promotions', { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setOffers(data.promotions); setOffersError('');
+    }).catch((error) => { if (!controller.signal.aborted) setOffersError(error instanceof Error ? error.message : 'Ошибка загрузки акций'); });
+    return () => controller.abort();
+  }, [isOpen]);
 
   const copy = {
     ru: {
@@ -143,7 +186,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  const totalSum = items.reduce((sum, item) => sum + item.price_tjs * item.quantity, 0);
+  const validQuote = quotedKey === `${cartKey}\n${promoCode}` ? quote : null;
+  const totalSum = validQuote?.total;
 
   // Проверка: есть ли товары с доставкой из Китая за 12–35 дней.
   const hasPreOrderItems = items.some((item) => item.delivery_type !== 'stock');
@@ -153,13 +197,14 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     && phoneDigits.length <= 15;
 
   const handleInitiateCheckout = () => {
-    if (!agreedWithRules || items.length === 0) return;
+    if (!agreedWithRules || items.length === 0 || !validQuote || (promoCode.trim() && !validQuote.code_applied)) return;
     setPhoneError('');
     setSubmitError('');
     setShowPreOrderModal(true);
   };
 
   const executeCheckout = async () => {
+    if (!validQuote) { setSubmitError('Дождитесь расчёта заказа.'); return; }
     if (!customerPhone.trim()) {
       setPhoneError(copy.phoneRequired);
       return;
@@ -171,6 +216,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     setSubmitError('');
     setIsSubmitting(true);
     let orderNumber = '';
+    let confirmedQuote: Quote = validQuote;
 
     try {
       const res = await apiFetch('/api/orders', {
@@ -180,7 +226,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           customer_name: customerName.trim() || 'Клиент WhatsApp',
           customer_phone: customerPhone.trim(),
           customer_address: customerAddress.trim(),
-          total_amount: totalSum,
+          total_amount: validQuote.total,
+          quote_fingerprint: validQuote.fingerprint,
+          promotion_code: promoCode.trim(),
           delivery_type: hasPreOrderItems ? 'order' : 'stock',
           items: items.map((i) => ({
             product_id: i.product_id,
@@ -197,7 +245,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         }),
       });
       if (!res.ok) {
-        const data = await res.json().catch(() => null);
+        const data = await res.json();
+        if (res.status === 409 && data?.quote) setQuote(data.quote);
         throw new Error(data?.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
@@ -205,16 +254,17 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         throw new Error('Сервер не вернул номер заказа');
       }
       orderNumber = data.order_number;
+      confirmedQuote = data.quote;
     } catch (error) {
       console.error('[Order Checkout Error]', error);
-      setSubmitError(copy.orderFailed);
+      setSubmitError(error instanceof Error ? error.message : copy.orderFailed);
       return;
     } finally {
       setIsSubmitting(false);
     }
     setShowPreOrderModal(false);
 
-    const itemsText = items.map((item, index) => {
+    const itemsText = confirmedQuote.items.map((item, index) => {
       const lineTotal = item.price_tjs * item.quantity;
       const options = [item.color, item.size].filter(
         (value) => value
@@ -238,8 +288,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       `${copy.orderLabel} #${orderNumber}`,
       customerDetails,
       itemsText,
-      `${copy.total}: ${totalSum} TJS`,
-      hasPreOrderItems ? copy.deliveryOrder : copy.deliveryStock,
+      ...confirmedQuote.applied.map((offer) => `${offer.title}: −${offer.amount} TJS`),
+      `${copy.total}: ${confirmedQuote.total} TJS`,
+      confirmedQuote.items.some((item) => item.delivery_type !== 'stock') ? copy.deliveryOrder : copy.deliveryStock,
     ].filter(Boolean).join('\n');
 
     const cleanPhone = whatsappPhone.replace(/[^0-9]/g, '');
@@ -286,6 +337,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   const productVariants = products.find((product) => product.id === item.product_id)?.variants
                     || item.variants
                     || [];
+                  const currentPrice = validQuote?.items.find((quoted) => quoted.variant_id === item.variant_id)?.price_tjs ?? item.price_tjs;
                   return (
                   <div key={item.id} className="py-4 flex items-start gap-3">
                     <img
@@ -337,7 +389,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       </div>
 
                       <div className="text-xs font-mono font-bold text-emerald-800 mt-1.5">
-                        {item.price_tjs} TJS
+                        {currentPrice} TJS
                       </div>
 
                       {/* Управление количеством */}
@@ -364,7 +416,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-mono font-bold text-slate-900">
-                            {item.price_tjs * item.quantity} TJS
+                            {currentPrice * item.quantity} TJS
                           </span>
                           <button
                             onClick={() => onRemoveItem(item.id)}
@@ -386,9 +438,22 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           {/* Нижний блок с подтверждением и кнопкой WhatsApp */}
           {items.length > 0 && (
             <div className="p-5 border-t border-slate-200 bg-slate-50/80 space-y-4">
+              {offers.length > 0 && <div className="rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900">
+                <strong>{language === 'ru' ? 'Предложения' : language === 'tg' ? 'Пешниҳодҳо' : 'Offers'}</strong>
+                {offers.map((offer) => <div key={offer.id}>{offer.title}</div>)}
+              </div>}
+              {offersError && <p className="text-xs text-amber-700">{language === 'ru' ? 'Не удалось загрузить предложения' : language === 'tg' ? 'Пешниҳодҳо бор нашуданд' : 'Could not load offers'}</p>}
+              <label className="block text-xs font-semibold text-slate-700">
+                {language === 'ru' ? 'Промокод' : language === 'tg' ? 'Рамзи тахфиф' : 'Promo code'}
+                <input className="mt-1 w-full rounded-lg border p-2 text-sm" maxLength={40} value={promoCode} onChange={(event) => setPromoCode(event.target.value)} />
+              </label>
+              {quoteError && <p role="alert" className="text-xs text-red-700">{quoteError}</p>}
+              {validQuote && promoCode.trim() && !validQuote.code_applied && <p role="alert" className="text-xs text-red-700">{language === 'ru' ? 'Промокод недействителен или условия не выполнены.' : language === 'tg' ? 'Рамз нодуруст аст ё шартҳо иҷро нашудаанд.' : 'The code is invalid or its conditions are not met.'}</p>}
+              {validQuote && validQuote.discount > 0 && <div className="flex justify-between text-xs text-slate-600"><span>{language === 'ru' ? 'Без скидки' : language === 'tg' ? 'Бе тахфиф' : 'Subtotal'}</span><span>{validQuote.subtotal} TJS</span></div>}
+              {validQuote?.applied.map((offer) => <div key={offer.id} className="flex justify-between text-xs text-emerald-700"><span>{offer.title}</span><span>−{offer.amount} TJS</span></div>)}
               <div className="flex items-center justify-between text-base font-bold text-slate-900">
                 <span>{t('totalToPay')}</span>
-                <span className="text-2xl font-mono text-emerald-800 price-text">{totalSum} TJS</span>
+                <span className="text-2xl font-mono text-emerald-800 price-text">{totalSum === undefined ? '…' : `${totalSum} TJS`}</span>
               </div>
 
               {/* Авторитетный инфо-блок срока доставки */}
@@ -432,7 +497,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
               {/* КНОПКА ЗАКАЗА В WHATSAPP */}
               <button
-                disabled={!agreedWithRules}
+                disabled={!agreedWithRules || !validQuote || Boolean(promoCode.trim() && !validQuote.code_applied)}
                 onClick={handleInitiateCheckout}
                 className={`w-full py-4 px-4 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-sm ${
                   agreedWithRules
@@ -462,7 +527,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       {/* Подтверждение срока доставки из Китая */}
       {showPreOrderModal && (
         <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border-4 border-amber-400 text-center space-y-6 animate-scale-up">
+          <div className="bg-white rounded-3xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 sm:p-8 shadow-2xl border-4 border-amber-400 text-center space-y-6 animate-scale-up">
             
             <div className="w-16 h-16 bg-amber-100 border-2 border-amber-400 text-amber-600 rounded-2xl mx-auto flex items-center justify-center shadow-md">
               <Clock className="w-9 h-9" />
@@ -483,6 +548,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </>
               )}
             </div>
+
+            {validQuote && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-left text-xs text-slate-800">
+              {validQuote.items.map((item, index) => <div key={index}>{item.title} × {item.quantity} — {item.price_tjs * item.quantity} TJS</div>)}
+              {validQuote.applied.map((offer) => <div key={offer.id}>{offer.title}: −{offer.amount} TJS</div>)}
+              <strong>{copy.total}: {validQuote.total} TJS</strong>
+            </div>}
 
             {/* Быстрые контактные данные покупателя */}
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-left space-y-2.5">
@@ -537,7 +608,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               </button>
               <button
                 type="button"
-                disabled={isSubmitting || !isPhoneValid}
+                disabled={isSubmitting || !isPhoneValid || !validQuote || Boolean(promoCode.trim() && !validQuote.code_applied)}
                 onClick={executeCheckout}
                 className="w-full sm:w-2/3 py-3.5 px-6 rounded-xl font-black text-sm uppercase tracking-wider text-black bg-amber-400 hover:bg-amber-300 transition-all shadow-lg hover:shadow-amber-400/50 cursor-pointer flex items-center justify-center gap-2"
               >

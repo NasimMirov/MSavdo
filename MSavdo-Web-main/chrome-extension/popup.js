@@ -1,4 +1,4 @@
-// popup.js — Управление расширением M.Savdo Co-Pilot v5.2.0
+// popup.js — Управление расширением M.Savdo Co-Pilot v5.2.2
 
 document.addEventListener("DOMContentLoaded", async () => {
   const tabSiteType = document.getElementById("tab-site-type");
@@ -152,6 +152,42 @@ document.addEventListener("DOMContentLoaded", async () => {
   const btnAddVariant = document.getElementById("btn-add-variant");
   const btnAddSpecification = document.getElementById("btn-add-specification");
   const chatInput = document.getElementById("chat-message");
+  const keyInput = document.getElementById("gemini-key");
+  const keyStatus = document.getElementById("key-status");
+  const saveKeyButton = document.getElementById("btn-save-key");
+  const removeKeyButton = document.getElementById("btn-remove-key");
+  async function updateKey(action, key) {
+    saveKeyButton.disabled = true;
+    removeKeyButton.disabled = true;
+    try {
+      const result = await chrome.runtime.sendMessage({ action, ...(key ? { key } : {}) });
+      if (!result?.success) throw new Error(result?.error || "Не удалось изменить ключ.");
+      if (action === "saveGeminiKey" && keyInput.value.trim() === key) keyInput.value = "";
+      keyStatus.textContent = result.hasKey
+        ? "Используется личный ключ. Его работоспособность проверяется при обращении к ИИ."
+        : "Личный ключ не задан: используется ключ сервера.";
+    } catch (error) {
+      keyStatus.textContent = `Ошибка: ${error.message}`;
+    } finally {
+      saveKeyButton.disabled = false;
+      removeKeyButton.disabled = false;
+    }
+  }
+  saveKeyButton.addEventListener("click", () => {
+    const key = keyInput.value.trim();
+    if (!key || /\s/.test(key)) {
+      keyStatus.textContent = "Введите ключ Gemini без пробелов.";
+      return;
+    }
+    return updateKey("saveGeminiKey", key);
+  });
+  removeKeyButton.addEventListener("click", () => updateKey("removeGeminiKey"));
+  void updateKey("getGeminiKeyStatus");
+  const aiModel = document.getElementById("ai-model");
+  chrome.storage.local.get(["aiModel"], (result) => {
+    if (["gemini-3.5-flash-lite", "gemini-3.8-flash"].includes(result.aiModel)) aiModel.value = result.aiModel;
+  });
+  aiModel.addEventListener("change", () => chrome.storage.local.set({ aiModel: aiModel.value }));
   const chatHistory = document.getElementById("chat-history");
   const proposalBox = document.getElementById("ai-proposal");
   const btnAi = document.getElementById("btn-ai");
@@ -301,6 +337,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     proposal = null;
     proposalBox.textContent = "";
     const requestRevision = revision;
+    const requestModel = aiModel.value;
     try {
       const labels = [...new Set((payload.structured_data?.variants || [])
         .flatMap((variant) => [variant.color, variant.size])
@@ -326,6 +363,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             instruction: instruction.slice(0, 2000),
             history: history.slice(-6).map((entry) => entry.slice(0, 2000)),
             variant_labels: batches[index],
+            model: requestModel,
           },
         });
         if (!response?.success) throw new Error(response?.error || "ИИ не ответил");
@@ -338,7 +376,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       history = history.slice(-6);
       chatHistory.textContent = history.join("\n\n");
       const translatedLabels = labels.map((label, index) => `${label} → ${translations[index]}`).join("\n");
-      proposalBox.textContent = `Предложение Gemini:\n${proposal.title}\n${proposal.description}\nКатегория: ${proposal.category_name}${translatedLabels ? `\nВарианты:\n${translatedLabels}` : ""}`;
+      proposalBox.textContent = `Предложение ${firstResponse.model || "Gemini"}:\n${proposal.title}\n${proposal.description}\nКатегория: ${proposal.category_name}${translatedLabels ? `\nВарианты:\n${translatedLabels}` : ""}`;
       btnApplyAi.hidden = false;
       chatInput.value = "";
       showStatus("Gemini ответил. Проверьте предложение перед применением.", "success");

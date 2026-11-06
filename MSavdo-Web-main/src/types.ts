@@ -89,6 +89,7 @@ export interface Order {
   delivery_type: string;
   items_json: string;
   items?: OrderItem[];
+  promotions?: Array<{ promotion_id: number; title: string; code: string; amount: number }>;
   created_at: string;
 }
 

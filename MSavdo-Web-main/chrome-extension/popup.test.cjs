@@ -29,6 +29,7 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
   let onReady;
   let imported;
   let aiRequest;
+  let personalKey = "";
   const source = {
     raw_title: "Jin Professional Export Outdoor Solar Camping Light LED",
     raw_text: "Solar camping light",
@@ -43,6 +44,7 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
     },
   };
   const store = {};
+  get("ai-model").value = "gemini-3.5-flash-lite";
   const chrome = {
     tabs: {
       query: async () => [{ id: 1, title: source.raw_title, url: source.original_link }],
@@ -56,6 +58,15 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
     scripting: {},
     runtime: {
       sendMessage(message, callback) {
+        if (message.action === "getGeminiKeyStatus") return Promise.resolve({ success: true, hasKey: !!personalKey });
+        if (message.action === "saveGeminiKey") {
+          personalKey = message.key;
+          return Promise.resolve({ success: true, hasKey: true });
+        }
+        if (message.action === "removeGeminiKey") {
+          personalKey = "";
+          return Promise.resolve({ success: true, hasKey: false });
+        }
         if (message.action === "importAssistant") {
           aiRequest = message.payload;
           return Promise.resolve({ success: true, data: {
@@ -91,6 +102,16 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "popup.js"), "utf8"), context);
   await onReady();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(get("key-status").textContent, /ключ сервера/);
+  get("gemini-key").value = "first-test-key";
+  await get("btn-save-key").click();
+  assert.equal(personalKey, "first-test-key");
+  assert.equal(get("gemini-key").value, "");
+  assert.match(get("key-status").textContent, /личный ключ/);
+  get("gemini-key").value = "replacement-key";
+  await get("btn-save-key").click();
+  assert.equal(personalKey, "replacement-key");
   await get("btn-extract").click();
   assert.equal(get("manual-title").value, source.raw_title);
   assert.equal(get("variants-list").children.length, 600);
@@ -98,6 +119,8 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
   await get("btn-ai").click();
   assert.equal(get("manual-title").value, source.raw_title);
   assert.equal(aiRequest.variant_labels.length, 1);
+  assert.equal(aiRequest.model, "gemini-3.5-flash-lite");
+  assert.equal(JSON.stringify(aiRequest).includes(personalKey), false);
   await get("btn-apply-ai").click();
   assert.equal(get("manual-title").value, "Солнечный фонарь");
   get("variants-list").children[0].children[0].value = "Изменённый вариант";
@@ -110,6 +133,7 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
   assert.equal(imported.structured_data.variants[0].color, "Изменённый вариант");
   assert.equal(imported.structured_data.variants[599].sku_id, "sku-599");
   assert.equal(store[`importDraft:${source.original_link}`].payload.structured_data.variants.length, 600);
+  assert.equal(JSON.stringify(imported).includes(personalKey), false);
 
   get("chat-message").value = "Улучши ещё";
   await get("btn-ai").click();
@@ -118,4 +142,7 @@ test("preview, AI confirmation and import preserve all edited SKU rows", async (
   await get("btn-apply-ai").click();
   assert.equal(get("manual-title").value, "Моя ручная правка");
   assert.match(get("status-box").textContent, /изменились после запроса/);
+  await get("btn-remove-key").click();
+  assert.equal(personalKey, "");
+  assert.match(get("key-status").textContent, /ключ сервера/);
 });

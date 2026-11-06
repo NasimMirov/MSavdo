@@ -79,6 +79,7 @@ export default function App() {
 
   // Данные каталога из API
   const [products, setProducts] = useState<Product[]>([]);
+  const [publicOffers, setPublicOffers] = useState<Array<{ id: number; title: string }>>([]);
   const [recommendedProducts, setRecommendedProducts] = useState<Product[]>([]);
   const [totalProductCount, setTotalProductCount] = useState(0);
   const [hasMoreProducts, setHasMoreProducts] = useState(false);
@@ -115,6 +116,15 @@ export default function App() {
   const lastTrackedSearch = useRef('');
   const viewedProductIds = useRef<Set<number>>(new Set());
   const catalogRequestId = useRef(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    apiFetch('/api/promotions', { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setPublicOffers(data.promotions);
+    }).catch((error) => { if (!controller.signal.aborted) console.error('[Offers]', error); });
+    return () => controller.abort();
+  }, []);
   const isProductModalOpen = selectedProduct !== null;
   const activeBrowseTime = useRef(0);
   const canShowWhatsAppHelp = useRef(false);
@@ -751,6 +761,9 @@ export default function App() {
         {/* ЭКРАН 3: ПУБЛИЧНЫЙ КАТАЛОГ (КОМПАКТНЫЙ, БЫСТРЫЙ, МОБИЛЬНЫЙ) */}
         {currentView === 'catalog' && (
           <div className="space-y-2 sm:space-y-4">
+            {publicOffers.length > 0 && <section className="flex gap-2 overflow-x-auto py-1" aria-label="Предложения">
+              {publicOffers.map((offer) => <div key={offer.id} className="shrink-0 rounded-xl bg-amber-100 px-4 py-2 text-xs font-semibold text-amber-950">{offer.title}</div>)}
+            </section>}
             
             {/* Compact category sections: icons belong to sections, not their subcategories. */}
             <section aria-label={t('allCategories')} className="space-y-1">

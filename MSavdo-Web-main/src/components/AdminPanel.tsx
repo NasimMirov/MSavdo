@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
+import { PromotionsAdmin } from './PromotionsAdmin';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { calculatePriceTjs } from '../utils/pricing';
@@ -112,7 +113,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
-  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'gemini_ai' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'promotions' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -1740,6 +1741,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </button>
 
         <button
+          onClick={() => setActiveTab('promotions')}
+          className={`px-3 py-2 rounded-lg transition-colors ${activeTab === 'promotions' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+        >Акции</button>
+
+        <button
           onClick={() => setActiveTab('gemini_ai')}
           className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
             activeTab === 'gemini_ai'
@@ -1767,6 +1773,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* ========================================== */}
       {/* ВКЛАДКА 1: НАВИГАТОР ТОВАРОВ И КАТАЛОГА */}
       {/* ========================================== */}
+      {activeTab === 'promotions' && <PromotionsAdmin products={adminProducts} categories={categories} />}
       {activeTab === 'feedback' && (
         <section className="space-y-3 py-4">
           <div className="flex items-center justify-between gap-3">
@@ -3132,6 +3139,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       </div>
 
                       {/* Список позиций в заказе */}
+                      {Boolean(order.promotions?.length) && <div className="rounded-xl bg-emerald-50 p-3 text-xs text-emerald-900">
+                        <strong>Скидки при оформлении:</strong>
+                        {order.promotions?.map((promo) => <div key={promo.promotion_id}>{promo.title}{promo.code ? ` (${promo.code})` : ''}: −{promo.amount} TJS</div>)}
+                        <div>При ручном изменении заказа история скидок не пересчитывается.</div>
+                      </div>}
                       <div className="space-y-2">
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
                           Товары в заказе ({order.items?.length || 0}):

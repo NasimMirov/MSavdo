@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "M.Savdo — AI Merchant Co-Pilot v5.2.0",
-  "version": "5.2.0",
+  "name": "M.Savdo — AI Merchant Co-Pilot v5.2.2",
+  "version": "5.2.2",
   "description": "Автоматический импорт товаров с 1688.com, Pinduoduo, Taobao в сервис M.Savdo с ИИ-Бухгалтером, ИИ-Таргетологом и матрицей вариантов.",
   "permissions": [
     "activeTab",
