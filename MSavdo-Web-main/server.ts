@@ -14,6 +14,7 @@ import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { calculatePromotions } from './src/utils/promotions.js';
 import type { Promotion } from './src/utils/promotions.js';
+import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,6 +22,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_IMPORT_TEXT_LENGTH = 50000;
+const MAX_IMPORT_HTML_LENGTH = 2000000;
 const GEMINI_IMPORT_MODEL = 'gemini-3.8-flash';
 const GEMINI_ECONOMY_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_IMPORT_TIMEOUT_MS = 30000;
@@ -928,6 +930,32 @@ function getSetting(key: string, defaultValue: string): string {
 
 function setSetting(key: string, value: string): void {
   db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+}
+
+function tokenPlanEncryptionKey(): Buffer {
+  if (!jwtSecretEnv) throw new Error('Для хранения ключа настройте постоянный ADMIN_JWT_SECRET на сервере.');
+  return Buffer.from(crypto.hkdfSync('sha256', Buffer.from(jwtSecretEnv), 'msavdo-tokenplan', 'api-key-v1', 32));
+}
+
+function encryptTokenPlanKey(value: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', tokenPlanEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+  return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), encrypted.toString('base64url')].join('.');
+}
+
+function readTokenPlanKey(): string {
+  const stored = getSetting('tokenplan_api_key_encrypted', '');
+  if (!stored) throw new Error('Добавьте ключ TokenPlan в настройках админки.');
+  try {
+    const [version, iv, tag, data] = stored.split('.');
+    if (version !== 'v1' || !iv || !tag || !data) throw new Error('Invalid encrypted key');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', tokenPlanEncryptionKey(), Buffer.from(iv, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    return Buffer.concat([decipher.update(Buffer.from(data, 'base64url')), decipher.final()]).toString('utf8');
+  } catch {
+    throw new Error('Не удалось прочитать ключ TokenPlan. Проверьте ADMIN_JWT_SECRET и сохраните ключ заново.');
+  }
 }
 
 if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('cny_tjs_rate')) {
@@ -3176,14 +3204,10 @@ app.post('/api/admin/import-assistant', requireAdmin, importAssistantRateLimiter
   }
 });
 
-app.post('/api/admin/product-suggestions', requireAdmin, async (req, res) => {
+app.post('/api/admin/product-suggestions', requireAdmin, importAssistantRateLimiter, async (req, res) => {
   const { action, title, description, specifications } = req.body || {};
-  if ((action !== 'category' && action !== 'description') || typeof title !== 'string' || !title.trim() || title.length > 500) {
+  if ((action !== 'category' && action !== 'description' && action !== 'title') || typeof title !== 'string' || !title.trim() || title.length > 500) {
     return res.status(400).json({ error: 'Укажите название товара и корректное действие.' });
-  }
-  if (action === 'category') {
-    const categoryName = await resolveCategoryWithAi(title.trim());
-    return res.json({ category_id: resolveCategoryId(categoryName), category_name: categoryName });
   }
   if (typeof description !== 'string' || description.length > 20000 || !Array.isArray(specifications) || specifications.length > 100) {
     return res.status(400).json({ error: 'Описание или характеристики имеют неверный формат.' });
@@ -3195,23 +3219,16 @@ app.post('/api/admin/product-suggestions', requireAdmin, async (req, res) => {
       typeof (item as { value?: unknown }).value === 'string')
     .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) }));
 
-  if (!aiClient) {
-    return res.status(503).json({ error: 'Для улучшения описания требуется настроенный Gemini API.' });
-  }
   try {
-    const response = await Promise.race([
-      aiClient.models.generateContent({
-        model: GEMINI_IMPORT_MODEL,
-        contents: `Перепиши описание товара на понятном русском языке. Используй только подтверждённые данные, ничего не придумывай. Не добавляй цену, доставку или рекламные обещания. Верни только описание.\nНазвание: ${title.trim()}\nИсходное описание: ${description}\nХарактеристики: ${JSON.stringify(safeSpecifications)}`,
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Превышено время ожидания ИИ')), GEMINI_IMPORT_TIMEOUT_MS)),
-    ]);
-    const improved = cleanProductDescription(cleanBannedWordsAndPhrases(response.text || ''));
-    if (!improved.trim()) throw new Error('ИИ вернул пустое описание');
-    return res.json({ description: improved, source: 'gemini' });
+    const suggestion = await requestTokenPlanSuggestion(readTokenPlanKey(), action, {
+      title: title.trim(), description, specifications: safeSpecifications,
+    }, STRICT_ALLOWED_CATEGORIES);
+    if (action === 'category') return res.json({ category_id: resolveCategoryId(suggestion), category_name: suggestion, source: 'tokenplan' });
+    const improved = cleanProductDescription(cleanBannedWordsAndPhrases(suggestion));
+    if (!improved.trim()) throw new Error('TokenPlan вернул пустой результат.');
+    return res.json({ [action]: improved, source: 'tokenplan' });
   } catch (error) {
-    console.error('[Product Description Suggestion]', error);
-    return res.status(503).json({ error: 'Не удалось улучшить описание. Повторите попытку позже.' });
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось получить ответ TokenPlan.' });
   }
 });
 
@@ -3622,9 +3639,16 @@ app.post('/api/add-product', async (req, res) => {
       use_gemini = true,
       preserve_variant_names = false,
       preserve_reviewed_data = false,
+      preserve_source_title = false,
     } = req.body;
 
-    const fullRawText = (raw_html_text || raw_text || '').trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
+    if (typeof raw_html_text !== 'string' || typeof raw_text !== 'string') {
+      return res.status(400).json({ status: 'error', message: 'Некорректный текст страницы.' });
+    }
+    if (raw_html_text.length > MAX_IMPORT_HTML_LENGTH) {
+      return res.status(400).json({ status: 'error', message: 'Код страницы слишком большой: максимум 2 000 000 символов.' });
+    }
+    const fullRawText = raw_html_text.trim() || raw_text.trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
     const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
     if (structured_data && typeof structured_data === 'object' && !Array.isArray(structured_data)) {
       const structuredTitleCandidates = [
@@ -3811,6 +3835,10 @@ app.post('/api/add-product', async (req, res) => {
         aiCategoryTrusted = false;
         if (specificationsToProcess.length === 0 && preserve_reviewed_data !== true) specificationsToProcess = semantic.specifications || [];
       }
+    }
+
+    if (preserve_source_title === true && effectiveTitle) {
+      finalTitle = effectiveTitle;
     }
 
     // Приоритет ручного ввода (если пользователь заполнил поля в расширении вручную)
@@ -4358,7 +4386,22 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     cny_tjs_rate: '1.45',
     somon_district_id: getSetting('somon_district_id', '511'),
     somon_category_config: somonCategoryConfig,
+    tokenplan_key_configured: Boolean(getSetting('tokenplan_api_key_encrypted', '')),
   });
+});
+
+app.post('/api/admin/tokenplan-key', requireAdmin, (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const key: unknown = req.body?.key;
+  if (typeof key !== 'string' || !key.trim() || key.trim().length > 512 || /\s/.test(key.trim())) {
+    return res.status(400).json({ error: 'Введите ключ TokenPlan без пробелов.' });
+  }
+  try {
+    setSetting('tokenplan_api_key_encrypted', encryptTokenPlanKey(key.trim()));
+    return res.json({ success: true });
+  } catch {
+    return res.status(503).json({ error: 'Не удалось сохранить ключ. Проверьте ADMIN_JWT_SECRET и настройки сервера.' });
+  }
 });
 
 app.post('/api/admin/settings', requireAdmin, (req, res) => {

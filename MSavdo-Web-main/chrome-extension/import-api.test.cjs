@@ -14,7 +14,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
   const utils = path.join(temp, "src", "utils");
   fs.mkdirSync(utils, { recursive: true });
   fs.copyFileSync(path.join(project, "server.ts"), path.join(temp, "server.ts"));
-  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "promotions.ts"]) {
+  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "promotions.ts", "tokenPlan.ts"]) {
     fs.copyFileSync(path.join(project, "src", "utils", file), path.join(utils, file));
   }
   fs.symlinkSync(path.join(project, "node_modules"), path.join(temp, "node_modules"), "junction");
@@ -27,7 +27,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     });
   });
   const secret = "local-test-secret-0123456789-abcdefgh";
-  const child = spawn(process.execPath, ["--import", "tsx", "server.ts"], {
+  const child = spawn(process.execPath, ["--require", path.join(project, "chrome-extension", "tokenplan-fixture.cjs"), "--import", "tsx", "server.ts"], {
     cwd: temp,
     env: { ...process.env, NODE_ENV: "development", PORT: String(port), GEMINI_API_KEY: "", ADMIN_JWT_SECRET: secret, ADMIN_TELEGRAM_ALLOWED_IDS: "111,222" },
     stdio: "ignore",
@@ -107,6 +107,30 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(saved.length, 600);
     assert.equal(saved[599].color, "型号599");
     assert.ok(saved.every((item) => item.price_cny === 0 && item.price_tjs === 0));
+    const sourceTitle = "精密螺旋千分测量仪";
+    const html = `<!--${"x".repeat(51000)}-->window.context = ${JSON.stringify({
+      offerDetail: {
+        subject: sourceTitle,
+        featureAttributes: [{ name: "Материал", value: "Пластик" }],
+        skuInfoMap: { "红色": { price: "12", canBookCount: 3, skuId: "sku-red" } },
+      },
+    })};`;
+    const codeResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers,
+      body: JSON.stringify({ raw_html_text: html, use_gemini: false, preserve_variant_names: true, preserve_source_title: true }),
+    });
+    assert.equal(codeResponse.status, 201);
+    const codeResult = await codeResponse.json();
+    assert.equal(codeResult.product.title, sourceTitle);
+    assert.equal(codeResult.product.variants_count, 1);
+    assert.match(codeResult.product.variants[0].color, /Красный/);
+    assert.equal(codeResult.product.variants[0].stock, 3);
+    const largeResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers,
+      body: JSON.stringify({ raw_html_text: "x".repeat(2000001), use_gemini: false }),
+    });
+    assert.equal(largeResponse.status, 400);
+    assert.match((await largeResponse.json()).message, /2 000 000/);
     const invalidCategory = await fetch(`${base}/api/add-product`, {
       method: "POST", headers,
       body: JSON.stringify({ raw_text: "фонарь", manual_title: "Фонарь", use_gemini: false, category_name: "Несуществующая категория" }),
@@ -114,6 +138,38 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(invalidCategory.status, 400);
 
     const cookie = `__Host-msavdo_admin=${header}.${payload}.${signature}`;
+    const keyRequest = { method: "POST", headers: { ...headers, Cookie: cookie }, body: JSON.stringify({ key: "dummy-tokenplan-key" }) };
+    const unauthorizedKey = await fetch(`${base}/api/admin/tokenplan-key`, { ...keyRequest, headers });
+    assert.equal(unauthorizedKey.status, 401);
+    const keyResponse = await fetch(`${base}/api/admin/tokenplan-key`, keyRequest);
+    assert.equal(keyResponse.status, 200);
+    assert.equal(JSON.stringify(await keyResponse.json()).includes("dummy-tokenplan-key"), false);
+    const encryptedKey = db.prepare("SELECT value FROM settings WHERE key = 'tokenplan_api_key_encrypted'").get().value;
+    assert.ok(encryptedKey.startsWith("v1."));
+    assert.equal(encryptedKey.includes("dummy-tokenplan-key"), false);
+    const settingsResponse = await fetch(`${base}/api/admin/settings`, { headers: { Cookie: cookie } });
+    const settings = await settingsResponse.json();
+    assert.equal(settings.tokenplan_key_configured, true);
+    assert.equal(JSON.stringify(settings).includes("dummy-tokenplan-key"), false);
+    const suggestionBody = { title: "太阳能灯", description: "", specifications: [] };
+    const suggest = (action) => fetch(`${base}/api/admin/product-suggestions`, {
+      method: "POST", headers: { ...headers, Cookie: cookie }, body: JSON.stringify({ ...suggestionBody, action }),
+    });
+    const rejectedSuggestion = await suggest("title");
+    assert.equal(rejectedSuggestion.status, 503);
+    assert.match((await rejectedSuggestion.json()).error, /401/);
+    const replaceKey = await fetch(`${base}/api/admin/tokenplan-key`, {
+      ...keyRequest, body: JSON.stringify({ key: "valid-test-key" }),
+    });
+    assert.equal(replaceKey.status, 200);
+    const titleSuggestion = await (await suggest("title")).json();
+    assert.equal(titleSuggestion.title, "Солнечный фонарь");
+    assert.equal(titleSuggestion.source, "tokenplan");
+    const descriptionSuggestion = await (await suggest("description")).json();
+    assert.equal(descriptionSuggestion.description, "Фонарь для кемпинга.");
+    const categorySuggestion = await (await suggest("category")).json();
+    assert.equal(categorySuggestion.category_name, "Туризм, кемпинг и пикник");
+    assert.ok(categorySuggestion.category_id > 0);
     db.prepare("UPDATE products SET status = 'active' WHERE id = ?").run(result.product.id);
     db.prepare("UPDATE product_variants SET price_tjs = 100 WHERE product_id = ?").run(result.product.id);
     const variant = db.prepare("SELECT id FROM product_variants WHERE product_id = ? ORDER BY id LIMIT 1").get(result.product.id);

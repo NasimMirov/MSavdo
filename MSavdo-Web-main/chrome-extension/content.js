@@ -871,7 +871,7 @@
       original_link: window.location.href,
       visual_sku_map: visualSkuMap,
       structured_data: structuredData,
-      use_gemini: true,
+      use_gemini: false,
     };
   }
 
@@ -924,7 +924,7 @@
     Object.assign(summary.style, { margin: "0 0 18px", color: "#475569" });
 
     const disclosure = document.createElement("p");
-    disclosure.textContent = "Быстрый импорт отправляет данные товара на сервер и не использует ключ TokenPlan из окна расширения. Для ИИ, проверки названия, описания и вариантов откройте окно расширения и используйте подготовку товара там.";
+    disclosure.textContent = "Быстрый импорт отправляет данные товара на сервер. Проверьте товар в панели администратора после импорта.";
     Object.assign(disclosure.style, { margin: "0 0 14px", color: "#64748b", fontSize: "12px" });
 
     const status = document.createElement("p");
@@ -967,7 +967,7 @@
           throw new Error(response?.error || "Сервер не сохранил товар");
         }
         status.style.color = "#047857";
-        status.textContent = `Товар импортирован: ${response.product?.title || "успешно"}. Разбор: ${response.analysis_source === "gemini" ? "Gemini" : "локальный (не Gemini)"}. Для редактирования и ИИ-чата откройте окно расширения.`;
+        status.textContent = `Товар импортирован: ${response.product?.title || "успешно"}. Проверьте карточку в панели администратора.`;
         submitButton.textContent = "Импорт завершён";
       } catch (error) {
         status.style.color = "#b91c1c";

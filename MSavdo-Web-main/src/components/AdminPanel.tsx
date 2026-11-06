@@ -118,7 +118,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
-  const [productSuggestionInProgress, setProductSuggestionInProgress] = useState<'category' | 'description' | null>(null);
+  const [productSuggestionInProgress, setProductSuggestionInProgress] = useState<'title' | 'category' | 'description' | null>(null);
   const [categoryEditorProduct, setCategoryEditorProduct] = useState<any | null>(null);
   const [categoryDraftId, setCategoryDraftId] = useState('');
   const [isSavingCategory, setIsSavingCategory] = useState(false);
@@ -273,6 +273,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     somon_category_config: {} as Record<string, { rubric_id: string; attributes_json: string }>,
   });
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [tokenPlanKey, setTokenPlanKey] = useState('');
+  const [tokenPlanKeyConfigured, setTokenPlanKeyConfigured] = useState(false);
+  const [tokenPlanKeyMessage, setTokenPlanKeyMessage] = useState('');
+  const [tokenPlanKeySaving, setTokenPlanKeySaving] = useState(false);
   const hasSomonCategoryConfig = (categoryId: number | null) => {
     if (!categoryId) return false;
     const config = settings.somon_category_config[String(categoryId)];
@@ -414,6 +418,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }).catch(() => {});
     }
     setIsAuthenticated(false);
+    setTokenPlanKey('');
+    setTokenPlanKeyMessage('');
     localStorage.removeItem('msavdo_admin_token');
   };
 
@@ -438,6 +444,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       });
       if (resSet.ok && (resSet.headers.get('content-type') || '').includes('application/json')) {
         const setData = await resSet.json();
+        setTokenPlanKeyConfigured(setData.tokenplan_key_configured === true);
         setSettings({
           whatsapp_phone: setData.whatsapp_phone || '992444431',
           cny_tjs_rate: setData.cny_tjs_rate || '1.45',
@@ -1200,7 +1207,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const handleProductSuggestion = async (action: 'category' | 'description') => {
+  const handleProductSuggestion = async (action: 'title' | 'category' | 'description') => {
     if (!editingProduct || !editingProduct.title.trim()) {
       setProductSaveError('Сначала укажите название товара');
       return;
@@ -1224,18 +1231,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (action === 'category' && (!Number.isSafeInteger(data.category_id) || typeof data.category_name !== 'string')) {
         throw new Error('Сервер вернул некорректную категорию');
       }
-      if (action === 'description' && (typeof data.description !== 'string' || !data.description.trim())) {
-        throw new Error('Сервер вернул пустое описание');
+      if ((action === 'description' || action === 'title') && (typeof data[action] !== 'string' || !data[action].trim())) {
+        throw new Error('Сервер вернул пустой результат');
+      }
+      const current = editingProductRef.current;
+      if (!current || current.id !== snapshot.id || current.title !== snapshot.title ||
+          current.description !== snapshot.description || current.specifications !== snapshot.specifications ||
+          (action === 'category' && current.category_id !== snapshot.category_id)) {
+        setProductSaveError('Данные товара изменились во время запроса. Повторите запрос, чтобы сохранить ваши правки.');
+        return;
       }
       setEditingProduct((current: any) => {
         if (!current || current.id !== snapshot.id || current.title !== snapshot.title ||
-          (action === 'description' && (current.description !== snapshot.description || current.specifications !== snapshot.specifications)) ||
+          current.description !== snapshot.description || current.specifications !== snapshot.specifications ||
           (action === 'category' && current.category_id !== snapshot.category_id)) {
           return current;
         }
         return action === 'category'
           ? { ...current, category_id: data.category_id, category_name: data.category_name }
-          : { ...current, description: data.description };
+          : { ...current, [action]: data[action] };
       });
       showNotice('Рекомендация получена. Проверьте её перед сохранением товара.');
     } catch (error) {
@@ -1243,6 +1257,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setProductSaveError(error instanceof Error ? error.message : 'Не удалось получить рекомендацию');
     } finally {
       setProductSuggestionInProgress(null);
+    }
+  };
+
+  const saveTokenPlanKey = async () => {
+    if (!tokenPlanKey.trim() || /\s/.test(tokenPlanKey.trim())) {
+      setTokenPlanKeyMessage('Введите ключ TokenPlan без пробелов.');
+      return;
+    }
+    setTokenPlanKeySaving(true);
+    setTokenPlanKeyMessage('');
+    try {
+      const response = await adminFetch('/api/admin/tokenplan-key', {
+        method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: tokenPlanKey.trim() }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось сохранить ключ.');
+      setTokenPlanKey('');
+      setTokenPlanKeyConfigured(true);
+      setTokenPlanKeyMessage('Ключ сохранён. Его работоспособность проверяется при запросе к ИИ.');
+    } catch (error) {
+      setTokenPlanKeyMessage(error instanceof Error ? error.message : 'Не удалось сохранить ключ.');
+    } finally {
+      setTokenPlanKeySaving(false);
     }
   };
 
@@ -2617,6 +2655,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* ========================================== */}
       {activeTab === 'settings' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm max-w-2xl">
+          <section className="space-y-2 rounded-2xl border border-purple-200 bg-purple-50 p-4">
+            <label htmlFor="tokenplan-key" className="block font-bold text-slate-800">Ключ TokenPlan для редактора товара</label>
+            <p className="text-xs text-slate-600">Ключ хранится на сервере в зашифрованном виде и не отображается повторно. При запросе название, описание и характеристики отправляются в TokenPlan; расходуются токены.</p>
+            <p className="text-xs text-slate-600">{tokenPlanKeyConfigured ? 'Ключ сохранён; его работоспособность не подтверждена.' : 'Ключ ещё не задан.'}</p>
+            <input id="tokenplan-key" type="password" autoComplete="off" maxLength={512} value={tokenPlanKey}
+              onChange={(event) => setTokenPlanKey(event.target.value)} placeholder="Вставьте новый ключ TokenPlan"
+              className="w-full rounded-xl border border-slate-300 p-3 text-sm" />
+            <button type="button" disabled={tokenPlanKeySaving} onClick={() => void saveTokenPlanKey()}
+              className="rounded-xl bg-purple-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+              {tokenPlanKeySaving ? 'Сохранение…' : 'Сохранить или заменить ключ'}
+            </button>
+            {tokenPlanKeyMessage && <p role="status" className="text-xs text-slate-700">{tokenPlanKeyMessage}</p>}
+          </section>
           <div>
             <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
               <Scale className="w-5 h-5 text-emerald-600" />
@@ -3432,9 +3483,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <form onSubmit={handleSaveProduct} className="space-y-5">
               {/* НАЗВАНИЕ */}
               <div>
-                <label className="block font-bold text-slate-800 mb-1">
+                <div className="flex items-center justify-between mb-1">
+                <label className="block font-bold text-slate-800">
                   Название товара (для клиентской витрины) <span className="text-red-500">*</span>
                 </label>
+                <button type="button" disabled={productSuggestionInProgress !== null} onClick={() => void handleProductSuggestion('title')}
+                  className="rounded-lg bg-purple-100 px-2 py-1 text-[10px] font-bold text-purple-700 disabled:opacity-50">
+                  {productSuggestionInProgress === 'title' ? 'Улучшаем…' : 'Улучшить с ИИ'}
+                </button>
+                </div>
                 <input
                   type="text"
                   required
