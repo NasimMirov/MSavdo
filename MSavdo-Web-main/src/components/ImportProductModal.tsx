@@ -21,7 +21,6 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
   const [htmlCode, setHtmlCode] = useState('');
   const [productLink, setProductLink] = useState('');
   const [jsonText, setJsonText] = useState('');
-  const [basePriceCny, setBasePriceCny] = useState<string>('35');
   const [weightKg, setWeightKg] = useState<string>('0.5');
   const [deliveryType, setDeliveryType] = useState<'order' | 'stock'>('order');
   const [autoSave, setAutoSave] = useState(true);
@@ -263,7 +262,6 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
         body: JSON.stringify({
           html_code: code,
           original_link: productLink.trim(),
-          price_cny: parseFloat(basePriceCny) || 50,
           weight_kg: parseFloat(weightKg) || 0.5,
           delivery_type: deliveryType,
           save_to_catalog: saveDirectly,
@@ -283,7 +281,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
         }, 1800);
       } else {
         setParsedPreview(data.product);
-        setSuccessMsg('✓ Данные страницы успешно извлечены ИИ строго по целевому товару без галлюцинаций!');
+        setSuccessMsg('✓ Данные страницы извлечены. Проверьте название, описание, категорию и варианты перед сохранением.');
       }
     } catch (err: any) {
       setErrorMsg(err.message || 'Сбой при анализе кода страницы');
@@ -455,7 +453,6 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                       onClick={() => {
                         setHtmlCode(sp.code);
                         setProductLink(sp.link);
-                        setBasePriceCny(sp.cny);
                         setWeightKg(sp.weight);
                         setErrorMsg('');
                         setSuccessMsg(`✓ Загружен тестовый код: ${sp.name}`);
@@ -546,8 +543,8 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                 </div>
               </div>
 
-              {/* Дополнительные параметры (ссылка, цена, вес) */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+              {/* Дополнительные параметры */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-200">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 mb-1">
                     Оригинальная ссылка (для сохранения):
@@ -557,18 +554,6 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                     value={productLink}
                     onChange={(e) => setProductLink(e.target.value)}
                     placeholder="https://detail.1688.com/offer/..."
-                    className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-mono text-[11px] focus:ring-1 focus:ring-amber-500 focus:outline-none bg-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Базовая цена CNY (если не указана в SKU):
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={basePriceCny}
-                    onChange={(e) => setBasePriceCny(e.target.value)}
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-mono text-[11px] focus:ring-1 focus:ring-amber-500 focus:outline-none bg-white"
                   />
                 </div>
@@ -678,12 +663,13 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
                         Модификации SKU из skuInfoMap ({parsedPreview.variants.length} шт.):
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {parsedPreview.variants.slice(0, 8).map((v: any, idx: number) => (
+                        {parsedPreview.variants.map((v: any, idx: number) => (
                           <span key={idx} className="px-2 py-1 bg-white border border-slate-200 rounded-md text-[10px] font-mono">
-                            <strong>{v.color}</strong> ({v.size}) — ¥{v.price_cny} → {Number(v.price_tjs || 0).toLocaleString('ru-RU')} TJS | Склад: {v.stock}
+                            <strong>{v.color}</strong> ({v.size})
                           </span>
                         ))}
                       </div>
+                      <p className="text-[10px] text-slate-500">Цены указываются вручную в редакторе перед публикацией.</p>
                     </div>
                   )}
 

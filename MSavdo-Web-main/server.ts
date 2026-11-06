@@ -11,6 +11,7 @@ import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translate
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
 import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
+import { normalizeImportVariants } from './src/utils/importVariants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -331,6 +332,13 @@ db.exec(`
     searches_count INTEGER NOT NULL DEFAULT 0,
     first_searched_at TEXT NOT NULL,
     last_searched_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS customer_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_wish TEXT NOT NULL DEFAULT '',
+    suggestion TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS site_visit_totals (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -977,8 +985,12 @@ function generateBaseSku(categoryId?: number | null): string {
 
 function generateVariantSku(baseSku: string, color?: string, size?: string): string {
   const cleanSize = (size || 'OS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4) || 'SZ';
-  const randomHex = crypto.randomBytes(3).toString('hex').toUpperCase();
-  return `${baseSku}-${cleanSize}-${randomHex}`;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const sku = `${baseSku}-${cleanSize}-${randomHex}`;
+    if (!db.prepare('SELECT 1 FROM product_variants WHERE variant_sku = ?').get(sku)) return sku;
+  }
+  throw new Error('Не удалось создать уникальный артикул варианта');
 }
 
 // ==========================================
@@ -1160,37 +1172,6 @@ function isVerifiedProductDescription(description: string): boolean {
     !/высокое качество|идеальный выбор|надежный|надежная|лучший выбор|покупайте|заказывайте/i.test(text);
 }
 
-function normalizeImportVariants(
-  variants: ParsedVariant[],
-  sourceVariants: ParsedVariant[],
-  categoryName: string,
-  basePriceCny: number,
-  weightKg: number,
-  mainImage = '',
-): Array<ParsedVariant & { weight_kg: number }> {
-  if (isClothingCategory(categoryName)) {
-    return (sourceVariants.length > 0 ? sourceVariants : variants).map((variant) => ({
-      ...variant,
-      weight_kg: Number(variant.weight_kg) > 0 ? Number(variant.weight_kg) : weightKg,
-    }));
-  }
-
-  const sourcePrices = sourceVariants
-    .map((variant) => Number(variant.price_cny))
-    .filter((price) => Number.isFinite(price) && price > 0);
-  const sourceStocks = sourceVariants
-    .map((variant) => Number(variant.stock))
-    .filter((stock) => Number.isFinite(stock) && stock >= 0);
-  return [{
-    color: 'Основной вариант',
-    size: 'Стандарт',
-    price_cny: sourcePrices.length > 0 ? Math.min(...sourcePrices) : basePriceCny,
-    stock: sourceStocks.length > 0 ? sourceStocks.reduce((total, stock) => total + Math.floor(stock), 0) : 0,
-    weight_kg: weightKg,
-    image_url: mainImage || sourceVariants.find((variant) => variant.image_url)?.image_url || '',
-  }];
-}
-
 function cleanRawTitle(raw: string): string {
   return raw
     .replace(/【.*?】/g, '')
@@ -1290,8 +1271,6 @@ async function analyzeProductWithGemini(
     fallback.variants = normalizeImportVariants(
       fallback.variants,
       structuredContext?.variants || [],
-      fallback.category_name,
-      basePriceCny,
       fallback.weight_kg,
     );
     for (const v of fallback.variants) {
@@ -1325,7 +1304,7 @@ async function analyzeProductWithGemini(
 
 ПРИ ПАРСИНГЕ СТРОГО СОБЛЮДАЙ ПРАВИЛА:
 1. Проверяй соответствие заголовка (title), характеристик (featureAttributes) и списка SKU. Все параметры должны относиться ИСКЛЮЧИТЕЛЬНО К ЦЕЛЕВОМУ ТОВАРУ.
-2. Корректно сопоставляй цены и складские остатки для каждого конкретного SKU из массива skuInfoMap или таблицы характеристик.
+2. Сохраняй названия и складские остатки для каждого конкретного SKU из массива skuInfoMap или таблицы характеристик. Цены не рассчитывай.
 3. Если структура данных повреждена или содержит ошибки сериализации, опирайся на видимые текстовые блоки характеристик и таблиц параметров в HTML.
 
 ТРЕБОВАНИЯ К ПОЛЯМ:
@@ -1340,10 +1319,8 @@ async function analyzeProductWithGemini(
    Категория источника (если извлечена): ${JSON.stringify(structuredContext?.categoryHint || 'не указана')}.
    Определяй категорию по самому товару из заголовка и его характеристик. Подсказка категории источника и текст страницы могут содержать общие разделы, рекомендации или товары продавца — не позволяй им перевесить ясное название целевого товара.
 5. "weight_kg": Извлеки вес единицы товара в кг.
-6. "variants": Создавай варианты только для одежды и белья: каждый подтвержденный размер и цвет из SKU должен остаться отдельным вариантом.
-   Для обуви, электроники, комплектующих, товаров дома и всех остальных категорий возвращай один вариант "Основной вариант" / "Стандарт".
-   Вариации не-одежды (цвет, объем, комплектация, фасовка, память и т.п.) сохраняй как подтвержденные характеристики, а не как варианты.
-   - "price_cny": Используй только цену, явно найденную в источнике; не придумывай цену и остаток.
+6. "variants": Для любой категории сохраняй каждый подтвержденный вариант SKU, включая цвет, размер, комплектацию, фасовку и другие отличия.
+   - "price_cny": всегда 0, цены будут назначены вручную.
    - "stock": Реальный остаток из canBookCount / amountOnSale / quantity; если его нет, верни 0.
    - "weight_kg": Вес варианта в кг, если он указан.
    - "image_url": Прямая ссылка на фото только при точном соответствии модификации.
@@ -1356,7 +1333,6 @@ ${skuMapSnippet}
 Используй image_url из visual_sku_map только для соответствующего цвета; не назначай одному цвету изображение другого цвета и не придумывай ссылки. Если соответствие не найдено, оставь image_url пустым.
 
 Заголовок со страницы: "${effectiveTitle}"
-Базовая цена по умолчанию: ${basePriceCny} CNY
 Текстовый слой страницы товара:
 """
 ${textSnippet}
@@ -1458,7 +1434,7 @@ ${textSnippet}
         variants.push({
           color: String(v.color || 'Основной цвет').trim(),
           size: String(v.size || 'Стандарт').trim(),
-          price_cny: parseFloat(v.price_cny) || basePriceCny,
+          price_cny: 0,
           stock: Number.isFinite(Number(v.stock)) && Number(v.stock) >= 0 ? Math.floor(Number(v.stock)) : 0,
           weight_kg: parseFloat(v.weight_kg) || weight_kg,
           image_url: vImg,
@@ -1478,8 +1454,6 @@ ${textSnippet}
     const normalizedVariants = normalizeImportVariants(
       variants,
       structuredContext?.variants || [],
-      category_name,
-      basePriceCny,
       weight_kg,
     );
 
@@ -1503,8 +1477,6 @@ ${textSnippet}
     fb.variants = normalizeImportVariants(
       fb.variants,
       structuredContext?.variants || [],
-      fb.category_name,
-      basePriceCny,
       fb.weight_kg,
     );
     for (const v of fb.variants) {
@@ -1866,6 +1838,30 @@ const searchRateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const feedbackRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+app.post('/api/feedback', feedbackRateLimiter, (req, res) => {
+  const { product_wish: productWish, suggestion } = req.body || {};
+  if (typeof productWish !== 'string' || typeof suggestion !== 'string' ||
+      productWish.length > 2000 || suggestion.length > 2000 ||
+      (!productWish.trim() && !suggestion.trim())) {
+    return res.status(400).json({ error: 'Заполните хотя бы одно поле; не более 2000 символов в каждом.' });
+  }
+  try {
+    db.prepare('INSERT INTO customer_feedback (product_wish, suggestion, created_at) VALUES (?, ?, ?)')
+      .run(productWish.trim(), suggestion.trim(), new Date().toISOString());
+    return res.status(201).json({ success: true });
+  } catch (error) {
+    console.error('[Customer Feedback]', error);
+    return res.status(500).json({ error: 'Не удалось сохранить предложение.' });
+  }
+});
+
 function normalizeSearchQuery(value: unknown): string {
   if (typeof value !== 'string') return '';
   const query = value.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -2005,6 +2001,22 @@ app.use('/api/admin', (req, res, next) => {
   const requestPath = `${req.baseUrl}${req.path}`;
   if (req.method === 'POST' && publicAdminRoutes.has(requestPath)) return next();
   return requireAdmin(req, res, next);
+});
+
+app.get('/api/admin/feedback', (req, res) => {
+  const before = req.query.before === undefined ? null : Number(req.query.before);
+  if (before !== null && (!Number.isSafeInteger(before) || before <= 0)) {
+    return res.status(400).json({ error: 'Некорректный номер страницы.' });
+  }
+  try {
+    const rows = before === null
+      ? db.prepare('SELECT id, product_wish, suggestion, created_at FROM customer_feedback ORDER BY id DESC LIMIT 51').all()
+      : db.prepare('SELECT id, product_wish, suggestion, created_at FROM customer_feedback WHERE id < ? ORDER BY id DESC LIMIT 51').all(before);
+    return res.json({ feedback: rows.slice(0, 50), has_more: rows.length > 50 });
+  } catch (error) {
+    console.error('[Admin Feedback]', error);
+    return res.status(500).json({ error: 'Не удалось загрузить предложения.' });
+  }
 });
 
 app.get('/api/admin/visit-analytics', (req, res) => {
@@ -2883,6 +2895,45 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
   }
 });
 
+app.post('/api/admin/product-suggestions', requireAdmin, async (req, res) => {
+  const { action, title, description, specifications } = req.body || {};
+  if ((action !== 'category' && action !== 'description') || typeof title !== 'string' || !title.trim() || title.length > 500) {
+    return res.status(400).json({ error: 'Укажите название товара и корректное действие.' });
+  }
+  if (action === 'category') {
+    const categoryName = await resolveCategoryWithAi(title.trim());
+    return res.json({ category_id: resolveCategoryId(categoryName), category_name: categoryName });
+  }
+  if (typeof description !== 'string' || description.length > 20000 || !Array.isArray(specifications) || specifications.length > 100) {
+    return res.status(400).json({ error: 'Описание или характеристики имеют неверный формат.' });
+  }
+  const safeSpecifications = specifications
+    .filter((item: unknown): item is { name: string; value: string } =>
+      typeof item === 'object' && item !== null &&
+      typeof (item as { name?: unknown }).name === 'string' &&
+      typeof (item as { value?: unknown }).value === 'string')
+    .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) }));
+
+  if (!aiClient) {
+    return res.status(503).json({ error: 'Для улучшения описания требуется настроенный Gemini API.' });
+  }
+  try {
+    const response = await Promise.race([
+      aiClient.models.generateContent({
+        model: GEMINI_IMPORT_MODEL,
+        contents: `Перепиши описание товара на понятном русском языке. Используй только подтверждённые данные, ничего не придумывай. Не добавляй цену, доставку или рекламные обещания. Верни только описание.\nНазвание: ${title.trim()}\nИсходное описание: ${description}\nХарактеристики: ${JSON.stringify(safeSpecifications)}`,
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Превышено время ожидания ИИ')), GEMINI_IMPORT_TIMEOUT_MS)),
+    ]);
+    const improved = cleanProductDescription(cleanBannedWordsAndPhrases(response.text || ''));
+    if (!improved.trim()) throw new Error('ИИ вернул пустое описание');
+    return res.json({ description: improved, source: 'gemini' });
+  } catch (error) {
+    console.error('[Product Description Suggestion]', error);
+    return res.status(503).json({ error: 'Не удалось улучшить описание. Повторите попытку позже.' });
+  }
+});
+
 // 4. СОЗДАНИЕ ТОВАРА ВРУЧНУЮ В АДМИНКЕ С ИИ-КАТЕГОРИЗАЦИЕЙ
 app.post('/api/admin/products', requireAdmin, async (req, res) => {
   try {
@@ -3077,6 +3128,15 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
       return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
     }
+    const existingStatus = db.prepare('SELECT status FROM products WHERE id = ?').get(id) as { status: string } | undefined;
+    if (existingStatus?.status === 'draft' && status === 'active') {
+      const prices: unknown[] = Array.isArray(variants) && variants.length
+        ? variants.map((variant: any) => variant.price_tjs)
+        : (db.prepare('SELECT price_tjs FROM product_variants WHERE product_id = ?').all(id) as Array<{ price_tjs: number }>).map((variant) => variant.price_tjs);
+      if (!prices.length || prices.some((price) => !Number.isSafeInteger(Number(price)) || Number(price) <= 0)) {
+        return res.status(400).json({ error: 'Перед публикацией укажите цену продажи больше нуля для каждого варианта.' });
+      }
+    }
 
     const cleanTitle = title.trim();
     let cleanDesc = (description || '').trim();
@@ -3265,6 +3325,7 @@ app.post('/api/add-product', async (req, res) => {
       manual_title = '',
       description: inputDesc = '',
       manual_description = '',
+      category_name: requestedCategoryName = '',
       original_link = '',
       images = '',
       visual_sku_map = [],
@@ -3312,7 +3373,6 @@ app.post('/api/add-product', async (req, res) => {
       if (Array.isArray(structured_data.variants)) {
         structuredMedia.variants = structured_data.variants
           .filter((item: any) => item && typeof item === 'object')
-          .slice(0, 500)
           .map((item: any) => ({
             color: typeof item.color === 'string' ? item.color.slice(0, 120) : 'Стандарт',
             size: typeof item.size === 'string' ? item.size.slice(0, 120) : 'Стандарт',
@@ -3339,7 +3399,7 @@ app.post('/api/add-product', async (req, res) => {
           ? `ХАРАКТЕРИСТИКИ ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.specifications.map((item) => `• ${item.name}: ${item.value}`).join('\n')}`
           : '',
         structuredMedia.variants.length
-          ? `ТОЧНЫЕ SKU ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.variants.slice(0, 300).map((item) => `• ${item.color} | ${item.size} | ¥${item.price_cny || 'не указана'} | остаток ${item.stock}`).join('\n')}`
+          ? `ТОЧНЫЕ SKU ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.variants.slice(0, 300).map((item) => `• ${item.color} | ${item.size} | остаток ${item.stock}`).join('\n')}`
           : '',
         structuredMedia.rawSnippetForAi,
       ].filter(Boolean);
@@ -3486,6 +3546,9 @@ app.post('/api/add-product', async (req, res) => {
 
     // Привязываем категорию
     finalCategory = resolveImportSubcategory(finalCategory, finalTitle, structuredMedia, aiCategoryTrusted);
+    if (typeof requestedCategoryName === 'string' && STRICT_ALLOWED_CATEGORIES.includes(requestedCategoryName)) {
+      finalCategory = requestedCategoryName;
+    }
     if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
       finalDesc = buildVerifiedProductDescription(finalTitle, specificationsToProcess);
     }
@@ -3510,10 +3573,7 @@ app.post('/api/add-product', async (req, res) => {
     variantsToProcess = normalizeImportVariants(
       variantsToProcess,
       structuredMedia.variants,
-      finalCategory,
-      baseCny,
       finalWeight,
-      mainImage,
     );
 
     // Сохраняем товар в базу со всеми фото, видео и характеристиками
@@ -3544,10 +3604,10 @@ app.post('/api/add-product', async (req, res) => {
     }
 
     for (const v of variantsToProcess) {
-      const vCny = parseFloat(v.price_cny as any) || baseCny;
+      const vCny = 0;
       const vWeight = normalizeWeightKg(v.weight_kg) || finalWeight;
       const vVolume = Number(v.volume_m3) > 0 ? Number(v.volume_m3) : productVolumeM3;
-      const vPriceTjs = calculateVariantPriceTjs(vCny, vWeight, vVolume);
+      const vPriceTjs = 0;
       const vColor = translateVariantName(v.color || 'Основной вариант');
       const vSize = translateVariantName(v.size || 'Стандарт');
       const parsedStock = Number(v.stock);
@@ -3689,7 +3749,8 @@ app.post('/api/parse-product-html', async (req, res) => {
         ...variant,
         weight_kg: variantWeight,
         volume_m3: variantVolume,
-        price_tjs: calculateVariantPriceTjs(variant.price_cny || baseCny, variantWeight, variantVolume),
+        price_cny: 0,
+        price_tjs: 0,
       };
     });
 
@@ -3698,11 +3759,8 @@ app.post('/api/parse-product-html', async (req, res) => {
     finalVariants = normalizeImportVariants(
       finalVariants,
       structured.variants,
-      analysis.category_name,
-      baseCny,
       finalWeight,
-      mainImg,
-    );
+    ).map((variant) => ({ ...variant, price_cny: 0, price_tjs: 0 }));
 
     // Название и описание: приоритет ручного ввода (если заполнен), иначе ИИ
     let finalTitle = (manual_title && typeof manual_title === 'string' && manual_title.trim())
@@ -3781,10 +3839,10 @@ app.post('/api/parse-product-html', async (req, res) => {
 
       const createdVariants: any[] = [];
       for (const v of finalVariants) {
-        const vCny = parseFloat(v.price_cny as any) || baseCny;
+        const vCny = 0;
         const vWeight = normalizeWeightKg(v.weight_kg) || finalProduct.weight_kg;
         const vVolume = Number(v.volume_m3) > 0 ? Number(v.volume_m3) : finalProduct.volume_m3;
-        const vPriceTjs = calculateVariantPriceTjs(vCny, vWeight, vVolume);
+        const vPriceTjs = 0;
         const vColor = translateVariantName(v.color || 'Основной цвет');
         const vSize = translateVariantName(v.size || 'Стандарт');
         const vStock = parseInt(v.stock as any, 10) || 25;
@@ -3820,7 +3878,7 @@ app.post('/api/parse-product-html', async (req, res) => {
         rules_verified: {
           category_precision: true,
           specifications_count: combinedSpecs.length,
-          sku_prices_matched: true,
+          sku_prices_matched: false,
           data_source: structured.skuInfoMap ? 'window.context (skuInfoMap + featureAttributes)' : 'HTML DOM tables'
         }
       });

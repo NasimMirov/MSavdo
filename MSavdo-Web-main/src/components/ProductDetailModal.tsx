@@ -102,7 +102,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [selectedQuantity, setSelectedQuantity] = useState(1);
   const [isQuantityPickerOpen, setIsQuantityPickerOpen] = useState(false);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
-  const [photoAspectRatio, setPhotoAspectRatio] = useState(1);
 
   const productVideos = useMemo(() => {
     const storedVideos = Array.isArray(product?.video_urls) ? product.video_urls : [];
@@ -239,10 +238,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   }, [activeVariant, mediaSlides, selectedColorImage]);
 
   const currentMedia = mediaSlides[selectedMediaIndex];
-  useEffect(() => {
-    setPhotoAspectRatio(1);
-  }, [product?.id, currentMedia?.src]);
-
   const currentImage = currentMedia?.type === 'photo'
     ? currentMedia.src
     : selectedColorImage || activeVariant?.image_url || product?.main_image || allGalleryImages[0] || '';
@@ -367,7 +362,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           <div className="space-y-1.5 sm:space-y-3">
             {/* Главный блок показа */}
             <div
-              style={{ aspectRatio: currentMedia?.type === 'video' ? '16 / 9' : photoAspectRatio }}
               className="relative w-full aspect-square touch-pan-y overflow-hidden rounded-xl border border-slate-200/80 bg-slate-100 shadow-sm sm:rounded-2xl"
               onTouchStart={(event) => {
                 const touch = event.touches[0];
@@ -409,24 +403,27 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       autoPlay
                       playsInline
                       poster={currentImage}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-contain"
                     />
                   );
                 })()
               ) : (
-                <img
-                  src={currentMedia?.src || currentImage}
-                  alt={product.title}
-                  referrerPolicy="no-referrer"
-                  onLoad={(event) => {
-                    const { naturalWidth, naturalHeight } = event.currentTarget;
-                    if (naturalWidth > 0 && naturalHeight > 0) {
-                      setPhotoAspectRatio(naturalWidth / naturalHeight);
-                    }
-                  }}
-                  onClick={openPhotoZoom}
-                  className="h-full w-full object-contain transition-all duration-300 cursor-zoom-in"
-                />
+                <>
+                  <img
+                    src={currentMedia?.src || currentImage}
+                    alt=""
+                    aria-hidden="true"
+                    referrerPolicy="no-referrer"
+                    className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover blur-xl"
+                  />
+                  <img
+                    src={currentMedia?.src || currentImage}
+                    alt={product.title}
+                    referrerPolicy="no-referrer"
+                    onClick={openPhotoZoom}
+                    className="relative h-full w-full cursor-zoom-in object-contain"
+                  />
+                </>
               )}
               {currentMedia?.type !== 'video' && (
                 <button

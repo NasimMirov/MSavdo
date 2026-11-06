@@ -132,7 +132,6 @@ async function handleImportProduct(payload, sender) {
         .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) })),
       variants: (Array.isArray(sourceStructuredData.variants) ? sourceStructuredData.variants : [])
         .filter((item) => item && typeof item === "object")
-        .slice(0, 500)
         .map((item) => ({
           color: typeof item.color === "string" ? item.color.slice(0, 120) : "",
           size: typeof item.size === "string" ? item.size.slice(0, 120) : "",
@@ -165,9 +164,6 @@ async function handleImportProduct(payload, sender) {
   const priceCny = Number.isFinite(sourcePrice) && sourcePrice > 0
     ? sourcePrice
     : variantPrice;
-  if (!Number.isFinite(priceCny) || priceCny <= 0) {
-    return { success: false, error: "Не удалось определить цену товара в юанях. Проверьте цену на странице и повторите импорт." };
-  }
 
   const endpoint = `${await getServerUrl()}/api/add-product`;
   try {
@@ -183,10 +179,10 @@ async function handleImportProduct(payload, sender) {
         images,
         video_urls: Array.from(new Set([...videoUrls, ...(structuredData?.video_urls || [])])).slice(0, 12),
         visual_sku_map: visualSkuMap,
-        price_cny: priceCny,
+        price_cny: Number.isFinite(priceCny) ? priceCny : 0,
         structured_data: structuredData,
       })
-    });
+    }, 45000);
 
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("application/json")) {

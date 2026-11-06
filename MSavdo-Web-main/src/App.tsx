@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Product, Category, CartItem } from './types';
 import { ProductCard } from './components/ProductCard';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { CartDrawer } from './components/CartDrawer';
 import { RulesView } from './components/RulesView';
 import { ToastContainer, ToastItem } from './components/Toast';
+import { SettingsModal } from './components/SettingsModal';
 import { apiFetch } from './api';
 import { useI18n } from './i18n';
 import { 
@@ -23,8 +24,7 @@ import {
   CheckCircle2,
   ChevronDown,
   SlidersHorizontal,
-  Sun,
-  Moon,
+  Settings,
   Instagram,
   Send,
   Youtube,
@@ -55,10 +55,12 @@ function getCategoryIllustration(name: string): string {
 }
 
 export default function App() {
-  const { language, setLanguage, theme, toggleTheme, t } = useI18n();
+  const { t } = useI18n();
   const [currentView, setCurrentView] = useState<'catalog' | 'rules' | 'admin'>('catalog');
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const closeSettings = useCallback(() => setIsSettingsOpen(false), []);
 
   // Глобальная система всплывающих уведомлений (Toasts)
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -147,7 +149,7 @@ export default function App() {
   };
 
   const whatsappHelpUrl = `https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
-    `Ассаламу Алайкум! ${t('whatsappHelpPrompt')}`
+    'Ассаламу Алайкум!'
   )}`;
 
   // Открытие карточки товара с автоматическим счетчиком просмотров
@@ -711,28 +713,17 @@ export default function App() {
               <div className="ml-auto flex shrink-0 items-center gap-0.5">
                 <button
                   type="button"
-                  onClick={toggleTheme}
-                  aria-label={theme === 'light' ? t('darkTheme') : t('lightTheme')}
-                  title={theme === 'light' ? t('darkTheme') : t('lightTheme')}
+                  onClick={() => setIsSettingsOpen(true)}
+                  aria-label={t('settingsTitle')}
+                  title={t('settingsTitle')}
                   className="flex h-8 w-8 items-center justify-center rounded-full text-slate-950 transition hover:bg-black/10"
                 >
-                  {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+                  <Settings className="h-4 w-4" />
                 </button>
-                <label className="relative flex h-8 items-center rounded-full px-1 text-slate-950 hover:bg-black/10" aria-label={t('language')}>
-                  <select
-                    value={language}
-                    onChange={(event) => setLanguage(event.target.value as typeof language)}
-                    aria-label={t('language')}
-                    className="w-[38px] cursor-pointer appearance-none bg-transparent text-[10px] font-black outline-none"
-                  >
-                    <option value="ru">RU</option>
-                    <option value="tg">TJ</option>
-                    <option value="en">EN</option>
-                  </select>
-                </label>
               </div>
         </div>
       </header>
+      <SettingsModal isOpen={isSettingsOpen} onClose={closeSettings} />
 
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}

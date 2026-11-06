@@ -72,6 +72,13 @@ interface SearchAnalytics {
   has_more: boolean;
 }
 
+interface CustomerFeedback {
+  id: number;
+  product_wish: string;
+  suggestion: string;
+  created_at: string;
+}
+
 declare global {
   interface Window {
     Telegram?: {
@@ -105,11 +112,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
-  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'gemini_ai' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
+  const [productSuggestionInProgress, setProductSuggestionInProgress] = useState<'category' | 'description' | null>(null);
   const [categoryEditorProduct, setCategoryEditorProduct] = useState<any | null>(null);
   const [categoryDraftId, setCategoryDraftId] = useState('');
   const [isSavingCategory, setIsSavingCategory] = useState(false);
@@ -138,6 +146,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
   const [searchAnalytics, setSearchAnalytics] = useState<SearchAnalytics | null>(null);
   const [isLoadingSearches, setIsLoadingSearches] = useState(false);
+  const [customerFeedback, setCustomerFeedback] = useState<CustomerFeedback[]>([]);
+  const [feedbackHasMore, setFeedbackHasMore] = useState(false);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState('');
 
   // Навигатор товаров: поиск, фильтры, сортировка и режим отображения
   const [navSearch, setNavSearch] = useState('');
@@ -463,6 +475,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       console.warn('Ошибка загрузки заказов:', e);
     } finally {
       setIsLoadingOrders(false);
+    }
+  };
+
+  const loadFeedback = async (before?: number) => {
+    setFeedbackLoading(true);
+    setFeedbackError('');
+    try {
+      const response = await adminFetch(`/api/admin/feedback${before ? `?before=${before}` : ''}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data: { feedback: CustomerFeedback[]; has_more: boolean } = await response.json();
+      setCustomerFeedback((previous) => before ? [...previous, ...data.feedback] : data.feedback);
+      setFeedbackHasMore(data.has_more);
+    } catch (error) {
+      console.error('[Admin Feedback]', error);
+      setFeedbackError('Не удалось загрузить предложения. Попробуйте ещё раз.');
+    } finally {
+      setFeedbackLoading(false);
     }
   };
 
@@ -1170,6 +1199,52 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const handleProductSuggestion = async (action: 'category' | 'description') => {
+    if (!editingProduct || !editingProduct.title.trim()) {
+      setProductSaveError('Сначала укажите название товара');
+      return;
+    }
+    const snapshot = editingProduct;
+    setProductSuggestionInProgress(action);
+    setProductSaveError('');
+    try {
+      const response = await adminFetch('/api/admin/product-suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          title: snapshot.title,
+          description: snapshot.description || '',
+          specifications: snapshot.specifications || [],
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось получить рекомендацию');
+      if (action === 'category' && (!Number.isSafeInteger(data.category_id) || typeof data.category_name !== 'string')) {
+        throw new Error('Сервер вернул некорректную категорию');
+      }
+      if (action === 'description' && (typeof data.description !== 'string' || !data.description.trim())) {
+        throw new Error('Сервер вернул пустое описание');
+      }
+      setEditingProduct((current: any) => {
+        if (!current || current.id !== snapshot.id || current.title !== snapshot.title ||
+          (action === 'description' && (current.description !== snapshot.description || current.specifications !== snapshot.specifications)) ||
+          (action === 'category' && current.category_id !== snapshot.category_id)) {
+          return current;
+        }
+        return action === 'category'
+          ? { ...current, category_id: data.category_id, category_name: data.category_name }
+          : { ...current, description: data.description };
+      });
+      showNotice('Рекомендация получена. Проверьте её перед сохранением товара.');
+    } catch (error) {
+      console.error('[Product Suggestion]', error);
+      setProductSaveError(error instanceof Error ? error.message : 'Не удалось получить рекомендацию');
+    } finally {
+      setProductSuggestionInProgress(null);
+    }
+  };
+
   // Сохранение товара в базу
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1355,6 +1430,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         );
         onRefreshCatalog();
         showNotice(`Статус товара ${p.base_sku}: ${newStatus === 'active' ? 'Активен на витрине' : 'Перенесен в черновики'}`);
+      } else {
+        const data = await res.json();
+        showNotice(data.error || 'Не удалось изменить статус товара');
       }
     } catch (err) {
       console.error('Ошибка смены статуса:', err);
@@ -1647,6 +1725,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </button>
 
         <button
+          onClick={() => {
+            setActiveTab('feedback');
+            void loadFeedback();
+          }}
+          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
+            activeTab === 'feedback'
+              ? 'bg-slate-900 text-white'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+          }`}
+        >
+          <MessageSquare className="w-4 h-4 text-emerald-500" />
+          <span>Предложения</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('gemini_ai')}
           className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
             activeTab === 'gemini_ai'
@@ -1674,6 +1767,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* ========================================== */}
       {/* ВКЛАДКА 1: НАВИГАТОР ТОВАРОВ И КАТАЛОГА */}
       {/* ========================================== */}
+      {activeTab === 'feedback' && (
+        <section className="space-y-3 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-bold text-slate-900">Пожелания клиентов</h2>
+            <button type="button" disabled={feedbackLoading} onClick={() => void loadFeedback()}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:opacity-50">
+              Обновить
+            </button>
+          </div>
+          {feedbackError && <p role="alert" className="text-sm text-red-700">{feedbackError}</p>}
+          {feedbackLoading && customerFeedback.length === 0 && <p className="text-sm text-slate-500">Загрузка…</p>}
+          {!feedbackLoading && !feedbackError && customerFeedback.length === 0 && (
+            <p className="text-sm text-slate-500">Предложений пока нет.</p>
+          )}
+          {customerFeedback.map((item) => (
+            <article key={item.id} className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+              <time dateTime={item.created_at} className="block text-xs text-slate-500">
+                {new Date(item.created_at).toLocaleString('ru-RU', { timeZone: 'Asia/Dushanbe' })}
+              </time>
+              {item.product_wish && <div><h3 className="text-xs font-bold text-slate-700">Желаемые товары</h3>
+                <p className="whitespace-pre-wrap break-words text-sm text-slate-900">{item.product_wish}</p></div>}
+              {item.suggestion && <div><h3 className="text-xs font-bold text-slate-700">Улучшение сервиса</h3>
+                <p className="whitespace-pre-wrap break-words text-sm text-slate-900">{item.suggestion}</p></div>}
+            </article>
+          ))}
+          {feedbackHasMore && <button type="button" disabled={feedbackLoading}
+            onClick={() => void loadFeedback(customerFeedback[customerFeedback.length - 1]?.id)}
+            className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold disabled:opacity-50">
+            {feedbackLoading ? 'Загрузка…' : 'Показать ещё'}
+          </button>}
+        </section>
+      )}
       {activeTab === 'products' && (
         <div className="space-y-4">
           
@@ -3314,9 +3439,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <label className="block font-bold text-slate-800">
                     Описание товара (включая характеристики):
                   </label>
-                  <span className="text-[10px] text-slate-500">
-                    Характеристики указываются текстовым списком в описании
-                  </span>
+                  <button type="button" disabled={productSuggestionInProgress !== null} onClick={() => void handleProductSuggestion('description')}
+                    className="rounded-lg bg-purple-100 px-2 py-1 text-[10px] font-bold text-purple-700 disabled:opacity-50">
+                    {productSuggestionInProgress === 'description' ? 'Улучшаем…' : 'Улучшить описание'}
+                  </button>
                 </div>
                 <textarea
                   rows={6}
@@ -3388,10 +3514,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <label className="font-bold text-slate-800 text-xs">Категория каталога</label>
-                    <span className="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <button type="button" disabled={productSuggestionInProgress !== null} onClick={() => void handleProductSuggestion('category')}
+                      className="text-[10px] font-bold text-purple-700 bg-purple-100 border border-purple-200 px-2 py-0.5 rounded-full flex items-center gap-1 disabled:opacity-50">
                       <Sparkles className="w-2.5 h-2.5 text-purple-600" />
-                      <span>ИИ или вручную</span>
-                    </span>
+                      <span>{productSuggestionInProgress === 'category' ? 'Подбираем…' : 'Подобрать категорию'}</span>
+                    </button>
                   </div>
                   <select
                     value={editingProduct.category_id ? String(editingProduct.category_id) : ''}
@@ -3688,7 +3815,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
                 <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
                   {editingProduct.variants?.map((v: any, vIdx: number) => (
-                    <div key={vIdx} className="p-3 bg-slate-50 border border-slate-200 rounded-2xl grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center text-xs">
+                    <div key={vIdx} className="p-2 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-2 sm:grid-cols-12 gap-1.5 items-center text-[11px]">
                       <div className="sm:col-span-3">
                         <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цвет:</span>
                         <input

@@ -11,9 +11,12 @@ export const ExportCodeModal: React.FC<ExportCodeModalProps> = ({ isOpen, onClos
   const [activeTab, setActiveTab] = useState<'manifest' | 'background_js' | 'content_js' | 'popup_html' | 'popup_js' | 'app_py' | 'readme'>('manifest');
   const [copied, setCopied] = useState(false);
   const [liveFiles, setLiveFiles] = useState<Record<string, string>>({});
+  const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
 
   React.useEffect(() => {
     if (isOpen) {
+      setLiveFiles({});
+      setFileErrors({});
       const filesToFetch = [
         { key: 'content_js', file: 'content.js' },
         { key: 'background_js', file: 'background.js' },
@@ -25,13 +28,18 @@ export const ExportCodeModal: React.FC<ExportCodeModalProps> = ({ isOpen, onClos
 
       for (const item of filesToFetch) {
         apiFetch(`/api/extension-file?file=${item.file}`)
-          .then(res => res.text())
-          .then(text => {
-            if (text && text.length > 20) {
-              setLiveFiles(prev => ({ ...prev, [item.key]: text }));
-            }
+          .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.text();
           })
-          .catch(() => {});
+          .then(text => {
+            if (!text.trim()) throw new Error('Файл пуст');
+            setLiveFiles(prev => ({ ...prev, [item.key]: text }));
+          })
+          .catch((error) => {
+            console.error('[Extension File]', item.file, error);
+            setFileErrors(prev => ({ ...prev, [item.key]: 'Не удалось загрузить актуальный файл. Повторно откройте окно.' }));
+          });
       }
     }
   }, [isOpen]);
@@ -622,7 +630,9 @@ def api_ping():
 
   const currentFile = {
     ...files[activeTab],
-    content: liveFiles[activeTab] || files[activeTab].content
+    content: activeTab === 'readme'
+      ? files[activeTab].content
+      : liveFiles[activeTab] || fileErrors[activeTab] || 'Загрузка файла…'
   };
 
   const handleCopy = () => {
@@ -750,6 +760,7 @@ def api_ping():
           <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={handleCopy}
+              disabled={activeTab !== 'readme' && !liveFiles[activeTab]}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 rounded-lg font-semibold transition-colors shadow-xs"
             >
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
@@ -757,6 +768,7 @@ def api_ping():
             </button>
             <button
               onClick={handleDownload}
+              disabled={activeTab !== 'readme' && !liveFiles[activeTab]}
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-colors shadow-xs"
             >
               <Download className="w-3.5 h-3.5" />

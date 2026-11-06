@@ -444,7 +444,7 @@
         }
       }
     }
-    return Array.from(options).slice(0, 100);
+    return Array.from(options);
   }
 
   function extractLikelySizeLabel(value) {
@@ -674,7 +674,6 @@
           image_url: imageUrl || mappedColor?.imageUrl || "",
           sku_id: cleanStructuredText(sku.skuId || sku.specId || skuKey),
         });
-        if (variants.length >= 500) break;
       }
     }
 
@@ -965,9 +964,9 @@
     let payload = null;
     closeButton.addEventListener("click", () => overlay.remove());
     submitButton.addEventListener("click", async () => {
-      if (!payload || !Number.isFinite(payload.price_cny)) {
+      if (!payload) {
         status.style.color = "#b91c1c";
-        status.textContent = "На странице не найдена цена в юанях. Импорт остановлен, чтобы не подставлять цену.";
+        status.textContent = "Не удалось собрать данные страницы.";
         return;
       }
 
@@ -994,14 +993,9 @@
       payload = gatherProductData();
       const variantCount = payload.structured_data?.variants?.length || 0;
       const specificationCount = payload.structured_data?.specifications?.length || 0;
-      summary.textContent = Number.isFinite(payload.price_cny)
-        ? `Цена: ¥${payload.price_cny} · Вариантов: ${variantCount} · Характеристик: ${specificationCount} · Фото: ${payload.images.length} · Видео: ${payload.video_urls.length} · Текст: ${payload.raw_text.length} символов`
-        : `Цена в юанях не найдена · Вариантов: ${variantCount} · Характеристик: ${specificationCount} · Фото: ${payload.images.length} · Видео: ${payload.video_urls.length} · Текст: ${payload.raw_text.length} символов`;
-      submitButton.disabled = !Number.isFinite(payload.price_cny);
-      if (!Number.isFinite(payload.price_cny)) {
-        status.style.color = "#b91c1c";
-        status.textContent = "Импорт недоступен без распознанной цены в юанях.";
-      }
+      summary.textContent = `Вариантов: ${variantCount} · Характеристик: ${specificationCount} · Фото: ${payload.images.length} · Видео: ${payload.video_urls.length} · Текст: ${payload.raw_text.length} символов`;
+      submitButton.disabled = false;
+      status.textContent = "Товар будет сохранён как черновик. Цены назначаются вручную.";
     } catch (error) {
       summary.textContent = `Не удалось собрать данные страницы: ${error.message}`;
     }
