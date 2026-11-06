@@ -200,6 +200,7 @@ async function handleImportProduct(payload, sender) {
       success: true,
       serverUrl: endpoint,
       product: data.product,
+      analysis_source: data.analysis_source,
       message: data.message || "Товар успешно импортирован"
     };
   } catch (error) {
@@ -227,6 +228,59 @@ async function handlePing(targetUrl) {
   }
 }
 
+async function handleImportAssistant(payload, sender) {
+  if (sender.tab || !sender.url?.startsWith(chrome.runtime.getURL(""))) {
+    throw new Error("ИИ-помощник доступен только из окна расширения.");
+  }
+  const base = await getServerUrl();
+  const target = new URL(base);
+  const allowedOrigins = [target.origin];
+  if (target.origin === "https://api.msavdo.shop") {
+    allowedOrigins.push("https://msavdo.shop", "https://www.msavdo.shop");
+  }
+  if (["localhost", "127.0.0.1"].includes(target.hostname)) {
+    allowedOrigins.push(`http://${target.hostname}:5173`);
+  }
+  const tabs = await chrome.tabs.query({});
+  const tab = tabs.find((candidate) => {
+    try { return candidate.id && allowedOrigins.includes(new URL(candidate.url).origin); }
+    catch { return false; }
+  });
+  if (!tab) {
+    throw new Error("Откройте вкладку сайта M.Savdo и войдите в админку на выбранном сервере.");
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    args: [base, allowedOrigins, payload],
+    func: async (server, origins, data) => {
+      if (!origins.includes(location.origin)) return { success: false, error: "Вкладка сайта изменилась. Повторите запрос." };
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 40000);
+      try {
+        const response = await fetch(`${server}/api/admin/import-assistant`, {
+          method: "POST",
+          credentials: "include",
+          redirect: "error",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+          signal: controller.signal,
+        });
+        const body = await response.json();
+        if (!response.ok) return { success: false, error: response.status === 401
+          ? "Войдите в админку на выбранном сервере и повторите запрос."
+          : body.error || `Ошибка сервера: HTTP ${response.status}` };
+        return { success: true, data: body };
+      } catch (error) {
+        return { success: false, error: `Не удалось связаться с ИИ через вкладку сайта: ${error.message}` };
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+  });
+  return results[0]?.result || { success: false, error: "Вкладка сайта не ответила." };
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "importProduct") {
     handleImportProduct(request.payload, sender)
@@ -237,6 +291,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "ping") {
     handlePing(request.url)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === "importAssistant") {
+    handleImportAssistant(request.payload, sender)
       .then(sendResponse)
       .catch((error) => sendResponse({ success: false, error: error.message }));
     return true;

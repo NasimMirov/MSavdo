@@ -727,7 +727,7 @@ export function analyzeSemantically(
     const translatedFallback = cleanedTitle.replace(/[\u4e00-\u9fa5]/g, ' ').replace(/\s+/g, ' ').trim();
     finalTitle = translated.length > 5
       ? translated
-      : (translatedFallback || (fullText.includes('鞋') ? 'Обувь' : 'Товар'));
+      : (translatedFallback || cleanedTitle || (fullText.includes('鞋') ? 'Обувь' : 'Товар'));
   }
 
   // 2. ТОЧНОЕ ОПРЕДЕЛЕНИЕ КАТЕГОРИИ ПО СМЫСЛУ ТОВАРА (БЕЗ ЛОЖНЫХ СРАБАТЫВАНИЙ)

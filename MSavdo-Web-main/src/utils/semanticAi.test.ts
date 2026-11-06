@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractStructuredFromHtmlOrJson, isLikelyProductTitle } from './semanticAi.js';
+import { analyzeSemantically, extractStructuredFromHtmlOrJson, isLikelyProductTitle } from './semanticAi.js';
 
 test('prefers the product subject over a seller company title', () => {
   const parsed = extractStructuredFromHtmlOrJson(`window.context = {
@@ -47,4 +47,9 @@ test('extracts the source product category from structured marketplace data', ()
 test('rejects company names as product titles', () => {
   assert.equal(isLikelyProductTitle('ACME Company Limited'), false);
   assert.equal(isLikelyProductTitle('Мужская хлопковая футболка'), true);
+});
+
+test('preserves untranslated Chinese titles instead of replacing them with a generic product', () => {
+  const title = '精密螺旋千分测量仪';
+  assert.equal(analyzeSemantically('', title).title, title);
 });

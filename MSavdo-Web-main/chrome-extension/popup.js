@@ -1,4 +1,4 @@
-// popup.js — Управление расширением M.Savdo Co-Pilot v5.1.4
+// popup.js — Управление расширением M.Savdo Co-Pilot v5.2.0
 
 document.addEventListener("DOMContentLoaded", async () => {
   const tabSiteType = document.getElementById("tab-site-type");
@@ -16,7 +16,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const presetNode = document.getElementById("preset-node");
   const presetCloud = document.getElementById("preset-cloud");
 
-  const CLOUD_URL = "https://ais-dev-ahmyq45nmycvpjtbn4woji-541461425934.asia-northeast1.run.app";
+  const CLOUD_URL = "https://api.msavdo.shop";
 
   // 1. Получаем активную вкладку
   let currentTab = null;
@@ -143,6 +143,232 @@ document.addEventListener("DOMContentLoaded", async () => {
   const manualDescInput = document.getElementById("manual-description");
   const pageCodeInput = document.getElementById("page-code-input");
   const btnPasteCode = document.getElementById("btn-paste-code");
+  const btnExtract = document.getElementById("btn-extract");
+  const summary = document.getElementById("preview-summary");
+  const categoryInput = document.getElementById("category-name");
+  const variantsList = document.getElementById("variants-list");
+  const specificationsList = document.getElementById("specifications-list");
+  const imagesInput = document.getElementById("images-input");
+  const btnAddVariant = document.getElementById("btn-add-variant");
+  const btnAddSpecification = document.getElementById("btn-add-specification");
+  const chatInput = document.getElementById("chat-message");
+  const chatHistory = document.getElementById("chat-history");
+  const proposalBox = document.getElementById("ai-proposal");
+  const btnAi = document.getElementById("btn-ai");
+  const btnApplyAi = document.getElementById("btn-apply-ai");
+  let payload = null;
+  let proposal = null;
+  let history = [];
+  let revision = 0;
+  let proposalRevision = -1;
+  let userTouched = false;
+  const draftKey = `importDraft:${currentTab?.url || ""}`;
+
+  function saveDraft() {
+    userTouched = true;
+    if (!payload || !currentTab?.url) return;
+    revision += 1;
+    chrome.storage.local.set({ [draftKey]: {
+      url: currentTab.url, payload, title: manualTitleInput.value,
+      description: manualDescInput.value, category: categoryInput.value,
+      pageCode: pageCodeInput.value,
+    } }, () => {
+      if (chrome.runtime.lastError) showStatus(`Не удалось сохранить локальный черновик: ${chrome.runtime.lastError.message}`, "error");
+    });
+  }
+
+  function renderVariants() {
+    variantsList.replaceChildren();
+    const variants = payload?.structured_data?.variants || [];
+    if (!variants.length) variantsList.textContent = "Варианты не найдены; будет создан основной вариант.";
+    variants.forEach((variant, index) => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;margin:3px 0;";
+      for (const [field, label] of [["color", "Вариант"], ["size", "Размер"]]) {
+        const input = document.createElement("input");
+        input.value = variant[field] || "";
+        input.placeholder = label;
+        input.setAttribute("aria-label", `${label} ${index + 1}`);
+        input.maxLength = 120;
+        input.style.cssText = "width:50%;min-width:0;padding:4px;background:#09090b;border:1px solid #3f3f46;color:white;font-size:10px;";
+        input.addEventListener("input", () => { variant[field] = input.value; saveDraft(); });
+        row.appendChild(input);
+      }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `Удалить вариант ${index + 1}`);
+      remove.addEventListener("click", () => { variants.splice(index, 1); renderVariants(); saveDraft(); });
+      row.appendChild(remove);
+      variantsList.appendChild(row);
+    });
+    summary.textContent = `Вариантов: ${variants.length} · Фото: ${payload?.images?.length || 0} · Характеристик: ${payload?.structured_data?.specifications?.length || 0}`;
+  }
+
+  function renderDetails() {
+    imagesInput.value = (payload?.images || []).join("\n");
+    specificationsList.replaceChildren();
+    const specifications = payload?.structured_data?.specifications || [];
+    if (!specifications.length) specificationsList.textContent = "Характеристики не найдены.";
+    specifications.forEach((specification, index) => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;margin:3px 0;";
+      for (const [field, label, maxLength] of [["name", "Название", 120], ["value", "Значение", 500]]) {
+        const input = document.createElement("input");
+        input.value = specification[field] || "";
+        input.setAttribute("aria-label", `${label} характеристики ${index + 1}`);
+        input.maxLength = maxLength;
+        input.style.cssText = "width:50%;min-width:0;padding:4px;background:#09090b;border:1px solid #3f3f46;color:white;font-size:10px;";
+        input.addEventListener("input", () => { specification[field] = input.value; saveDraft(); });
+        row.appendChild(input);
+      }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `Удалить характеристику ${index + 1}`);
+      remove.addEventListener("click", () => { specifications.splice(index, 1); renderDetails(); saveDraft(); });
+      row.appendChild(remove);
+      specificationsList.appendChild(row);
+    });
+  }
+
+  btnAddVariant.addEventListener("click", () => {
+    if (!payload?.structured_data) return showStatus("Сначала извлеките товар со страницы.", "error");
+    payload.structured_data.variants.push({ color: "Новый вариант", size: "Стандарт", stock: 0, price_cny: 0, weight_kg: 0.5, image_url: "", sku_id: "" });
+    renderVariants();
+    saveDraft();
+  });
+  btnAddSpecification.addEventListener("click", () => {
+    if (!payload?.structured_data) return showStatus("Сначала извлеките товар со страницы.", "error");
+    if (payload.structured_data.specifications.length >= 100) return showStatus("Допускается не более 100 характеристик.", "error");
+    payload.structured_data.specifications.push({ name: "", value: "" });
+    renderDetails();
+    saveDraft();
+  });
+  imagesInput.addEventListener("input", () => {
+    if (!payload) return;
+    payload.images = imagesInput.value.split("\n").map((url) => url.trim()).filter(Boolean);
+    if (payload.structured_data) payload.structured_data.images = payload.images;
+    saveDraft();
+  });
+  [manualTitleInput, manualDescInput, categoryInput, pageCodeInput].forEach((input) => input.addEventListener("input", saveDraft));
+  chrome.storage.local.get([draftKey, "importDraft"], (result) => {
+    const draft = result[draftKey] || result.importDraft;
+    if (!payload && !userTouched && draft?.url === currentTab?.url && draft.payload) {
+      payload = draft.payload;
+      manualTitleInput.value = draft.title || "";
+      manualDescInput.value = draft.description || "";
+      categoryInput.value = draft.category || "";
+      pageCodeInput.value = draft.pageCode || "";
+      renderVariants();
+      renderDetails();
+      showStatus("Восстановлен локальный черновик этого товара.", "success");
+    }
+  });
+
+  btnExtract.addEventListener("click", async () => {
+    if (payload && !confirm("Повторное извлечение заменит текущий черновик. Продолжить?")) return;
+    btnExtract.disabled = true;
+    try {
+      const result = await sendMessageToTabWithInjection({ action: "gatherProductData" });
+      if (!result?.success || !result.payload) throw new Error(result?.error || "Данные страницы не получены");
+      payload = result.payload;
+      manualTitleInput.value = payload.structured_data?.title || payload.raw_title || currentTab?.title || "";
+      manualDescInput.value = payload.description || "";
+      categoryInput.value = "";
+      proposal = null;
+      btnApplyAi.hidden = true;
+      proposalBox.textContent = "";
+      history = [];
+      chatHistory.textContent = "";
+      renderVariants();
+      renderDetails();
+      saveDraft();
+      showStatus("Данные извлечены. Проверьте название, описание и варианты; при необходимости попросите ИИ улучшить их.", "success");
+    } catch (error) {
+      showStatus(`Не удалось извлечь товар: ${error.message}`, "error");
+    } finally {
+      btnExtract.disabled = false;
+    }
+  });
+
+  btnAi.addEventListener("click", async () => {
+    if (!payload) return showStatus("Сначала извлеките товар со страницы.", "error");
+    const instruction = chatInput.value.trim();
+    if (!instruction) return showStatus("Напишите запрос ИИ-помощнику.", "error");
+    btnAi.disabled = true;
+    btnApplyAi.hidden = true;
+    proposal = null;
+    proposalBox.textContent = "";
+    const requestRevision = revision;
+    try {
+      const labels = [...new Set((payload.structured_data?.variants || [])
+        .flatMap((variant) => [variant.color, variant.size])
+        .filter((label) => typeof label === "string" && label.trim()))];
+      const batches = [];
+      for (let index = 0; index < labels.length; index += 100) batches.push(labels.slice(index, index + 100));
+      if (!batches.length) batches.push([]);
+      const translations = [];
+      let firstResponse;
+      const sourceText = `Характеристики: ${JSON.stringify(payload.structured_data?.specifications || [])}\n${pageCodeInput.value.trim() || payload.raw_text || ""}`.slice(0, 30000);
+      for (let index = 0; index < batches.length; index += 1) {
+        if (index && index % 14 === 0) {
+          showStatus("Ожидание лимита запросов Gemini; не закрывайте окно расширения.", "success");
+          await new Promise((resolve) => setTimeout(resolve, 60000));
+        }
+        showStatus(`Gemini: обработка группы ${index + 1} из ${batches.length}. Не закрывайте окно.`, "success");
+        const response = await chrome.runtime.sendMessage({
+          action: "importAssistant",
+          payload: {
+            title: manualTitleInput.value.slice(0, 500),
+            description: manualDescInput.value.slice(0, 20000),
+            source_text: sourceText,
+            instruction: instruction.slice(0, 2000),
+            history: history.slice(-6).map((entry) => entry.slice(0, 2000)),
+            variant_labels: batches[index],
+          },
+        });
+        if (!response?.success) throw new Error(response?.error || "ИИ не ответил");
+        if (!firstResponse) firstResponse = response.data;
+        translations.push(...response.data.proposal.variant_labels);
+      }
+      proposal = { ...firstResponse.proposal, labels, translations };
+      proposalRevision = requestRevision;
+      history.push(`Редактор: ${instruction}`, `ИИ: ${firstResponse.reply}`);
+      history = history.slice(-6);
+      chatHistory.textContent = history.join("\n\n");
+      const translatedLabels = labels.map((label, index) => `${label} → ${translations[index]}`).join("\n");
+      proposalBox.textContent = `Предложение Gemini:\n${proposal.title}\n${proposal.description}\nКатегория: ${proposal.category_name}${translatedLabels ? `\nВарианты:\n${translatedLabels}` : ""}`;
+      btnApplyAi.hidden = false;
+      chatInput.value = "";
+      showStatus("Gemini ответил. Проверьте предложение перед применением.", "success");
+    } catch (error) {
+      showStatus(`Ошибка ИИ: ${error.message}`, "error");
+    } finally {
+      btnAi.disabled = false;
+    }
+  });
+
+  btnApplyAi.addEventListener("click", () => {
+    if (!proposal) return;
+    if (revision !== proposalRevision) {
+      showStatus("Данные товара изменились после запроса. Повторите запрос ИИ, чтобы не потерять правки.", "error");
+      return;
+    }
+    manualTitleInput.value = proposal.title;
+    manualDescInput.value = proposal.description;
+    categoryInput.value = proposal.category_name;
+    const translatedLabels = new Map(proposal.labels.map((label, index) => [label, proposal.translations[index]]));
+    for (const variant of payload.structured_data?.variants || []) {
+      if (translatedLabels.has(variant.color)) variant.color = translatedLabels.get(variant.color);
+      if (translatedLabels.has(variant.size)) variant.size = translatedLabels.get(variant.size);
+    }
+    renderVariants();
+    proposal = null;
+    btnApplyAi.hidden = true;
+    saveDraft();
+    showStatus("Предложение применено к предпросмотру. Проверьте его перед сохранением.", "success");
+  });
 
   if (btnPasteCode && pageCodeInput) {
     btnPasteCode.addEventListener("click", async () => {
@@ -150,6 +376,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const text = await navigator.clipboard.readText();
         if (text) {
           pageCodeInput.value = text;
+          saveDraft();
           showStatus("✓ Код страницы успешно вставлен из буфера обмена!", "success");
         }
       } catch (err) {
@@ -158,10 +385,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  // 4. ИМПОРТ ТОВАРА ЧЕРЕЗ ИИ
+  // 4. ИМПОРТ ПРОВЕРЕННОГО ЧЕРНОВИКА
   btnQuickImport.addEventListener("click", async () => {
+    if (!payload) return showStatus("Сначала извлеките товар со страницы.", "error");
+    if (!manualTitleInput.value.trim()) return showStatus("Укажите название товара перед импортом.", "error");
+    if ((payload.structured_data?.variants || []).some((variant) => !variant.color.trim() || !variant.size.trim())) {
+      return showStatus("Укажите название и размер каждого варианта.", "error");
+    }
+    if ((payload.structured_data?.specifications || []).some((item) => !item.name.trim() || !item.value.trim())) {
+      return showStatus("Заполните или удалите незавершённые характеристики.", "error");
+    }
+    if (payload.images.length > 32 || payload.images.some((value) => {
+      try { return !["http:", "https:"].includes(new URL(value).protocol); }
+      catch { return true; }
+    })) return showStatus("Проверьте фотографии: разрешено до 32 корректных ссылок HTTP(S).", "error");
     btnQuickImport.disabled = true;
-    btnQuickImport.innerHTML = "<span>⏳ Анализ ИИ и сохранение...</span>";
+    btnQuickImport.textContent = "Сохранение...";
     hideStatus();
 
     const manualTitle = (manualTitleInput?.value || "").trim();
@@ -169,49 +408,30 @@ document.addEventListener("DOMContentLoaded", async () => {
     const pastedCode = (pageCodeInput?.value || "").trim();
 
     try {
-      let payload = null;
-
-      if (pastedCode && pastedCode.length > 20) {
-        // Если пользователь вставил код страницы вручную
-        payload = {
-          raw_html_text: pastedCode,
-          html_code: pastedCode,
-          manual_title: manualTitle,
-          manual_description: manualDesc,
-          original_link: currentTab?.url || "",
-          price_cny: 50,
-          weight_kg: 0.5,
-          use_gemini: true
-        };
-        showStatus("✓ Анализируем предоставленный исходный код страницы...", "success");
-      } else {
-        // Запрашиваем данные у страницы через content script
-        const dataRes = await sendMessageToTabWithInjection({ action: "gatherProductData" });
-        if (!dataRes || !dataRes.success || !dataRes.payload) {
-          throw new Error(dataRes?.error || "Страница товара не передала данные. Попробуйте вставить код страницы вручную.");
-        }
-        payload = {
-          ...dataRes.payload,
-          manual_title: manualTitle,
-          manual_description: manualDesc
-        };
-        showStatus("✓ Товар распознан со страницы! Отправка на сервер M.Savdo...", "success");
-      }
+      const importPayload = {
+        ...payload,
+        ...(pastedCode ? { raw_html_text: pastedCode } : {}),
+        manual_title: manualTitle,
+        manual_description: manualDesc,
+        category_name: categoryInput.value.trim(),
+        use_gemini: false,
+        preserve_variant_names: true,
+      };
 
       // Отправляем через background worker
-      chrome.runtime.sendMessage({ action: "importProduct", payload }, (res) => {
+      chrome.runtime.sendMessage({ action: "importProduct", payload: importPayload }, (res) => {
         btnQuickImport.disabled = false;
-        btnQuickImport.innerHTML = "<span>Импортировать товар</span>";
+        btnQuickImport.textContent = "Сохранить черновик";
 
         if (res && res.success) {
           showStatus(`✓ <strong>Товар успешно импортирован!</strong><br>• ${res.product?.title || manualTitle || 'Товар добавлен'}<br>• Категория: ${res.product?.category_name || 'Каталог'}<br>• Вариантов: ${res.product?.variants_count || 1} шт.`, "success");
         } else {
-          showStatus(`✕ <strong>Ошибка сохранения:</strong><br>${res?.error || 'Сервер не сохранил товар'}`, "error");
+          showStatus(`✕ <strong>Ошибка сохранения:</strong><br>${res?.error || chrome.runtime.lastError?.message || 'Сервер не сохранил товар'}`, "error");
         }
       });
     } catch (err) {
       btnQuickImport.disabled = false;
-      btnQuickImport.innerHTML = "<span>Импортировать товар</span>";
+      btnQuickImport.textContent = "Сохранить черновик";
       showStatus(`✕ <strong>Ошибка импорта:</strong> ${err.message}<br><small>Вы можете вставить исходный код страницы (HTML / window.context) в поле выше.</small>`, "error");
     }
   });
@@ -232,7 +452,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       btnPing.innerHTML = "<span>⚡ Проверить связь</span>";
 
       if (response && response.success) {
-        showStatus(`✓ <strong>Связь с сервером подтверждена!</strong><br>Сервер по адресу <code>${target}</code> готов принимать товары.`, "success");
+        showStatus(`Связь с сервером подтверждена: ${target}. Ключ Gemini: ${response.data?.gemini_enabled ? "настроен (работоспособность не проверена)" : "не настроен"}.`, "success");
       } else {
         showStatus(`✕ <strong>Сервер не отвечает (${target}):</strong><br>${response?.error || 'Таймаут или ошибка сети'}.<br><small>Убедитесь, что запущен <code>python3 app.py</code> (порт 5000) или Node сервер (порт 3000).</small>`, "error");
       }
@@ -242,7 +462,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   function showStatus(html, type) {
     statusBox.style.display = "block";
     statusBox.className = "status-msg " + (type === "success" ? "status-success" : "status-error");
-    statusBox.innerHTML = html;
+    statusBox.textContent = html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]*>/g, "");
   }
 
   function hideStatus() {

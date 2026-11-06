@@ -6,7 +6,7 @@
 
   const MODAL_ID = "msavdo-smart-import-modal";
   const MAX_TEXT_LENGTH = 30000;
-  const MAX_IMAGES = 12;
+  const MAX_IMAGES = 32;
   const MAX_VIDEOS = 12;
   const EXCLUDED_IMAGE_TOKENS = [
     "logo", "avatar", "qrcode", "qr-code", "banner", "icon", "wangwang",
@@ -536,6 +536,9 @@
 
     return {
       title,
+      description: (document.querySelector('[itemprop="description"]')?.textContent
+        || document.querySelector('meta[property="og:description"]')?.content
+        || document.querySelector('meta[name="description"]')?.content || "").trim().slice(0, 20000),
       title_candidates: [
         document.querySelector("h1")?.innerText || "",
         document.querySelector('meta[property="og:title"]')?.content || "",
@@ -792,10 +795,6 @@
       weight_kg: 0,
     };
     const visualSkuMap = collectVisualSkuMap().slice(0, MAX_IMAGES);
-    const productColors = Array.from(new Set([
-      ...domData.colors,
-      ...visualSkuMap.map((item) => item.raw_color),
-    ])).slice(0, 20);
     const basePrice = getBasePrice(`${domData.price_text}\n${pageText}`);
     const structuredPrice = structuredData.variants
       .map((variant) => variant.price_cny)
@@ -823,21 +822,6 @@
         image_url: visualSkuMap.find((item) => item.raw_color === color)?.image_url || "",
         sku_id: "",
       }));
-    } else if (domData.sizes.length > 0) {
-      const exactStructuredVariants = structuredData.variants.filter((variant) =>
-        variant.size && !/^(?:стандарт|standard)$/i.test(variant.size.trim())
-      );
-      if (exactStructuredVariants.length === 0) {
-        structuredData.variants = domData.sizes.map((size) => ({
-          color: "Стандарт",
-          size,
-          price_cny: priceCny || 0,
-          stock: 0,
-          weight_kg: structuredData.weight_kg || 0.5,
-          image_url: "",
-          sku_id: "",
-        }));
-      }
     }
 
     const mergedSpecs = new Map();
@@ -877,6 +861,7 @@
     return {
       raw_text: rawText,
       raw_title: structuredData.title || document.title || "",
+      description: domData.description,
       price_cny: priceCny,
       images: structuredData.images.slice(0, MAX_IMAGES),
       video_urls: structuredData.video_urls,
@@ -928,7 +913,7 @@
     });
 
     const title = document.createElement("h2");
-    title.textContent = "M.Savdo — Умный ИИ Импорт";
+    title.textContent = "M.Savdo — быстрый импорт";
     Object.assign(title.style, { margin: "0 0 10px", fontSize: "20px" });
 
     const summary = document.createElement("p");
@@ -953,7 +938,7 @@
     const submitButton = document.createElement("button");
     submitButton.type = "button";
     submitButton.disabled = true;
-    submitButton.textContent = "Умный ИИ Импорт";
+    submitButton.textContent = "Импортировать";
     Object.assign(submitButton.style, { padding: "10px 16px", border: "0", borderRadius: "9px", background: "#111827", color: "#fff", fontWeight: "700", cursor: "pointer" });
 
     buttons.append(closeButton, submitButton);
@@ -979,7 +964,7 @@
           throw new Error(response?.error || "Сервер не сохранил товар");
         }
         status.style.color = "#047857";
-        status.textContent = `Товар импортирован: ${response.product?.title || "успешно"}`;
+        status.textContent = `Товар импортирован: ${response.product?.title || "успешно"}. Разбор: ${response.analysis_source === "gemini" ? "Gemini" : "локальный (не Gemini)"}. Для редактирования и ИИ-чата откройте окно расширения.`;
         submitButton.textContent = "Импорт завершён";
       } catch (error) {
         status.style.color = "#b91c1c";

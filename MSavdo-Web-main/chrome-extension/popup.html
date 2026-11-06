@@ -2,13 +2,14 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <title>M.Savdo — AI Merchant Co-Pilot v5.1.4</title>
+  <title>M.Savdo — AI Merchant Co-Pilot v5.2.0</title>
   <style>
     * {
       box-sizing: border-box;
       margin: 0;
       padding: 0;
     }
+    [hidden] { display: none !important; }
     body {
       width: 360px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -359,7 +360,7 @@
         <div class="brand-name">M.<span>SAVDO</span></div>
       </div>
     </div>
-    <div class="badge">Co-Pilot v5.1.4</div>
+    <div class="badge">Co-Pilot v5.2.0</div>
   </div>
 
   <!-- КАРТОЧКА ТЕКУЩЕЙ ВКЛАДКИ -->
@@ -374,8 +375,10 @@
   <!-- Данные товара -->
   <div style="background:#18181b; border:1px solid #27272a; border-radius:12px; padding:10px; margin-bottom:12px;">
     <div style="font-size:11px; font-weight:700; color:#FACC15; margin-bottom:8px; display:flex; align-items:center; gap:5px;">
-      <span>Данные товара <span style="color:#a1a1aa;font-weight:500;">(необязательно)</span></span>
+      <span>Предпросмотр товара</span>
     </div>
+    <button id="btn-extract" type="button" class="action-btn btn-outline">Извлечь данные со страницы</button>
+    <div id="preview-summary" style="color:#a1a1aa;font-size:11px;margin:6px 0;"></div>
     
     <label style="display:block; font-size:10px; color:#a1a1aa; font-weight:600; margin-bottom:3px;">
       Название товара:
@@ -383,7 +386,8 @@
     <input 
       type="text" 
       id="manual-title" 
-      placeholder="Оставьте пустым для автогенерации ИИ"
+      maxlength="500"
+      placeholder="Проверьте название перед импортом"
       style="width:100%; padding:7px 9px; background:#09090b; border:1px solid #3f3f46; border-radius:8px; color:#ffffff; font-size:11px; margin-bottom:8px;"
     />
 
@@ -392,10 +396,39 @@
     </label>
     <textarea 
       id="manual-description" 
+      maxlength="20000"
       rows="2" 
-      placeholder="Оставьте пустым — ИИ сам напишет описание и прикрепит характеристики"
+      placeholder="Отредактируйте описание или предложите ИИ его составить"
       style="width:100%; padding:7px 9px; background:#09090b; border:1px solid #3f3f46; border-radius:8px; color:#ffffff; font-size:11px; margin-bottom:8px; resize:vertical; font-family:inherit;"
     ></textarea>
+
+    <label for="category-name" style="display:block; font-size:10px; color:#a1a1aa; margin-bottom:3px;">Предложенная категория (точное название подкатегории):</label>
+    <input id="category-name" type="text" style="width:100%;padding:7px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;color:white;margin-bottom:8px;">
+    <details>
+      <summary style="cursor:pointer;color:#a1a1aa;font-size:11px;">Варианты товара — изменить названия</summary>
+      <div id="variants-list" style="max-height:200px;overflow:auto;margin-top:6px;"></div>
+      <button id="btn-add-variant" type="button" class="action-btn btn-outline">Добавить вариант</button>
+    </details>
+    <details style="margin-top:7px;">
+      <summary style="cursor:pointer;color:#a1a1aa;font-size:11px;">Фотографии — ссылки, по одной в строке</summary>
+      <textarea id="images-input" rows="4" style="width:100%;margin-top:5px;padding:7px;background:#09090b;border:1px solid #3f3f46;color:white;resize:vertical;"></textarea>
+      <small style="color:#a1a1aa;">До 32 ссылок HTTP(S). Первая — основная фотография.</small>
+    </details>
+    <details style="margin-top:7px;">
+      <summary style="cursor:pointer;color:#a1a1aa;font-size:11px;">Характеристики</summary>
+      <div id="specifications-list" style="max-height:200px;overflow:auto;margin-top:6px;"></div>
+      <button id="btn-add-specification" type="button" class="action-btn btn-outline">Добавить характеристику</button>
+    </details>
+    <div style="border-top:1px solid #27272a;margin-top:8px;padding-top:8px;">
+      <strong style="font-size:11px;color:#FACC15;">ИИ-помощник Gemini</strong>
+      <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Откройте сайт и войдите в админку выбранного сервера. Название, описание, варианты и текст товара отправляются в Gemini. Изменения применяются только после подтверждения.</p>
+      <p style="font-size:10px;color:#a1a1aa;margin:5px 0;">Черновики и данные товаров сохраняются локально в расширении, чтобы не потерять правки при закрытии окна.</p>
+      <div id="chat-history" style="max-height:120px;overflow:auto;white-space:pre-wrap;font-size:11px;color:#e4e4e7;"></div>
+      <textarea id="chat-message" maxlength="2000" rows="2" placeholder="Например: переведи и улучши название и описание" style="width:100%;padding:7px;background:#09090b;border:1px solid #3f3f46;border-radius:8px;color:white;resize:vertical;"></textarea>
+      <button id="btn-ai" type="button" class="action-btn btn-outline" style="margin-top:5px;">Спросить ИИ</button>
+      <div id="ai-proposal" style="white-space:pre-wrap;font-size:11px;color:#e4e4e7;"></div>
+      <button id="btn-apply-ai" type="button" class="action-btn btn-outline" hidden>Применить предложение ИИ</button>
+    </div>
 
     <!-- ПОЛЕ ДЛЯ ВСТАВКИ КОДА СТРАНИЦЫ (ПУНКТ 2) -->
     <details style="border-top:1px solid #27272a; padding-top:6px;">
@@ -404,7 +437,7 @@
       </summary>
       <div style="margin-top:6px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-          <span style="font-size:9px; color:#71717a;">Для идеального разбора без блокировок:</span>
+          <span style="font-size:9px; color:#71717a;">Дополнительный источник для ИИ и сервера; предварительный список берётся со страницы:</span>
           <button id="btn-paste-code" type="button" style="background:#27272a; color:#FACC15; border:1px solid #3f3f46; border-radius:4px; font-size:9px; padding:2px 6px; cursor:pointer;">
             📋 Вставить из буфера
           </button>
@@ -421,7 +454,7 @@
 
   <!-- БЫСТРЫЙ ИМПОРТ ИЗ ОКНА РАСШИРЕНИЯ -->
   <button id="btn-quick-import" class="action-btn btn-fast-import">
-    <span>Импортировать товар</span>
+    <span>Сохранить черновик</span>
   </button>
 
   <!-- ГЛАВНАЯ КНОПКА ОТКРЫТИЯ ПАНЕЛИ -->
@@ -445,7 +478,7 @@
 
   <div id="settings-panel" class="settings-panel">
     <label for="server-url">Адрес сервера M.Savdo:</label>
-    <input type="text" id="server-url" value="http://127.0.0.1:5000">
+    <input type="text" id="server-url" value="http://127.0.0.1:3000">
     <div class="preset-btns">
       <button id="preset-flask">Python :5000</button>
       <button id="preset-node">Node :3000</button>
