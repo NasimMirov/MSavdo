@@ -34,6 +34,39 @@ async function getServerUrl() {
   return DEFAULT_SERVER_URL;
 }
 
+async function getImportKey() {
+  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  const data = await chrome.storage.local.get("importKey");
+  return data.importKey || "";
+}
+
+function isPopup(sender) {
+  return sender.url === chrome.runtime.getURL("popup.html");
+}
+
+async function pairImportKey(key) {
+  if (!/^[a-f0-9]{64}$/.test(key)) throw new Error("Скопируйте ключ привязки из настроек админки.");
+  const response = await fetchWithTimeout(`${await getServerUrl()}/api/extension/import-access`, {
+    headers: { "X-Msavdo-Import-Key": key },
+  });
+  const data = await response.json();
+  if (!response.ok || !data.success) throw new Error(data.error || `Ошибка проверки ключа: HTTP ${response.status}`);
+  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  await chrome.storage.local.set({ importKey: key });
+  return { success: true };
+}
+
+async function importStatus(id) {
+  const key = await getImportKey();
+  if (!key) throw new Error("Расширение не привязано к админке.");
+  const response = await fetchWithTimeout(`${await getServerUrl()}/api/extension/import-status/${id}`, {
+    headers: { "X-Msavdo-Import-Key": key },
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -92,8 +125,7 @@ async function handleImportProduct(payload, sender) {
   }
 
   const images = (Array.isArray(payload.images) ? payload.images : [])
-    .filter((url) => typeof url === "string" && url.length <= 2048)
-    .slice(0, 50);
+    .filter((url) => typeof url === "string" && url.length <= 2048);
   const videoUrls = (Array.isArray(payload.video_urls) ? payload.video_urls : [])
     .filter((url) => typeof url === "string" && url.length <= 2048)
     .slice(0, 12);
@@ -116,13 +148,12 @@ async function handleImportProduct(payload, sender) {
         .map((title) => title.slice(0, 500)),
       specifications: (Array.isArray(sourceStructuredData.specifications) ? sourceStructuredData.specifications : [])
         .filter((item) => item && typeof item.name === "string" && typeof item.value === "string")
-        .slice(0, 100)
-        .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) })),
+        .map((item) => ({ name: item.name, value: item.value })),
       variants: (Array.isArray(sourceStructuredData.variants) ? sourceStructuredData.variants : [])
         .filter((item) => item && typeof item === "object")
         .map((item) => ({
-          color: typeof item.color === "string" ? item.color.slice(0, 120) : "",
-          size: typeof item.size === "string" ? item.size.slice(0, 120) : "",
+          color: typeof item.color === "string" ? item.color : "",
+          size: typeof item.size === "string" ? item.size : "",
           price_cny: Number.isFinite(Number(item.price_cny)) ? Number(item.price_cny) : 0,
           stock: Number.isFinite(Number(item.stock)) ? Number(item.stock) : 0,
           weight_kg: Number.isFinite(Number(item.weight_kg)) ? Number(item.weight_kg) : 0,
@@ -130,8 +161,7 @@ async function handleImportProduct(payload, sender) {
           sku_id: typeof item.sku_id === "string" ? item.sku_id.slice(0, 120) : "",
         })),
       images: (Array.isArray(sourceStructuredData.images) ? sourceStructuredData.images : [])
-        .filter((url) => typeof url === "string" && url.length <= 2048)
-        .slice(0, 32),
+        .filter((url) => typeof url === "string" && url.length <= 2048),
       video_urls: (Array.isArray(sourceStructuredData.video_urls) ? sourceStructuredData.video_urls : [])
         .filter((url) => typeof url === "string" && url.length <= 2048)
         .slice(0, 12),
@@ -143,7 +173,6 @@ async function handleImportProduct(payload, sender) {
 
   const visualSkuMap = (Array.isArray(payload.visual_sku_map) ? payload.visual_sku_map : [])
     .filter((item) => item && typeof item.raw_color === "string" && typeof item.image_url === "string" && item.image_url.length <= 2048)
-    .slice(0, 12)
     .map((item) => ({ raw_color: item.raw_color.slice(0, 120), image_url: item.image_url }));
   const variantPrice = structuredData?.variants.find((variant) => variant.price_cny > 0)?.price_cny;
   const sourcePrice = typeof payload.price_cny === "number" || typeof payload.price_cny === "string"
@@ -155,11 +184,14 @@ async function handleImportProduct(payload, sender) {
 
   const endpoint = `${await getServerUrl()}/api/add-product`;
   try {
+    const importKey = await getImportKey();
+    if (!importKey) return { success: false, needsPairing: true, error: "Сначала привяжите расширение в настройках админки." };
     const response = await fetchWithTimeout(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Accept": "application/json",
+        "X-Msavdo-Import-Key": importKey
       },
       body: JSON.stringify({
         ...payload,
@@ -169,6 +201,9 @@ async function handleImportProduct(payload, sender) {
         visual_sku_map: visualSkuMap,
         price_cny: Number.isFinite(priceCny) ? priceCny : 0,
         structured_data: structuredData,
+        automatic_ai: true,
+        preserve_reviewed_data: true,
+        preserve_variant_names: true,
       })
     }, 45000);
 
@@ -181,6 +216,7 @@ async function handleImportProduct(payload, sender) {
     if (!response.ok || data.status !== "success") {
       return {
         success: false,
+        needsPairing: response.status === 401,
         error: data.message || data.error || `Ошибка сервера: HTTP ${response.status}`
       };
     }
@@ -192,17 +228,25 @@ async function handleImportProduct(payload, sender) {
         error: "Сервер ответил, но не подтвердил создание черновика. Перед повтором проверьте админку msavdo.shop, чтобы не создать дубликат."
       };
     }
+    let storageWarning = "";
+    try {
+      await chrome.storage.local.set({ lastImport: { id: data.product.id, base_sku: data.product.base_sku, title: data.product.title } });
+    } catch (error) {
+      storageWarning = `Не удалось сохранить статус в расширении: ${error.message}`;
+    }
     return {
       success: true,
       serverUrl: endpoint,
       product: data.product,
       analysis_source: data.analysis_source,
+      automatic_ai: data.automatic_ai || { status: "unavailable", message: "Черновик сохранён, но сервер не подтвердил автоматическую обработку ИИ. Проверьте обновление сервера и используйте кнопки ИИ в редакторе." },
+      storageWarning,
       message: data.message || "Товар успешно импортирован"
     };
   } catch (error) {
     return {
       success: false,
-      error: `Не удалось безопасно связаться с сервером ${endpoint}: ${error.message}`
+      error: `Не удалось подтвердить импорт: ${error.message}. Перед повтором проверьте черновики в админке, чтобы не создать дубликат.`
     };
   }
 }
@@ -225,6 +269,19 @@ async function handlePing(targetUrl) {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (["pairImportKey", "getImportSetup", "getImportStatus"].includes(request.action)) {
+    if (!isPopup(sender)) {
+      sendResponse({ success: false, error: "Действие доступно только в окне расширения." });
+      return;
+    }
+    const operation = request.action === "pairImportKey"
+      ? pairImportKey(String(request.key || "").trim())
+      : request.action === "getImportSetup"
+        ? getImportKey().then(async (key) => ({ success: true, paired: Boolean(key), ...(await chrome.storage.local.get("lastImport")) }))
+        : importStatus(request.id).then((status) => ({ success: true, ...status }));
+    operation.then(sendResponse).catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
   if (request.action === "importProduct") {
     handleImportProduct(request.payload, sender)
       .then(sendResponse)

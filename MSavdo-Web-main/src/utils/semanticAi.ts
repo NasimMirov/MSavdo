@@ -198,7 +198,7 @@ export function filterProductImageUrls(values: unknown, limit = 32): string[] {
   return [...urls];
 }
 
-function extractImageUrls(value: unknown): string[] {
+function extractImageUrls(value: unknown, limit = 32): string[] {
   const urls = new Set<string>();
   const visit = (current: unknown, key = '', inImageContext = false) => {
     if (EXCLUDED_PRODUCT_IMAGE_CONTEXT.test(key)) return;
@@ -215,13 +215,14 @@ function extractImageUrls(value: unknown): string[] {
     }
   };
   visit(value);
-  return filterProductImageUrls([...urls]);
+  return filterProductImageUrls([...urls], limit);
 }
 
 function extractVariants(
   skuMap: unknown,
   weightKg: number,
   skuProps: unknown,
+  preserveSource = false,
 ): SemanticVariant[] {
   if (!skuMap || typeof skuMap !== 'object' || Array.isArray(skuMap)) return [];
   const optionNames = new Map<string, string>();
@@ -260,8 +261,8 @@ function extractVariants(
     const parsedStock = Number(stockValue);
     const imageUrl = stringValue(sku.skuImageUrl ?? sku.picUrl ?? sku.imageUrl);
     variants.push({
-      color: translateVariantName(attributes[0] || rawAttributes) || 'Стандарт',
-      size: translateVariantName(attributes.slice(1).join(' / ')) || 'Стандарт',
+      color: (preserveSource ? attributes[0] || rawAttributes : translateVariantName(attributes[0] || rawAttributes)) || 'Стандарт',
+      size: (preserveSource ? attributes.slice(1).join(' / ') : translateVariantName(attributes.slice(1).join(' / '))) || 'Стандарт',
       price_cny: price,
       stock: Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 0,
       weight_kg: weightKg || 0.5,
@@ -517,7 +518,7 @@ export function translateVariantName(chineseText: string): string {
 /**
  * Извлекает структурированные данные из сырого HTML-кода или window.context / __INIT_DATA__
  */
-export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtmlContext {
+export function extractStructuredFromHtmlOrJson(rawInput: string, preserveSource = false): ExtractedHtmlContext {
   const result: ExtractedHtmlContext = {
     images: [],
     videoUrls: [],
@@ -558,7 +559,7 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
     result.title = structuredTitleCandidates
       .map(stringValue)
       .find(isLikelyProductTitle) || '';
-    result.images = extractImageUrls(parsedJson);
+    result.images = extractImageUrls(parsedJson, preserveSource ? Number.MAX_SAFE_INTEGER : 32);
     result.videoUrls = collectVideoUrls(parsedJson);
     result.videoUrl = result.videoUrls[0];
 
@@ -578,24 +579,24 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
           const item = attribute as Record<string, unknown>;
           const name = stringValue(item.name ?? item.attributeName ?? item.propName ?? item.label);
           const value = stringValue(item.value ?? item.attributeValue ?? item.propValue ?? item.values);
-          const normalizedName = name.toLocaleLowerCase();
+          const normalizedName = (preserveSource ? `${name}\u0000${value}` : name).toLocaleLowerCase();
           if (!name || !value || seenSpecifications.has(normalizedName)) continue;
           seenSpecifications.add(normalizedName);
           result.specifications.push({
-            name: translateVariantName(name),
-            value: translateVariantName(value),
+            name: preserveSource ? name : translateVariantName(name),
+            value: preserveSource ? value : translateVariantName(value),
           });
-          if (result.specifications.length >= 100) break;
+          if (!preserveSource && result.specifications.length >= 100) break;
         }
-        if (result.specifications.length >= 100) break;
+        if (!preserveSource && result.specifications.length >= 100) break;
       }
-      if (result.specifications.length >= 100) break;
+      if (!preserveSource && result.specifications.length >= 100) break;
     }
 
     if (skuMap) {
       result.skuInfoMap = skuMap;
       const skuProps = findFieldValue(nestedObjects, ['skuProps', 'skuPropertyList', 'skuAttributes']);
-      result.variants = extractVariants(skuMap, result.weightKg || 0.5, skuProps);
+      result.variants = extractVariants(skuMap, result.weightKg || 0.5, skuProps, preserveSource);
     }
 
     const productCategory = nestedObjects.find((entry) => (
@@ -641,8 +642,8 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
     const imgMatches = rawInput.match(/https?:\/\/[a-z0-9\.\-]*alicdn\.com\/img\/ibank\/[^\s"'<>]+\.(?:jpg|png|webp)/gi);
     if (imgMatches) {
       const unique = filterProductImageUrls(Array.from(new Set(imgMatches))
-        .filter(url => !url.includes('.search.') && !url.includes('_30x30')));
-      result.images = unique.slice(0, 8);
+        .filter(url => !url.includes('.search.') && !url.includes('_30x30')), preserveSource ? Number.MAX_SAFE_INTEGER : 32);
+      result.images = preserveSource ? unique : unique.slice(0, 8);
     }
   }
 
@@ -652,7 +653,7 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
     let match;
     const seenNames = new Set<string>();
 
-    while ((match = attrRegex.exec(rawInput)) !== null && result.specifications.length < 100) {
+    while ((match = attrRegex.exec(rawInput)) !== null && (preserveSource || result.specifications.length < 100)) {
       const block = match[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       if (block.includes('：') || block.includes(':')) {
         const parts = block.split(/[:：]/);
@@ -660,7 +661,7 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
         const v = parts.slice(1).join(':').trim();
         if (k && v && k.length <= 40 && v.length <= 150 && !seenNames.has(k)) {
           seenNames.add(k);
-          result.specifications.push({ name: translateVariantName(k), value: translateVariantName(v) });
+          result.specifications.push({ name: preserveSource ? k : translateVariantName(k), value: preserveSource ? v : translateVariantName(v) });
         }
       }
     }

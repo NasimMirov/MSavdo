@@ -14,7 +14,7 @@ import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { calculatePromotions } from './src/utils/promotions.js';
 import type { Promotion } from './src/utils/promotions.js';
-import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
+import { requestImportText, requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,7 +88,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, X-Msavdo-Import-Key');
   if (req.method === 'OPTIONS') {
     if (isAdminApi && origin && !res.getHeader('Access-Control-Allow-Origin')) {
       return res.sendStatus(403);
@@ -957,6 +957,34 @@ function readTokenPlanKey(): string {
     throw new Error('Не удалось прочитать ключ TokenPlan. Проверьте ADMIN_JWT_SECRET и сохраните ключ заново.');
   }
 }
+
+function validExtensionImportKey(req: express.Request): boolean {
+  const token = req.get('X-Msavdo-Import-Key') || '';
+  const stored = getSetting('extension_import_key_hash', '');
+  if (!/^[a-f0-9]{64}$/.test(token) || !/^[a-f0-9]{64}$/.test(stored)) return false;
+  const digest = crypto.createHash('sha256').update(token).digest();
+  return crypto.timingSafeEqual(digest, Buffer.from(stored, 'hex'));
+}
+
+app.post('/api/admin/extension-import-key', requireAdmin, (_req, res) => {
+  const token = crypto.randomBytes(32).toString('hex');
+  setSetting('extension_import_key_hash', crypto.createHash('sha256').update(token).digest('hex'));
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ key: token });
+});
+
+app.delete('/api/admin/extension-import-key', requireAdmin, (_req, res) => {
+  setSetting('extension_import_key_hash', '');
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ success: true });
+});
+
+app.get('/api/extension/import-access', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  return validExtensionImportKey(req)
+    ? res.json({ success: true })
+    : res.status(401).json({ error: 'Ключ привязки недействителен. Создайте новый ключ в настройках админки.' });
+});
 
 if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('cny_tjs_rate')) {
   setSetting('cny_tjs_rate', '1.45');
@@ -3638,8 +3666,71 @@ app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
   }
 });
 
-// 8. ИНТЕЛЛЕКТУАЛЬНЫЙ ИМПОРТ ИЗ CHROME-РАСШИРЕНИЯ С АНАЛИЗОМ СЫРОГО ТЕКСТА ЧЕРЕЗ GEMINI
-app.post('/api/add-product', async (req, res) => {
+const automaticImportRateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 60,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({ status: 'error', message: 'Достигнут лимит автоматического импорта: 60 товаров в час.' }),
+});
+
+db.exec(`CREATE TABLE IF NOT EXISTS extension_import_jobs (
+  product_id INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  message TEXT NOT NULL
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS extension_import_sources (
+  product_id INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  context TEXT NOT NULL
+)`);
+db.prepare("UPDATE extension_import_jobs SET status = 'failed', message = ? WHERE status IN ('queued', 'processing')")
+  .run('Сервер перезапущен во время обработки. Черновик сохранён; используйте кнопки ИИ в редакторе.');
+
+app.get('/api/extension/import-status/:id', (req, res) => {
+  if (!validExtensionImportKey(req)) return res.status(401).json({ error: 'Ключ привязки недействителен.' });
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Некорректный ID товара.' });
+  const job = db.prepare('SELECT status, message FROM extension_import_jobs WHERE product_id = ?').get(id);
+  if (!job) return res.status(404).json({ error: 'Обработка этого товара не найдена.' });
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json(job);
+});
+
+app.get('/api/admin/products/:id/import-source', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Некорректный ID товара.' });
+  const source = db.prepare('SELECT title, description, context FROM extension_import_sources WHERE product_id = ?').get(id);
+  const job = db.prepare('SELECT status, message FROM extension_import_jobs WHERE product_id = ?').get(id);
+  if (!source) return res.status(404).json({ error: 'Исходные данные импорта не найдены.' });
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ source, job });
+});
+
+const importQueue: Array<() => Promise<void>> = [];
+let processingImport = false;
+async function drainImportQueue(): Promise<void> {
+  if (processingImport) return;
+  processingImport = true;
+  try {
+    while (importQueue.length) {
+      const job = importQueue.shift();
+      if (job) await job();
+    }
+  } finally {
+    processingImport = false;
+  }
+}
+
+// 8. ИНТЕЛЛЕКТУАЛЬНЫЙ ИМПОРТ ИЗ CHROME-РАСШИРЕНИЯ
+app.post('/api/add-product', (req, res, next) => {
+  if (req.body?.automatic_ai !== true) return next();
+  if (!validExtensionImportKey(req)) {
+    return res.status(401).json({ status: 'error', message: 'Привяжите расширение в настройках админки перед импортом.' });
+  }
+  return automaticImportRateLimiter(req, res, next);
+}, async (req, res) => {
   try {
     const {
       raw_html_text = '',
@@ -3666,6 +3757,7 @@ app.post('/api/add-product', async (req, res) => {
       preserve_variant_names = false,
       preserve_reviewed_data = false,
       preserve_source_title = false,
+      automatic_ai = false,
     } = req.body;
 
     if (typeof raw_html_text !== 'string' || typeof raw_text !== 'string') {
@@ -3675,7 +3767,7 @@ app.post('/api/add-product', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'Код страницы слишком большой: максимум 2 000 000 символов.' });
     }
     const fullRawText = raw_html_text.trim() || raw_text.trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
-    const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
+    const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText, automatic_ai === true);
     if (structured_data && typeof structured_data === 'object' && !Array.isArray(structured_data)) {
       const structuredTitleCandidates = [
         structured_data.title,
@@ -3689,15 +3781,14 @@ app.post('/api/add-product', async (req, res) => {
       if (Array.isArray(structured_data.specifications)) {
         structuredMedia.specifications = structured_data.specifications
           .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
-          .slice(0, 100)
           .map((item: any) => {
-            const name = item.name.trim().slice(0, 120);
+            const name = preserve_reviewed_data === true ? item.name.trim() : item.name.trim().slice(0, 120);
             const colorImageMatch = name.match(/^Фото цвета:\s*(.+)$/i);
             return {
               name: preserve_reviewed_data === true ? name : colorImageMatch
                 ? `Фото цвета: ${translateVariantName(colorImageMatch[1])}`
                 : translateVariantName(name),
-              value: preserve_reviewed_data === true ? item.value.trim().slice(0, 500) : colorImageMatch
+              value: preserve_reviewed_data === true ? item.value.trim() : colorImageMatch
                 ? item.value.trim().slice(0, 2048)
                 : translateVariantName(item.value.trim().slice(0, 500)),
             };
@@ -3708,8 +3799,8 @@ app.post('/api/add-product', async (req, res) => {
         structuredMedia.variants = structured_data.variants
           .filter((item: any) => item && typeof item === 'object')
           .map((item: any) => ({
-            color: typeof item.color === 'string' ? item.color.slice(0, 120) : 'Стандарт',
-            size: typeof item.size === 'string' ? item.size.slice(0, 120) : 'Стандарт',
+            color: typeof item.color === 'string' ? (preserve_variant_names === true ? item.color : item.color.slice(0, 120)) : 'Стандарт',
+            size: typeof item.size === 'string' ? (preserve_variant_names === true ? item.size : item.size.slice(0, 120)) : 'Стандарт',
             price_cny: Number.isFinite(Number(item.price_cny)) && Number(item.price_cny) > 0 ? Number(item.price_cny) : 0,
             stock: Number.isFinite(Number(item.stock)) && Number(item.stock) >= 0 ? Math.floor(Number(item.stock)) : 0,
             weight_kg: normalizeWeightKg(item.weight_kg) || 0.5,
@@ -3718,7 +3809,7 @@ app.post('/api/add-product', async (req, res) => {
           }));
       }
       if (Array.isArray(structured_data.images)) {
-        structuredMedia.images = filterProductImageUrls(structured_data.images);
+        structuredMedia.images = filterProductImageUrls(structured_data.images, Number.MAX_SAFE_INTEGER);
       }
       if (Array.isArray(structured_data.video_urls)) {
         structuredMedia.videoUrls = normalizeVideoUrls(structured_data.video_urls).slice(0, 12);
@@ -3782,7 +3873,7 @@ app.post('/api/add-product', async (req, res) => {
     let specificationsToProcess: Array<{ name: string; value: string }> = [];
 
     // Приоритет разбора: Gemini Flash-Lite
-    if (use_gemini !== false && aiClient && fullRawText.length > 0) {
+    if (automatic_ai !== true && use_gemini !== false && aiClient && fullRawText.length > 0) {
       console.log('[Gemini Flash-Lite] Интеллектуальный разбор с привязкой картинок visual_sku_map...');
       const aiAnalysis = await analyzeProductWithGemini(
         structuredMedia.rawSnippetForAi || fullRawText,
@@ -3833,12 +3924,14 @@ app.post('/api/add-product', async (req, res) => {
       ? structuredMedia.specifications
       : [...specificationsToProcess, ...structuredMedia.specifications];
     for (const specification of sourceSpecifications) {
-      const normalizedName = translateVariantName(specification.name).toLocaleLowerCase('ru');
+      const normalizedName = (preserve_reviewed_data === true
+        ? `${specification.name}\u0000${specification.value}`
+        : translateVariantName(specification.name)).toLocaleLowerCase('ru');
       if (normalizedName && !specificationMap.has(normalizedName)) {
         specificationMap.set(normalizedName, specification);
       }
     }
-    specificationsToProcess = [...specificationMap.values()].slice(0, 100);
+    specificationsToProcess = [...specificationMap.values()];
     if (structuredMedia.weightKg) finalWeight = structuredMedia.weightKg;
 
     // Если в названии остались китайские иероглифы или фабричные токены
@@ -3913,7 +4006,7 @@ app.post('/api/add-product', async (req, res) => {
     const cleanImgArr = filterProductImageUrls([
       ...structuredMedia.images,
       ...(Array.isArray(images) ? images : typeof images === 'string' ? images.split(',') : []),
-    ]);
+    ], Number.MAX_SAFE_INTEGER);
     if (cleanImgArr.length > 0) {
       allImages = cleanImgArr.join(',');
       mainImage = cleanImgArr[0] || '';
@@ -3983,10 +4076,71 @@ app.post('/api/add-product', async (req, res) => {
 
     console.log(`✓ Товар успешно создан: ID=${productId}, Артикул=${baseSku}, Вариантов=${createdVariants.length}, Характеристик=${specificationsToProcess.length}`);
 
+    let automaticAi: { status: string; message: string } | undefined;
+    if (automatic_ai === true) {
+      db.prepare('INSERT INTO extension_import_sources (product_id, title, description, context) VALUES (?, ?, ?, ?)')
+        .run(productId, effectiveTitle, typeof inputDesc === 'string' ? inputDesc : '', structuredMedia.rawSnippetForAi || fullRawText.slice(0, MAX_IMPORT_TEXT_LENGTH));
+      const originalTitle = finalTitle;
+      const originalDescription = finalDesc;
+      const credentialHash = getSetting('extension_import_key_hash', '');
+      const promptData = {
+        title: (effectiveTitle || finalTitle).slice(0, 500),
+        description: (typeof inputDesc === 'string' && inputDesc.trim() ? inputDesc : (structuredMedia.rawSnippetForAi || fullRawText || finalDesc)).slice(0, 4000),
+        specifications: specificationsToProcess.slice(0, 30).map((item) => ({
+          name: item.name.slice(0, 80), value: item.value.slice(0, 160),
+        })),
+      };
+      automaticAi = { status: 'queued', message: 'Черновик сохранён, обработка ИИ ожидает очереди.' };
+      db.prepare('INSERT INTO extension_import_jobs (product_id, status, message) VALUES (?, ?, ?)')
+        .run(productId, automaticAi.status, automaticAi.message);
+      importQueue.push(async () => {
+        const setJob = (status: string, message: string) => {
+          db.prepare('UPDATE extension_import_jobs SET status = ?, message = ? WHERE product_id = ?')
+            .run(status, message, productId);
+        };
+        setJob('processing', 'Черновик сохранён, ИИ обрабатывает товар.');
+        try {
+          if (getSetting('extension_import_key_hash', '') !== credentialHash) throw new Error('Ключ привязки отозван или заменён.');
+          const current = db.prepare('SELECT title, description, status FROM products WHERE id = ?').get(productId) as { title: string; description: string; status: string } | undefined;
+          if (!current || current.status !== 'draft' || current.title !== originalTitle || current.description !== originalDescription) {
+            throw new Error('Товар был изменён до обработки. Проверьте его в админке.');
+          }
+          const key = readTokenPlanKey();
+          const improved = await requestImportText(key, promptData);
+          const improvedTitle = cleanBannedWordsAndPhrases(improved.title);
+          const improvedDescription = ensureOrderDeliveryNotice(cleanProductDescription(cleanBannedWordsAndPhrases(improved.description)));
+          if (!improvedTitle || !improvedDescription) throw new Error('ИИ вернул пустое название или описание.');
+          const textUpdate = db.prepare(`
+            UPDATE products SET title = ?, description = ?
+            WHERE id = ? AND status = 'draft' AND title = ? AND description = ?
+          `).run(improvedTitle, improvedDescription, productId, originalTitle, originalDescription);
+          if (Number(textUpdate.changes) !== 1) throw new Error('Товар был изменён во время обработки. Проверьте его в админке.');
+          try {
+            if (getSetting('extension_import_key_hash', '') !== credentialHash) throw new Error('Ключ привязки отозван или заменён.');
+            const suggestedCategory = await requestTokenPlanSuggestion(key, 'category', {
+              title: improvedTitle, description: improvedDescription.slice(0, 4000), specifications: [],
+            }, STRICT_ALLOWED_CATEGORIES, fetch, 100);
+            const categoryUpdate = db.prepare(`
+              UPDATE products SET category_id = ?
+              WHERE id = ? AND status = 'draft' AND title = ? AND description = ? AND category_id = ?
+            `).run(resolveCategoryId(suggestedCategory), productId, improvedTitle, improvedDescription, categoryId);
+            if (Number(categoryUpdate.changes) !== 1) throw new Error('Товар был изменён во время подбора категории.');
+            setJob('completed', 'Название, описание и категория обработаны ИИ. Проверьте товар перед публикацией.');
+          } catch (error) {
+            setJob('partial', `Название и описание улучшены, категория не изменена: ${error instanceof Error ? error.message : 'ошибка ИИ.'} Используйте кнопку категории в редакторе.`);
+          }
+        } catch (error) {
+          setJob('failed', `Черновик сохранён без улучшения ИИ: ${error instanceof Error ? error.message : 'ошибка ИИ.'} Повторите кнопками в редакторе.`);
+        }
+      });
+      setImmediate(() => void drainImportQueue().catch((error) => console.error('[Import AI queue]', error)));
+    }
+
     return res.status(201).json({
       status: 'success',
       message: 'Товар импортирован как скрытый черновик. Опубликуйте его в админ-панели, чтобы он появился в каталоге.',
       analysis_source: analysisSource,
+      automatic_ai: automaticAi,
       product: {
         id: productId,
         base_sku: baseSku,

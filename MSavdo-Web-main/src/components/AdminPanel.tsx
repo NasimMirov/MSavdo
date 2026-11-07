@@ -279,6 +279,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [tokenPlanKeyConfigured, setTokenPlanKeyConfigured] = useState(false);
   const [tokenPlanKeyMessage, setTokenPlanKeyMessage] = useState('');
   const [tokenPlanKeySaving, setTokenPlanKeySaving] = useState(false);
+  const [extensionImportKey, setExtensionImportKey] = useState('');
+  const [extensionKeyMessage, setExtensionKeyMessage] = useState('');
+  const [extensionKeySaving, setExtensionKeySaving] = useState(false);
+  const [importSource, setImportSource] = useState<{ id: number; title: string; description: string; context: string; message: string } | null>(null);
+  const [importSourceLoading, setImportSourceLoading] = useState(false);
   const hasSomonCategoryConfig = (categoryId: number | null) => {
     if (!categoryId) return false;
     const config = settings.somon_category_config[String(categoryId)];
@@ -434,6 +439,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setIsAuthenticated(false);
     setTokenPlanKey('');
     setTokenPlanKeyMessage('');
+    setExtensionImportKey('');
+    setExtensionKeyMessage('');
+    setImportSource(null);
     localStorage.removeItem('msavdo_admin_token');
   };
 
@@ -1254,8 +1262,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         body: JSON.stringify({
           action,
           title: snapshot.title,
-          description: snapshot.description || '',
-          specifications: snapshot.specifications || [],
+          description: (snapshot.description || '').slice(0, 20000),
+          specifications: (snapshot.specifications || []).slice(0, 100),
         }),
       });
       const data = await response.json();
@@ -1313,6 +1321,43 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setTokenPlanKeyMessage(error instanceof Error ? error.message : 'Не удалось сохранить ключ.');
     } finally {
       setTokenPlanKeySaving(false);
+    }
+  };
+
+  const manageExtensionKey = async (revoke: boolean) => {
+    setExtensionKeySaving(true);
+    setExtensionImportKey('');
+    setExtensionKeyMessage('');
+    try {
+      const response = await adminFetch('/api/admin/extension-import-key', {
+        method: revoke ? 'DELETE' : 'POST', cache: 'no-store',
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось изменить ключ привязки.');
+      if (!revoke && (typeof data.key !== 'string' || !/^[a-f0-9]{64}$/.test(data.key))) {
+        throw new Error('Сервер не вернул ключ привязки. Создайте новый ключ.');
+      }
+      if (!revoke) setExtensionImportKey(data.key);
+      setExtensionKeyMessage(revoke ? 'Ключ отозван, расширения отключены.' : 'Скопируйте ключ в расширение. Он показывается только сейчас.');
+    } catch (error) {
+      setExtensionKeyMessage(error instanceof Error ? error.message : 'Не удалось изменить ключ привязки.');
+    } finally {
+      setExtensionKeySaving(false);
+    }
+  };
+
+  const loadImportSource = async (id: number) => {
+    setImportSourceLoading(true);
+    setProductSaveError('');
+    try {
+      const response = await adminFetch(`/api/admin/products/${id}/import-source`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось загрузить исходные данные.');
+      setImportSource({ id, ...data.source, message: data.job?.message || '' });
+    } catch (error) {
+      setProductSaveError(error instanceof Error ? error.message : 'Не удалось загрузить исходные данные.');
+    } finally {
+      setImportSourceLoading(false);
     }
   };
 
@@ -2706,6 +2751,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </button>
             {tokenPlanKeyMessage && <p role="status" className="text-xs text-slate-700">{tokenPlanKeyMessage}</p>}
           </section>
+          <section className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <h3 className="font-bold text-slate-800">Привязка расширения и автоматический ИИ</h3>
+            <p className="text-xs text-slate-600">Создайте отдельный ключ и один раз вставьте его в расширение. Новый ключ отключит все предыдущие привязки. Не передавайте его посторонним.</p>
+            <p className="text-xs text-slate-600">После импорта через расширение черновик сохраняется сразу, затем TokenPlan обрабатывает название и описание и подбирает категорию. Лимит: 60 импортов в час на IP-адрес в одном процессе сервера, счётчик сбрасывается при перезапуске. Запросы расходуют токены.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={extensionKeySaving} onClick={() => void manageExtensionKey(false)} className="rounded-xl bg-slate-800 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">Создать или заменить ключ</button>
+              <button type="button" disabled={extensionKeySaving} onClick={() => void manageExtensionKey(true)} className="rounded-xl border border-red-300 px-4 py-2 text-xs font-bold text-red-700 disabled:opacity-50">Отозвать ключ</button>
+            </div>
+            {extensionImportKey && <input aria-label="Ключ привязки расширения" readOnly value={extensionImportKey} onFocus={(event) => event.currentTarget.select()} className="w-full rounded-xl border border-slate-300 p-3 text-xs" />}
+            {extensionKeyMessage && <p role="status" className="text-xs text-slate-700">{extensionKeyMessage}</p>}
+          </section>
           <div>
             <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
               <Scale className="w-5 h-5 text-emerald-600" />
@@ -3515,6 +3571,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-semibold text-red-700 flex items-center gap-2">
                 <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
                 <span>{productSaveError}</span>
+              </div>
+            )}
+            {editingProduct.id !== 0 && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <button type="button" disabled={importSourceLoading} onClick={() => void loadImportSource(editingProduct.id)}
+                  className="font-bold text-slate-700 disabled:opacity-50">
+                  {importSourceLoading ? 'Загрузка…' : 'Показать исходные данные и статус импорта'}
+                </button>
+                {importSource && importSource.id === editingProduct.id && (
+                  <div className="mt-2 space-y-2 break-words text-slate-700">
+                    <p>{importSource.message}</p>
+                    <p><strong>Исходное название:</strong> {importSource.title || 'Не найдено'}</p>
+                    {importSource.description && <p className="whitespace-pre-wrap"><strong>Исходное описание:</strong> {importSource.description}</p>}
+                    <details><summary>Текст, извлечённый со страницы</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-sans">{importSource.context || 'Не найден'}</pre></details>
+                  </div>
+                )}
               </div>
             )}
 

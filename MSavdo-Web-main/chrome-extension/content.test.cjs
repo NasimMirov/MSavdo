@@ -19,7 +19,11 @@ test("extracts product title and SKU images when page heading is the seller's fa
         },
       },
     } } } }, global: { globalData: { model: {
-      offerDetail: { subject: title, featureAttributes: [{ name: "Material", value: "Plastic" }] },
+      offerDetail: {
+        subject: title,
+        featureAttributes: [{ name: "Material", value: "Plastic" }, ...Array.from({ length: 120 }, (_, i) => ({ name: `Feature ${i}`, value: `Value ${i}` }))],
+        galleryImages: Array.from({ length: 40 }, (_, i) => `https://example.com/product-${i}.jpg`),
+      },
     } } } },
   };
   const script = { textContent: `window.context=(function(b,d){return d})(window.contextPath,${JSON.stringify(root)});` };
@@ -44,7 +48,8 @@ test("extracts product title and SKU images when page heading is the seller's fa
   listener({ action: "gatherProductData" }, {}, (value) => { response = value; });
   assert.equal(response.success, true);
   assert.equal(response.payload.structured_data.title, title);
-  assert.equal(response.payload.structured_data.specifications.length, 1);
+  assert.equal(response.payload.structured_data.specifications.length, 121);
+  assert.ok(response.payload.images.length >= 40);
   assert.equal(response.payload.structured_data.variants.length, 2);
   assert.equal(response.payload.structured_data.variants[0].color, "Large with solar panel");
   assert.equal(response.payload.structured_data.variants[0].image_url, "https://example.com/large.jpg");

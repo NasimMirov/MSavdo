@@ -148,6 +148,49 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(invalidCategory.status, 400);
 
     const cookie = `__Host-msavdo_admin=${header}.${payload}.${signature}`;
+    const pairDenied = await fetch(`${base}/api/admin/extension-import-key`, { method: "POST" });
+    assert.equal(pairDenied.status, 401);
+    const pairResponse = await fetch(`${base}/api/admin/extension-import-key`, { method: "POST", headers: { Cookie: cookie } });
+    assert.equal(pairResponse.status, 200);
+    const importKey = (await pairResponse.json()).key;
+    assert.match(importKey, /^[a-f0-9]{64}$/);
+    assert.notEqual(db.prepare("SELECT value FROM settings WHERE key = 'extension_import_key_hash'").get().value, importKey);
+    const autoSpecs = Array.from({ length: 120 }, (_, i) => ({ name: `参数${i}`, value: i === 119 ? "值".repeat(600) : `值${i}` }));
+    const autoImages = Array.from({ length: 40 }, (_, i) => `https://example.com/product-${i}.jpg`);
+    const autoPayload = {
+      raw_text: "Solar camping light", raw_title: "Solar camping light", description: "原始描述完整",
+      automatic_ai: true, preserve_reviewed_data: true, preserve_variant_names: true,
+      images: autoImages,
+      structured_data: { variants, specifications: autoSpecs },
+    };
+    const countBefore = db.prepare("SELECT COUNT(*) AS count FROM products").get().count;
+    const deniedAuto = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers, body: JSON.stringify(autoPayload),
+    });
+    assert.equal(deniedAuto.status, 401);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM products").get().count, countBefore);
+    assert.equal((await fetch(`${base}/api/extension/import-access`, { headers: { "X-Msavdo-Import-Key": importKey } })).status, 200);
+    const autoHeaders = { ...headers, "X-Msavdo-Import-Key": importKey };
+    const waitForJob = async (id) => {
+      for (let i = 0; i < 100; i++) {
+        const statusResponse = await fetch(`${base}/api/extension/import-status/${id}`, { headers: autoHeaders });
+        assert.equal(statusResponse.status, 200);
+        const job = await statusResponse.json();
+        if (!["queued", "processing"].includes(job.status)) return job;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      assert.fail("automatic import did not finish");
+    };
+    const failedAutoResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers: autoHeaders, body: JSON.stringify(autoPayload),
+    });
+    assert.equal(failedAutoResponse.status, 201);
+    const failedAuto = await failedAutoResponse.json();
+    assert.equal(failedAuto.automatic_ai.status, "queued");
+    const failedJob = await waitForJob(failedAuto.product.id);
+    assert.equal(failedJob.status, "failed");
+    assert.match(failedJob.message, /ключ TokenPlan/);
+    assert.equal(db.prepare("SELECT status FROM products WHERE id = ?").get(failedAuto.product.id).status, "draft");
     const categoryId = db.prepare("SELECT id FROM categories WHERE name = ?").get("Хозяйственные мелочи").id;
     const manualSourceLink = "https://detail.1688.com/offer/123456789.html";
     const createdManually = await fetch(`${base}/api/admin/products`, {
@@ -210,6 +253,78 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const categorySuggestion = await (await suggest("category")).json();
     assert.equal(categorySuggestion.category_name, "Туризм, кемпинг и пикник");
     assert.ok(categorySuggestion.category_id > 0);
+    const autoResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers: autoHeaders, body: JSON.stringify(autoPayload),
+    });
+    assert.equal(autoResponse.status, 201);
+    const auto = await autoResponse.json();
+    assert.equal((await waitForJob(auto.product.id)).status, "completed");
+    const autoSaved = db.prepare("SELECT title, description, specifications, images, category_id FROM products WHERE id = ?").get(auto.product.id);
+    assert.equal(autoSaved.title, "Солнечный фонарь");
+    assert.match(autoSaved.description, /Фонарь для кемпинга/);
+    assert.deepEqual(JSON.parse(autoSaved.specifications), autoSpecs);
+    assert.deepEqual(autoSaved.images.split(","), autoImages);
+    const sourcePath = `${base}/api/admin/products/${auto.product.id}/import-source`;
+    assert.equal((await fetch(sourcePath)).status, 401);
+    const sourceResponse = await fetch(sourcePath, { headers: { Cookie: cookie } });
+    const sourceResult = await sourceResponse.json();
+    assert.equal(sourceResult.source.description, "原始描述完整");
+    assert.equal(sourceResult.source.title, "Solar camping light");
+    assert.equal(sourceResult.job.status, "completed");
+    assert.equal(autoSaved.category_id, categorySuggestion.category_id);
+    const autoVariants = db.prepare("SELECT color, price_cny, price_tjs FROM product_variants WHERE product_id = ? ORDER BY id").all(auto.product.id);
+    assert.equal(autoVariants.length, 600);
+    assert.equal(autoVariants[599].color, "型号599");
+    assert.ok(autoVariants.every((variant) => variant.price_cny === 0 && variant.price_tjs === 0));
+    const automaticHtml = `window.context = ${JSON.stringify({ offerDetail: {
+      subject: "Solar camping light", featureAttributes: autoSpecs, galleryImages: autoImages,
+      skuInfoMap: { "红色": { price: 12, canBookCount: 3, skuId: "red" } },
+    } })};`;
+    const automaticHtmlResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers: autoHeaders, body: JSON.stringify({
+        raw_html_text: automaticHtml, automatic_ai: true, preserve_reviewed_data: true, preserve_variant_names: true,
+      }),
+    });
+    assert.equal(automaticHtmlResponse.status, 201);
+    const automaticHtmlImport = await automaticHtmlResponse.json();
+    assert.equal((await waitForJob(automaticHtmlImport.product.id)).status, "completed");
+    const automaticHtmlSaved = db.prepare("SELECT specifications, images FROM products WHERE id = ?").get(automaticHtmlImport.product.id);
+    assert.ok(autoSpecs.every((spec) => JSON.parse(automaticHtmlSaved.specifications).some((item) => item.name === spec.name && item.value === spec.value)));
+    assert.deepEqual(automaticHtmlSaved.images.split(","), autoImages);
+    const automaticHtmlVariant = db.prepare("SELECT color, price_cny, price_tjs FROM product_variants WHERE product_id = ?").get(automaticHtmlImport.product.id);
+    assert.equal(automaticHtmlVariant.color, "红色");
+    assert.equal(automaticHtmlVariant.price_cny, 0);
+    assert.equal(automaticHtmlVariant.price_tjs, 0);
+    const raceResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers: autoHeaders, body: JSON.stringify({ ...autoPayload, description: "TEST_DELAY" }),
+    });
+    const raceImport = await raceResponse.json();
+    db.prepare("UPDATE products SET title = ? WHERE id = ?").run("Название изменено администратором", raceImport.product.id);
+    const raceJob = await waitForJob(raceImport.product.id);
+    assert.equal(raceJob.status, "failed");
+    assert.match(raceJob.message, /изменён/);
+    assert.equal(db.prepare("SELECT title FROM products WHERE id = ?").get(raceImport.product.id).title, "Название изменено администратором");
+    const partialResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers: autoHeaders, body: JSON.stringify({ ...autoPayload, description: "TEST_CATEGORY_FAILURE" }),
+    });
+    const partialImport = await partialResponse.json();
+    const partialJob = await waitForJob(partialImport.product.id);
+    assert.equal(partialJob.status, "partial");
+    assert.match(partialJob.message, /429/);
+    assert.equal(db.prepare("SELECT title FROM products WHERE id = ?").get(partialImport.product.id).title, "Фонарь без категории");
+    let limited = false;
+    for (let i = 0; i < 60; i++) {
+      const attempt = await fetch(`${base}/api/add-product`, {
+        method: "POST", headers: autoHeaders, body: JSON.stringify({ automatic_ai: true, raw_text: null }),
+      });
+      if (attempt.status === 429) { limited = true; break; }
+      assert.equal(attempt.status, 400);
+    }
+    assert.equal(limited, true);
+    const revoke = await fetch(`${base}/api/admin/extension-import-key`, { method: "DELETE", headers: { Cookie: cookie } });
+    assert.equal(revoke.status, 200);
+    assert.equal((await fetch(`${base}/api/extension/import-access`, { headers: autoHeaders })).status, 401);
+    assert.equal((await fetch(`${base}/api/add-product`, { method: "POST", headers: autoHeaders, body: JSON.stringify(autoPayload) })).status, 401);
     db.prepare("UPDATE products SET status = 'active' WHERE id = ?").run(result.product.id);
     db.prepare("UPDATE product_variants SET price_tjs = 100 WHERE product_id = ?").run(result.product.id);
     const variant = db.prepare("SELECT id FROM product_variants WHERE product_id = ? ORDER BY id LIMIT 1").get(result.product.id);
