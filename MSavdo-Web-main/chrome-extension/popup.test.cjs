@@ -37,7 +37,7 @@ function setup({ failRead = false, importError = "" } = {}) {
     scripting: { executeScript: async () => { injections++; } },
     runtime: { sendMessage(message, callback) {
       requests.push(message);
-      callback(importError ? { success: false, error: importError } : { success: true, product: { title: "Solar camping light", variants_count: 600 } });
+      callback(importError ? { success: false, error: importError } : { success: true, product: { id: 17, base_sku: "MS-17", title: "Solar camping light", variants_count: 600 } });
     } },
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "popup.js"), "utf8"), {
@@ -48,17 +48,19 @@ function setup({ failRead = false, importError = "" } = {}) {
   return { get, requests, source, stats: () => ({ reads, injections }) };
 }
 
-test("reads and imports the current page, retaining all variants without AI", async () => {
+test("reads and imports the current page, leaving server-side product analysis enabled", async () => {
   const { get, requests, stats } = setup({ failRead: true });
   await get("import").click();
   assert.deepEqual(stats(), { reads: 2, injections: 1 });
   assert.equal(requests.length, 1);
   assert.equal(requests[0].action, "importProduct");
-  assert.equal(requests[0].payload.use_gemini, false);
-  assert.equal(requests[0].payload.preserve_source_title, true);
+  assert.equal(requests[0].payload.use_gemini, undefined);
+  assert.equal(requests[0].payload.preserve_source_title, undefined);
   assert.equal(requests[0].payload.structured_data.variants.length, 600);
   assert.equal(requests[0].payload.structured_data.variants[599].sku_id, "sku-599");
   assert.match(get("status").textContent, /черновики/);
+  assert.match(get("status").textContent, /msavdo\.shop/);
+  assert.match(get("status").textContent, /MS-17/);
 });
 
 test("imports pasted code without reading the tab and reports server errors", async () => {
@@ -68,7 +70,7 @@ test("imports pasted code without reading the tab and reports server errors", as
   assert.equal(stats().reads, 0);
   assert.equal(requests[0].payload.raw_html_text, get("page-code").value);
   assert.equal(requests[0].payload.original_link, "https://detail.1688.com/offer/123.html");
-  assert.equal(requests[0].payload.use_gemini, false);
+  assert.equal(requests[0].payload.use_gemini, undefined);
   assert.equal(requests[0].payload.structured_data, undefined);
   assert.match(get("status").textContent, /Ошибка сервера/);
   assert.equal(get("page-code").value, requests[0].payload.raw_html_text);

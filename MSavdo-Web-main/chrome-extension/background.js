@@ -1,4 +1,4 @@
-const DEFAULT_SERVER_URL = "https://api.msavdo.shop";
+const DEFAULT_SERVER_URL = "https://msavdo.shop";
 const MARKETPLACE_DOMAINS = [
   "1688.com",
   "yangkeduo.com",
@@ -7,18 +7,6 @@ const MARKETPLACE_DOMAINS = [
   "tmall.com",
   "alibaba.com"
 ];
-
-function getStoredServerUrl() {
-  return new Promise((resolve, reject) => {
-    chrome.storage.local.get(["serverUrl"], (result) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-        return;
-      }
-      resolve(result.serverUrl || DEFAULT_SERVER_URL);
-    });
-  });
-}
 
 function normalizeServerBase(rawUrl) {
   let url;
@@ -43,7 +31,7 @@ function normalizeServerBase(rawUrl) {
 }
 
 async function getServerUrl() {
-  return normalizeServerBase(await getStoredServerUrl());
+  return DEFAULT_SERVER_URL;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
@@ -194,6 +182,14 @@ async function handleImportProduct(payload, sender) {
       return {
         success: false,
         error: data.message || data.error || `Ошибка сервера: HTTP ${response.status}`
+      };
+    }
+    if (!Number.isSafeInteger(data.product?.id) || data.product.id <= 0 ||
+        typeof data.product.base_sku !== "string" || !data.product.base_sku.trim() ||
+        data.product.status !== "draft") {
+      return {
+        success: false,
+        error: "Сервер ответил, но не подтвердил создание черновика. Перед повтором проверьте админку msavdo.shop, чтобы не создать дубликат."
       };
     }
     return {

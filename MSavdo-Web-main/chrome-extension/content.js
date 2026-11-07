@@ -871,7 +871,6 @@
       original_link: window.location.href,
       visual_sku_map: visualSkuMap,
       structured_data: structuredData,
-      use_gemini: false,
     };
   }
 
@@ -967,7 +966,7 @@
           throw new Error(response?.error || "Сервер не сохранил товар");
         }
         status.style.color = "#047857";
-        status.textContent = `Товар импортирован: ${response.product?.title || "успешно"}. Проверьте карточку в панели администратора.`;
+        status.textContent = `Товар сохранён в черновики msavdo.shop: ${response.product.title}. Артикул: ${response.product.base_sku}, ID: ${response.product.id}.`;
         submitButton.textContent = "Импорт завершён";
       } catch (error) {
         status.style.color = "#b91c1c";

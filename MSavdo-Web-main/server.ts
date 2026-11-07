@@ -1243,6 +1243,19 @@ function fallbackAnalysis(rawText: string, rawTitle?: string, baseCny: number = 
   return analysis;
 }
 
+function normalizeProductSourceLink(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 2048) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  try {
+    const url = new URL(trimmed);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return undefined;
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
 interface VisualSkuItem {
   raw_color: string;
   image_url: string;
@@ -3246,12 +3259,17 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       video_url = '',
       video_urls = [],
       youtube_url = '',
+      original_link = '',
       specifications = [],
       variants = [],
     } = req.body;
 
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
+    }
+    const cleanSourceLink = normalizeProductSourceLink(original_link);
+    if (cleanSourceLink === undefined) {
+      return res.status(400).json({ error: 'Укажите корректную ссылку товара с HTTP или HTTPS.' });
     }
     const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '';
     const explicitCategory = hasRequestedCategory ? findExplicitCategory(requestedCategoryId) : null;
@@ -3312,9 +3330,9 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     const baseSku = generateBaseSku(categoryId);
 
     const insertProd = db.prepare(`
-      INSERT INTO products (title, description, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(cleanTitle, cleanDesc, categoryId, baseSku, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs);
+      INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, baseSku, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs);
 
     const productId = Number(insertProd.lastInsertRowid);
 
@@ -3402,6 +3420,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       title,
       category_id: requestedCategoryId,
       description = '',
+      original_link,
       delivery_type = 'order',
       status = 'active',
       main_image = '',
@@ -3417,6 +3436,10 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
 
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
+    }
+    const requestedSourceLink = original_link === undefined ? undefined : normalizeProductSourceLink(original_link);
+    if (original_link !== undefined && requestedSourceLink === undefined) {
+      return res.status(400).json({ error: 'Укажите корректную ссылку товара с HTTP или HTTPS.' });
     }
     const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '';
     const explicitCategory = hasRequestedCategory ? findExplicitCategory(requestedCategoryId) : null;
@@ -3481,8 +3504,11 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     }
 
     // Получаем текущий базовый артикул
-    const existingProd = db.prepare('SELECT base_sku, specifications FROM products WHERE id = ?').get(id) as { base_sku: string; specifications: string | null } | undefined;
+    const existingProd = db.prepare('SELECT base_sku, specifications, original_link FROM products WHERE id = ?').get(id) as { base_sku: string; specifications: string | null; original_link: string | null } | undefined;
     const baseSku = existingProd ? existingProd.base_sku : generateBaseSku(categoryId);
+    const cleanSourceLink = requestedSourceLink === undefined
+      ? (existingProd?.original_link || '')
+      : requestedSourceLink;
     const volumeFromSpecs = extractShippingMetrics(
       parseSpecifications(cleanSpecs ?? existingProd?.specifications),
     ).volumeM3;
@@ -3490,10 +3516,10 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     // Обновляем карточку товара
     db.prepare(`
       UPDATE products
-      SET title = ?, description = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, video_urls = ?, youtube_url = ?, video_first = ?,
+      SET title = ?, description = ?, original_link = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, video_urls = ?, youtube_url = ?, video_first = ?,
           specifications = CASE WHEN ? IS NOT NULL THEN ? ELSE specifications END
       WHERE id = ?
-    `).run(cleanTitle, cleanDesc, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs, id);
+    `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs, id);
 
     // Если передан полный обновленный массив вариантов: синхронизируем матрицу
     if (Array.isArray(variants) && variants.length > 0) {
@@ -3767,7 +3793,7 @@ app.post('/api/add-product', async (req, res) => {
         structuredMedia,
       );
       finalTitle = aiAnalysis.title || effectiveTitle;
-      finalDesc = inputDesc || aiAnalysis.description;
+      finalDesc = manual_description || aiAnalysis.description || inputDesc;
       finalCategory = aiAnalysis.category_name;
       aiCategoryTrusted = aiAnalysis.source === 'gemini';
       analysisSource = aiAnalysis.source || 'fallback';

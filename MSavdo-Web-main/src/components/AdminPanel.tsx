@@ -115,6 +115,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Состояния админки
   const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'promotions' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
+  const [adminProductsError, setAdminProductsError] = useState('');
+  const productsRequestRef = useRef(0);
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
@@ -411,6 +413,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (isAuthenticated) loadAdminData();
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const refreshVisibleProducts = () => {
+      if (document.visibilityState === 'visible') void loadAdminProducts();
+    };
+    document.addEventListener('visibilitychange', refreshVisibleProducts);
+    return () => {
+      document.removeEventListener('visibilitychange', refreshVisibleProducts);
+      productsRequestRef.current += 1;
+    };
+  }, [isAuthenticated]);
+
   const handleLogout = () => {
     if (isAuthenticated) {
       adminFetch('/api/admin/logout', {
@@ -423,22 +437,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     localStorage.removeItem('msavdo_admin_token');
   };
 
+  const loadAdminProducts = async () => {
+    const requestId = ++productsRequestRef.current;
+    try {
+      const resProd = await adminFetch('/api/admin/products', { cache: 'no-store' });
+      if (requestId !== productsRequestRef.current) return false;
+      if (resProd.status === 401) {
+        handleLogout();
+        return false;
+      }
+      if (!resProd.ok) throw new Error(`Сервер ответил HTTP ${resProd.status}.`);
+      if (!(resProd.headers.get('content-type') || '').includes('application/json')) {
+        throw new Error('Сервер вернул неверный формат данных.');
+      }
+      const prodData = await resProd.json();
+      if (!Array.isArray(prodData.products)) throw new Error('Сервер не вернул список товаров.');
+      if (requestId !== productsRequestRef.current) return false;
+      setAdminProducts(prodData.products);
+      setAdminProductsError('');
+      return true;
+    } catch (error) {
+      if (requestId === productsRequestRef.current) {
+        setAdminProductsError(`Не удалось обновить товары: ${error instanceof Error ? error.message : 'ошибка сети.'}`);
+      }
+      return false;
+    }
+  };
+
   const loadAdminData = async () => {
     if (!isAuthenticated) return;
     setIsLoading(true);
     try {
-      // Загрузка товаров с конфиденциальными полями (CNY, оригинальные ссылки, спецификации)
-      const resProd = await adminFetch('/api/admin/products', {
-      });
-      if (resProd.status === 401) {
-        handleLogout();
-        return;
-      }
-      if (resProd.ok && (resProd.headers.get('content-type') || '').includes('application/json')) {
-        const prodData = await resProd.json();
-        setAdminProducts(prodData.products || []);
-      }
-
+      if (!await loadAdminProducts()) return;
       // Настройки
       const resSet = await adminFetch('/api/admin/settings', {
       });
@@ -713,6 +743,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       base_sku: 'MS-НОВЫЙ',
       title: '',
       description: '',
+      original_link: '',
       delivery_type: 'order',
       status: 'active',
       category_id: null,
@@ -812,6 +843,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       base_sku: p.base_sku,
       title: p.title,
       description: p.description || '',
+      original_link: p.original_link || '',
       delivery_type: p.delivery_type || 'order',
       status: p.status || 'active',
       category_id: p.category_id,
@@ -1301,6 +1333,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         title: editingProduct.title.trim(),
         category_id: editingProduct.category_id || null,
         description: editingProduct.description || '',
+        original_link: editingProduct.original_link || '',
         delivery_type: editingProduct.delivery_type || 'order',
         status: editingProduct.status || 'active',
         main_image: editingProduct.main_image || (editingProduct.images?.[0] || ''),
@@ -1846,6 +1879,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       )}
       {activeTab === 'products' && (
         <div className="space-y-4">
+          {adminProductsError && (
+            <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">
+              {adminProductsError} Показанный список может быть устаревшим. Нажмите «Обновить данные».
+            </div>
+          )}
           
           {/* Сводные KPI метрики каталога */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -3577,6 +3615,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </label>
                 </div>
               </div>
+
+              {editingProduct.delivery_type === 'order' && (
+                <div>
+                  <label htmlFor="product-source-link" className="mb-1 block font-bold text-slate-800">
+                    Ссылка на товар для заказа
+                  </label>
+                  <input
+                    id="product-source-link"
+                    type="url"
+                    maxLength={2048}
+                    value={editingProduct.original_link || ''}
+                    onChange={(e) => setEditingProduct({ ...editingProduct, original_link: e.target.value })}
+                    placeholder="https://detail.1688.com/offer/..."
+                    className="w-full rounded-xl border border-slate-300 p-2.5 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                  <p className="mt-1 text-[10px] text-slate-500">
+                    Ссылка сохраняется в карточке и доступна менеджеру для выкупа товара.
+                  </p>
+                </div>
+              )}
 
               {/* КАТЕГОРИЯ И СТАТУС */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

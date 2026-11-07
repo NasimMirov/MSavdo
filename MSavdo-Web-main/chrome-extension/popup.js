@@ -50,11 +50,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const result = await importProduct({
         ...payload,
         original_link: tab.url,
-        use_gemini: false,
         preserve_variant_names: true,
-        preserve_source_title: true,
       });
-      showStatus(`Товар импортирован в черновики: ${result.product?.title || "товар"}. Вариантов: ${result.product?.variants_count ?? 0}.`, "success");
+      showStatus(`Товар сохранён в черновики msavdo.shop: ${result.product.title}\nАртикул: ${result.product.base_sku} · ID: ${result.product.id}\nОткройте админку msavdo.shop и выберите «Черновики».`, "success");
     } catch (error) {
       showStatus(`Ошибка импорта: ${error.message}`, "error");
     } finally {

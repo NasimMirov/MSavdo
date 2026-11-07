@@ -13,31 +13,37 @@ test("extension service worker no longer handles AI and key messages", () => {
   }
 });
 
-test("imports long pasted code using the default server and rejects unsupported pages", async () => {
+test("imports to the main catalog even when an old server address is saved", async () => {
   let listener;
   let sent;
+  let responseBody = { status: "success", product: { id: 17, base_sku: "MS-17", status: "draft" } };
   const chrome = {
     runtime: {
       getURL: () => "chrome-extension://test/",
       onMessage: { addListener(fn) { listener = fn; } },
     },
-    storage: { local: { get: (_keys, callback) => callback({}) } },
+    storage: { local: { get: (_keys, callback) => callback({ serverUrl: "https://api.msavdo.shop" }) } },
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "background.js"), "utf8"), {
     chrome, URL, AbortController, setTimeout, clearTimeout,
     fetch: async (url, options) => {
       sent = { url, body: JSON.parse(options.body) };
-      return { ok: true, headers: { get: () => "application/json" }, json: async () => ({ status: "success", product: {} }) };
+      return { ok: true, headers: { get: () => "application/json" }, json: async () => responseBody };
     },
   });
   const send = (payload) => new Promise((resolve) => {
     listener({ action: "importProduct", payload }, { url: "chrome-extension://test/popup.html" }, resolve);
   });
   const code = "x".repeat(210000);
-  const result = await send({ raw_html_text: code, original_link: "https://detail.1688.com/offer/123.html", use_gemini: false });
+  const result = await send({ raw_html_text: code, original_link: "https://detail.1688.com/offer/123.html" });
   assert.equal(result.success, true);
-  assert.equal(sent.url, "https://api.msavdo.shop/api/add-product");
+  assert.equal(sent.url, "https://msavdo.shop/api/add-product");
   assert.equal(sent.body.raw_html_text.length, code.length);
+  assert.equal(result.product.id, 17);
+  responseBody = { status: "success", product: {} };
+  const unconfirmed = await send({ raw_html_text: code, original_link: "https://detail.1688.com/offer/123.html" });
+  assert.equal(unconfirmed.success, false);
+  assert.match(unconfirmed.error, /не подтвердил создание черновика/);
   const invalid = await send({ raw_html_text: code, original_link: "https://example.com/" });
   assert.equal(invalid.success, false);
   assert.match(invalid.error, /маркетплейсов/);

@@ -107,6 +107,16 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(saved.length, 600);
     assert.equal(saved[599].color, "型号599");
     assert.ok(saved.every((item) => item.price_cny === 0 && item.price_tjs === 0));
+    const adminProductsResponse = await fetch(`${base}/api/admin/products`, {
+      headers: { Cookie: `__Host-msavdo_admin=${header}.${payload}.${signature}` },
+    });
+    assert.equal(adminProductsResponse.status, 200);
+    const adminProducts = (await adminProductsResponse.json()).products;
+    const importedDraft = adminProducts.find((product) => product.id === result.product.id);
+    assert.ok(importedDraft, "the imported product must appear in the admin catalog");
+    assert.equal(importedDraft.status, "draft");
+    assert.equal(importedDraft.base_sku, result.product.base_sku);
+    assert.equal(importedDraft.variants.length, 600);
     const sourceTitle = "精密螺旋千分测量仪";
     const html = `<!--${"x".repeat(51000)}-->window.context = ${JSON.stringify({
       offerDetail: {
@@ -138,6 +148,36 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(invalidCategory.status, 400);
 
     const cookie = `__Host-msavdo_admin=${header}.${payload}.${signature}`;
+    const categoryId = db.prepare("SELECT id FROM categories WHERE name = ?").get("Хозяйственные мелочи").id;
+    const manualSourceLink = "https://detail.1688.com/offer/123456789.html";
+    const createdManually = await fetch(`${base}/api/admin/products`, {
+      method: "POST", headers: { ...headers, Cookie: cookie },
+      body: JSON.stringify({
+        title: "Ручной заказ товара", description: "Описание товара для ручного заказа.",
+        category_id: categoryId, delivery_type: "order", original_link: manualSourceLink,
+      }),
+    });
+    assert.equal(createdManually.status, 201);
+    const manualProduct = await createdManually.json();
+    assert.equal(db.prepare("SELECT original_link FROM products WHERE id = ?").get(manualProduct.product.id).original_link, manualSourceLink);
+    const updatedSourceLink = "https://detail.1688.com/offer/987654321.html";
+    const updateManual = await fetch(`${base}/api/admin/products/${manualProduct.product.id}`, {
+      method: "PUT", headers: { ...headers, Cookie: cookie },
+      body: JSON.stringify({
+        title: "Ручной заказ товара", description: "Описание товара для ручного заказа.",
+        category_id: categoryId, delivery_type: "order", status: "active",
+        original_link: updatedSourceLink, images: [], specifications: [],
+      }),
+    });
+    assert.equal(updateManual.status, 200);
+    assert.equal(db.prepare("SELECT original_link FROM products WHERE id = ?").get(manualProduct.product.id).original_link, updatedSourceLink);
+    const invalidSourceLink = await fetch(`${base}/api/admin/products/${manualProduct.product.id}`, {
+      method: "PUT", headers: { ...headers, Cookie: cookie },
+      body: JSON.stringify({
+        title: "Ручной заказ товара", category_id: categoryId, original_link: "javascript:alert(1)",
+      }),
+    });
+    assert.equal(invalidSourceLink.status, 400);
     const keyRequest = { method: "POST", headers: { ...headers, Cookie: cookie }, body: JSON.stringify({ key: "dummy-tokenplan-key" }) };
     const unauthorizedKey = await fetch(`${base}/api/admin/tokenplan-key`, { ...keyRequest, headers });
     assert.equal(unauthorizedKey.status, 401);
