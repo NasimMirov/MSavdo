@@ -20,6 +20,7 @@ import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { calculatePromotions } from './src/utils/promotions.js';
 import type { Promotion } from './src/utils/promotions.js';
 import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
+import { restoreCatalogSnapshot } from './src/utils/catalogSnapshotRestore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1219,6 +1220,22 @@ if (countProducts === 0) {
   for (const a of audioVariants) {
     const priceTjs = calculateVariantPriceTjs(a.cny, a.weight);
     insertVar.run(p4Id, a.color, a.size, a.cny, priceTjs, 25, a.weight, generateVariantSku(p4Sku, a.color, a.size), a.img);
+  }
+}
+
+if (process.env.NODE_ENV === 'production') {
+  try {
+    const restoreResult = restoreCatalogSnapshot(db, dbPath, path.join(__dirname, 'msavdo.db'));
+    if (restoreResult.restored) {
+      console.info(
+        `[Catalog Snapshot Restore] Restored ${restoreResult.productsImported} products and `
+        + `${restoreResult.variantsImported} variants. Backup: ${restoreResult.backupPath}`,
+      );
+    } else if (restoreResult.reason !== 'already-restored') {
+      console.info(`[Catalog Snapshot Restore] Skipped: ${restoreResult.reason}`);
+    }
+  } catch (error) {
+    console.error('[Catalog Snapshot Restore] Failed; the existing database was left in place.', error);
   }
 }
 
