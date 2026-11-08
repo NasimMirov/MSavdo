@@ -129,3 +129,11 @@ export function calculatePriceTjs(priceCny: number, weightKg: number, volumeM3 =
   const cny = Number.isFinite(priceCny) && priceCny > 0 ? priceCny : 0;
   return Math.round((cny * 1.45) + calculateShippingCostTjs(weightKg, volumeM3));
 }
+
+export function calculateDiscountedPriceTjs(priceTjs: number, discountPercent: number): number {
+  if (!Number.isSafeInteger(priceTjs) || priceTjs <= 0 ||
+      !Number.isSafeInteger(discountPercent) || discountPercent <= 0 || discountPercent > 90) {
+    return priceTjs;
+  }
+  return Math.max(1, Math.round(priceTjs * (100 - discountPercent) / 100));
+}

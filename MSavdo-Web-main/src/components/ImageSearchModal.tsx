@@ -20,6 +20,7 @@ import {
   Layers,
 } from 'lucide-react';
 import { ProductShareButton } from './ProductShareButton';
+import { calculateDiscountedPriceTjs } from '../utils/pricing';
 
 interface ImageSearchModalProps {
   isOpen: boolean;
@@ -514,8 +515,15 @@ export const ImageSearchModal: React.FC<ImageSearchModalProps> = ({
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {searchResult.products.map((p) => {
                       const variants = p.variants || [];
-                      const prices = variants.map((v) => v.price_tjs).filter((pr) => pr > 0);
-                      const minPrice = prices.length > 0 ? Math.min(...prices) : (p.min_price_tjs || 0);
+                      const prices = variants.map((variant) => variant.original_price_tjs !== undefined
+                        ? variant.price_tjs
+                        : calculateDiscountedPriceTjs(variant.price_tjs, p.discount_percent || 0)).filter((price) => price > 0);
+                      const originalPrices = variants.map((variant) => variant.original_price_tjs ?? variant.price_tjs).filter((price) => price > 0);
+                      const minPrice = prices.length > 0
+                        ? Math.min(...prices)
+                        : calculateDiscountedPriceTjs(p.min_price_tjs || 0, p.discount_percent || 0);
+                      const minOriginalPrice = originalPrices.length > 0 ? Math.min(...originalPrices) : (p.min_price_tjs || 0);
+                      const hasDiscount = (p.discount_percent || 0) > 0 && minOriginalPrice > minPrice;
 
                       return (
                         <div
@@ -560,8 +568,11 @@ export const ImageSearchModal: React.FC<ImageSearchModalProps> = ({
                           </div>
 
                           <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between">
-                            <span className="font-extrabold text-xs font-mono text-slate-900">
-                              {minPrice > 0 ? `${minPrice} TJS` : 'Цена по запросу'}
+                            <span className="flex flex-col font-mono">
+                              {hasDiscount && <span className="text-[9px] font-semibold text-slate-400 line-through">{minOriginalPrice} TJS</span>}
+                              <span className={`text-xs font-extrabold ${hasDiscount ? 'product-sale-price' : 'text-slate-900'}`}>
+                                {minPrice > 0 ? `${minPrice} TJS` : 'Цена по запросу'}
+                              </span>
                             </span>
                             <span className="p-1 bg-black text-amber-400 rounded-lg group-hover:bg-amber-400 group-hover:text-black transition-colors">
                               <Eye className="w-3.5 h-3.5" />

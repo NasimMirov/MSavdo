@@ -45,7 +45,8 @@ test("imports to the main catalog even when an old server address is saved", asy
   assert.equal(sent.url, "https://msavdo.shop/api/add-product");
   assert.equal(sent.body.raw_html_text.length, code.length);
   assert.equal(sent.body.automatic_ai, true);
-  assert.equal(sent.body.preserve_reviewed_data, true);
+  assert.equal(sent.body.preserve_reviewed_data, undefined);
+  assert.equal(sent.body.use_gemini, undefined);
   assert.equal(sent.headers["X-Msavdo-Import-Key"], "a".repeat(64));
   assert.equal(result.product.id, 17);
   responseBody = { status: "success", product: {} };

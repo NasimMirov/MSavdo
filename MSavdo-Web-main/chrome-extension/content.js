@@ -6,6 +6,7 @@
 
   const MODAL_ID = "msavdo-smart-import-modal";
   const MAX_TEXT_LENGTH = 30000;
+  const MAX_IMAGES = 32;
   const MAX_VIDEOS = 12;
   const EXCLUDED_IMAGE_TOKENS = [
     "logo", "avatar", "qrcode", "qr-code", "banner", "icon", "wangwang",
@@ -180,6 +181,7 @@
 
     return Array.from(candidates.entries())
       .sort((left, right) => right[1] - left[1])
+      .slice(0, MAX_IMAGES)
       .map(([url]) => url);
   }
 
@@ -469,8 +471,8 @@
     const add = (name, value) => {
       const cleanName = cleanStructuredText(name).replace(/[：:]$/, "").trim();
       const cleanValue = cleanStructuredText(value).trim();
-      const normalizedName = `${cleanName}\u0000${cleanValue}`.toLowerCase();
-      if (!cleanName || !cleanValue || seen.has(normalizedName)) return;
+      const normalizedName = cleanName.toLowerCase();
+      if (!cleanName || !cleanValue || cleanName.length > 100 || cleanValue.length > 500 || seen.has(normalizedName)) return;
       seen.add(normalizedName);
       specifications.push({ name: cleanName, value: cleanValue });
     };
@@ -502,7 +504,7 @@
         .filter(Boolean);
       if (parts.length >= 2) add(parts[0], parts.slice(1).join(" / "));
     }
-    return specifications;
+    return specifications.slice(0, 100);
   }
 
   function extractDomProductData() {
@@ -629,12 +631,14 @@
           if (!attribute || typeof attribute !== "object") continue;
           const name = cleanStructuredText(attribute.name ?? attribute.attributeName ?? attribute.propName ?? attribute.label);
           const value = cleanStructuredText(attribute.value ?? attribute.attributeValue ?? attribute.propValue ?? attribute.values);
-          const specificationKey = `${name}\u0000${value}`.toLowerCase();
-          if (!name || !value || seenSpecifications.has(specificationKey)) continue;
-          seenSpecifications.add(specificationKey);
+          if (!name || !value || seenSpecifications.has(name.toLowerCase())) continue;
+          seenSpecifications.add(name.toLowerCase());
           specifications.push({ name, value });
+          if (specifications.length >= 100) break;
         }
+        if (specifications.length >= 100) break;
       }
+      if (specifications.length >= 100) break;
     }
 
     const variants = [];
@@ -718,7 +722,7 @@
       title_candidates: [...new Set([title, ...titleCandidates.map(cleanStructuredText).filter(Boolean)])].slice(0, 5),
       specifications,
       variants,
-      images: Array.from(images),
+      images: Array.from(images).slice(0, 32),
       video_urls: Array.from(videoUrls).slice(0, MAX_VIDEOS),
       weight_kg: weight,
     };
@@ -765,6 +769,7 @@
     );
 
     for (const control of controls) {
+      if (result.length >= MAX_IMAGES) break;
       if (!isVisible(control) || isProductUiElement(control)) continue;
       const rawColor = getChineseLabel(control);
       if (!rawColor || seen.has(rawColor)) continue;
@@ -791,7 +796,7 @@
       video_urls: [],
       weight_kg: 0,
     };
-    const visualSkuMap = collectVisualSkuMap();
+    const visualSkuMap = collectVisualSkuMap().slice(0, MAX_IMAGES);
     const basePrice = getBasePrice(`${domData.price_text}\n${pageText}`);
     const structuredPrice = structuredData.variants
       .map((variant) => variant.price_cny)
@@ -826,10 +831,10 @@
       ? [{ name: "Доступные цвета", value: domData.colors.join(", ") }]
       : [];
     for (const specification of [...structuredData.specifications, ...domData.specifications, ...colorSpecification]) {
-      const key = `${specification.name}\u0000${specification.value}`.toLocaleLowerCase();
+      const key = specification.name.toLocaleLowerCase();
       if (!mergedSpecs.has(key)) mergedSpecs.set(key, specification);
     }
-    structuredData.specifications = Array.from(mergedSpecs.values());
+    structuredData.specifications = Array.from(mergedSpecs.values()).slice(0, 100);
     structuredData.title = chooseBestTitle([
       domData.title,
       ...domData.title_candidates,
@@ -839,7 +844,7 @@
     structuredData.images = Array.from(new Set([
       ...structuredData.images,
       ...collectImages(),
-    ]));
+    ])).slice(0, 32);
     structuredData.video_urls = Array.from(new Set([
       ...structuredData.video_urls,
       ...collectVideoUrls(),
@@ -861,7 +866,7 @@
       raw_title: structuredData.title || document.title || "",
       description: domData.description,
       price_cny: priceCny,
-      images: structuredData.images,
+      images: structuredData.images.slice(0, MAX_IMAGES),
       video_urls: structuredData.video_urls,
       original_link: window.location.href,
       visual_sku_map: visualSkuMap,
@@ -961,7 +966,7 @@
           throw new Error(response?.error || "Сервер не сохранил товар");
         }
         status.style.color = "#047857";
-        status.textContent = `Товар сохранён в черновики msavdo.shop: ${response.product.title}. Артикул: ${response.product.base_sku}, ID: ${response.product.id}. ${response.automatic_ai?.message || ""} Откройте расширение для проверки результата ИИ.`;
+        status.textContent = `Товар сохранён в черновики msavdo.shop: ${response.product.title}. Артикул: ${response.product.base_sku}, ID: ${response.product.id}.`;
         submitButton.textContent = "Импорт завершён";
       } catch (error) {
         status.style.color = "#b91c1c";

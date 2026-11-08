@@ -7,7 +7,9 @@ import type { PromotionResult } from '../utils/promotions';
 
 type Quote = PromotionResult & {
   fingerprint: string;
-  items: Array<{ variant_id: number; title: string; color: string; size: string; quantity: number; price_tjs: number; delivery_type: string }>;
+  original_subtotal: number;
+  product_discount: number;
+  items: Array<{ variant_id: number; title: string; color: string; size: string; quantity: number; price_tjs: number; original_price_tjs: number; delivery_type: string }>;
 };
 
 interface CartDrawerProps {
@@ -337,7 +339,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   const productVariants = products.find((product) => product.id === item.product_id)?.variants
                     || item.variants
                     || [];
-                  const currentPrice = validQuote?.items.find((quoted) => quoted.variant_id === item.variant_id)?.price_tjs ?? item.price_tjs;
+                  const quoteItem = validQuote?.items.find((quoted) => quoted.variant_id === item.variant_id);
+                  const currentPrice = quoteItem?.price_tjs ?? item.price_tjs;
+                  const currentOriginalPrice = quoteItem?.original_price_tjs ?? item.original_price_tjs ?? item.price_tjs;
                   return (
                   <div key={item.id} className="py-4 flex items-start gap-3">
                     <img
@@ -388,8 +392,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                         )}
                       </div>
 
-                      <div className="text-xs font-mono font-bold text-emerald-800 mt-1.5">
-                        {currentPrice} TJS
+                      <div className="mt-1.5 flex items-baseline gap-2 font-mono">
+                        {currentOriginalPrice > currentPrice && (
+                          <span className="text-[10px] font-semibold text-slate-400 line-through">
+                            {currentOriginalPrice} TJS
+                          </span>
+                        )}
+                        <span className={`text-xs font-bold ${currentPrice < currentOriginalPrice ? 'product-sale-price' : 'text-emerald-800'}`}>
+                          {currentPrice} TJS
+                        </span>
                       </div>
 
                       {/* Управление количеством */}
@@ -449,7 +460,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               </label>
               {quoteError && <p role="alert" className="text-xs text-red-700">{quoteError}</p>}
               {validQuote && promoCode.trim() && !validQuote.code_applied && <p role="alert" className="text-xs text-red-700">{language === 'ru' ? 'Промокод недействителен или условия не выполнены.' : language === 'tg' ? 'Рамз нодуруст аст ё шартҳо иҷро нашудаанд.' : 'The code is invalid or its conditions are not met.'}</p>}
-              {validQuote && validQuote.discount > 0 && <div className="flex justify-between text-xs text-slate-600"><span>{language === 'ru' ? 'Без скидки' : language === 'tg' ? 'Бе тахфиф' : 'Subtotal'}</span><span>{validQuote.subtotal} TJS</span></div>}
+              {validQuote && validQuote.original_subtotal > validQuote.total && (
+                <div className="flex justify-between text-xs text-slate-600">
+                  <span>{language === 'ru' ? 'Сумма без скидок' : language === 'tg' ? 'Маблағи бе тахфиф' : 'Regular total'}</span>
+                  <span className="line-through">{validQuote.original_subtotal} TJS</span>
+                </div>
+              )}
+              {validQuote && validQuote.product_discount > 0 && <div className="flex justify-between text-xs text-emerald-700"><span>{language === 'ru' ? 'Скидка на товары' : language === 'tg' ? 'Тахфифи молҳо' : 'Product discount'}</span><span>−{validQuote.product_discount} TJS</span></div>}
               {validQuote?.applied.map((offer) => <div key={offer.id} className="flex justify-between text-xs text-emerald-700"><span>{offer.title}</span><span>−{offer.amount} TJS</span></div>)}
               <div className="flex items-center justify-between text-base font-bold text-slate-900">
                 <span>{t('totalToPay')}</span>

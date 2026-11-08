@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { requestImportText, requestTokenPlanSuggestion } from './tokenPlan.js';
+import { requestTokenPlanSuggestion } from './tokenPlan.js';
 
 const product = { title: '灯', description: '', specifications: [{ name: 'Материал', value: 'Пластик' }] };
 const categories = ['Туризм', 'Освещение'];
@@ -41,24 +41,4 @@ test('TokenPlan errors do not expose key or use fallback', async () => {
       return true;
     });
   }
-});
-
-test('import text uses a bounded prompt and validates structured results', async () => {
-      let prompt = '';
-      const result = await requestImportText('test-key', {
-        title: 'T'.repeat(800), description: 'D'.repeat(10000),
-        specifications: Array.from({ length: 60 }, (_, i) => ({ name: `spec-${i}`, value: 'V'.repeat(500) })),
-      }, async (_input, init) => {
-        const body = JSON.parse(String(init?.body));
-        assert.equal(body.max_tokens, 800);
-        prompt = body.messages[0].content;
-        return Response.json({ choices: [{ message: { content: '```json\n{"title":"Фонарь","description":"Компактный фонарь."}\n```' } }] });
-      });
-      assert.deepEqual(result, { title: 'Фонарь', description: 'Компактный фонарь.' });
-      assert.equal(prompt.includes('D'.repeat(4001)), false);
-      assert.equal(prompt.includes('spec-30'), false);
-      await assert.rejects(requestImportText('test-key', product,
-        async () => Response.json({ choices: [{ message: { content: '{"title":"灯","description":"Текст"}' } }] })), /некорректное название/);
-      await assert.rejects(requestImportText('test-key', product,
-        async () => Response.json({ choices: [{ message: { content: 'not json' } }] })), /некорректный JSON/);
 });

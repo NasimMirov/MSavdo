@@ -38,11 +38,13 @@ import {
   Code2,
   Package,
   Phone,
-  MessageSquare
+  MessageSquare,
+  Percent
 } from 'lucide-react';
 import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
 import { PromotionsAdmin } from './PromotionsAdmin';
+import { ProductDiscountsAdmin } from './ProductDiscountsAdmin';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { calculatePriceTjs } from '../utils/pricing';
@@ -69,7 +71,7 @@ interface SearchAnalytics {
   total_searches: number;
   unique_queries: number;
   popular_queries: Array<{ query_text: string; searches_count: number; last_searched_at: string }>;
-  queries: Array<{ query_text: string; searches_count: number; first_searched_at: string; last_searched_at: string }>;
+  queries: Array<{ query_text: string; searches_count: number; first_searched_at: string; last_searched_at: string; public_enabled: number; is_manual: number }>;
   has_more: boolean;
 }
 
@@ -113,7 +115,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
-  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'promotions' | 'gemini_ai' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'promotions' | 'discounts' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
   const [adminProductsError, setAdminProductsError] = useState('');
   const productsRequestRef = useRef(0);
@@ -149,6 +151,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [isLoadingVisits, setIsLoadingVisits] = useState(false);
   const [searchAnalytics, setSearchAnalytics] = useState<SearchAnalytics | null>(null);
   const [isLoadingSearches, setIsLoadingSearches] = useState(false);
+  const [newSearchQuery, setNewSearchQuery] = useState('');
   const [customerFeedback, setCustomerFeedback] = useState<CustomerFeedback[]>([]);
   const [feedbackHasMore, setFeedbackHasMore] = useState(false);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
@@ -282,8 +285,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [extensionImportKey, setExtensionImportKey] = useState('');
   const [extensionKeyMessage, setExtensionKeyMessage] = useState('');
   const [extensionKeySaving, setExtensionKeySaving] = useState(false);
-  const [importSource, setImportSource] = useState<{ id: number; title: string; description: string; context: string; message: string } | null>(null);
-  const [importSourceLoading, setImportSourceLoading] = useState(false);
   const hasSomonCategoryConfig = (categoryId: number | null) => {
     if (!categoryId) return false;
     const config = settings.somon_category_config[String(categoryId)];
@@ -441,7 +442,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setTokenPlanKeyMessage('');
     setExtensionImportKey('');
     setExtensionKeyMessage('');
-    setImportSource(null);
     localStorage.removeItem('msavdo_admin_token');
   };
 
@@ -570,6 +570,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       showNotice('Не удалось загрузить статистику поиска');
     } finally {
       setIsLoadingSearches(false);
+    }
+  };
+
+  const manageSearchQuery = async (
+    method: 'POST' | 'PUT' | 'DELETE',
+    payload: { query?: string; normalized_query?: string; public_enabled?: boolean },
+  ) => {
+    try {
+      const response = await adminFetch('/api/admin/search-queries', {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      if (method === 'POST') setNewSearchQuery('');
+      await loadSearchAnalytics();
+    } catch (error) {
+      console.error('[Admin Search Query Error]', error);
+      showNotice(error instanceof Error ? error.message : 'Не удалось изменить поисковый запрос');
     }
   };
 
@@ -806,19 +826,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       variant_sku: v.variant_sku || '',
       image_url: v.image_url || '',
     }));
-
-    if (varList.length === 0) {
-      varList.push({
-        color: 'Основной цвет',
-        size: 'Стандарт',
-        price_tjs: 100,
-        price_cny: 0,
-        stock: 10,
-        weight_kg: 0.5,
-        volume_m3: 0,
-        image_url: '',
-      });
-    }
 
     // Парсинг спецификаций товара
     let specList: Array<{ name: string; value: string }> = [];
@@ -1105,19 +1112,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       })
       .join('\n');
 
-    const variants = editingProduct.variants || [];
-    const remainingVariants = variants.filter(
-      (variant: ProductVariant) => normalize(variant.color || '') !== normalize(color),
-    );
-    const nextVariants = remainingVariants.length > 0
-      ? remainingVariants
-      : variants.map((variant: ProductVariant) => (
-        normalize(variant.color || '') === normalize(color)
-          ? { ...variant, color: 'Стандарт', image_url: '' }
-          : variant
-      ));
-
-    setEditingProduct({ ...editingProduct, description, specifications, variants: nextVariants });
+    setEditingProduct((current: any) => {
+      if (!current) return current;
+      const currentVariants = current.variants || [];
+      return {
+        ...current,
+        description,
+        specifications,
+        variants: currentVariants.filter(
+          (variant: ProductVariant) => normalize(variant.color || '') !== normalize(color),
+        ),
+      };
+    });
   };
 
   const handleRemoveSpecification = (index: number) => {
@@ -1189,10 +1195,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleRemoveVariantRow = (index: number) => {
-    if (!editingProduct || (editingProduct.variants || []).length <= 1) return;
-    const curVars = [...(editingProduct.variants || [])];
-    curVars.splice(index, 1);
-    setEditingProduct({ ...editingProduct, variants: curVars });
+    setEditingProduct((current: any) => {
+      if (!current) return current;
+      const curVars = [...(current.variants || [])];
+      curVars.splice(index, 1);
+      return { ...current, variants: curVars };
+    });
   };
 
   const handleUpdateVariantField = (index: number, field: string, val: any) => {
@@ -1262,8 +1270,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         body: JSON.stringify({
           action,
           title: snapshot.title,
-          description: (snapshot.description || '').slice(0, 20000),
-          specifications: (snapshot.specifications || []).slice(0, 100),
+          description: snapshot.description || '',
+          specifications: snapshot.specifications || [],
         }),
       });
       const data = await response.json();
@@ -1343,21 +1351,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setExtensionKeyMessage(error instanceof Error ? error.message : 'Не удалось изменить ключ привязки.');
     } finally {
       setExtensionKeySaving(false);
-    }
-  };
-
-  const loadImportSource = async (id: number) => {
-    setImportSourceLoading(true);
-    setProductSaveError('');
-    try {
-      const response = await adminFetch(`/api/admin/products/${id}/import-source`, { cache: 'no-store' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Не удалось загрузить исходные данные.');
-      setImportSource({ id, ...data.source, message: data.job?.message || '' });
-    } catch (error) {
-      setProductSaveError(error instanceof Error ? error.message : 'Не удалось загрузить исходные данные.');
-    } finally {
-      setImportSourceLoading(false);
     }
   };
 
@@ -1778,118 +1771,60 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       </div>
 
       {/* Вкладки админки */}
-      <div className="flex items-center gap-1.5 border-b border-slate-200 pb-1.5 overflow-x-auto text-[11px] font-bold">
-        <button
-          onClick={() => setActiveTab('products')}
-          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
-            activeTab === 'products'
-              ? 'bg-slate-900 text-white'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Layers className="w-4 h-4 text-emerald-400" />
-          <span>{t('adminCatalog')} ({adminProducts.length})</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab('orders');
-            loadOrders();
-          }}
-          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 relative ${
-            activeTab === 'orders'
-              ? 'bg-slate-900 text-white'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Package className="w-4 h-4 text-amber-400" />
-          <span>{t('adminOrders')}</span>
-          {orders.length > 0 && (
-            <span className="bg-amber-400 text-black text-[10px] font-black px-2 py-0.5 rounded-full ml-1">
-              {orders.length}
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab('visitors');
-            void loadVisitAnalytics();
-          }}
-          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
-            activeTab === 'visitors'
-              ? 'bg-slate-900 text-white'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Eye className="w-4 h-4 text-sky-500" />
-          <span>Посещения</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab('searches');
-            void loadSearchAnalytics();
-          }}
-          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
-            activeTab === 'searches'
-              ? 'bg-slate-900 text-white'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Search className="w-4 h-4 text-amber-500" />
-          <span>Поиски</span>
-        </button>
-
-        <button
-          onClick={() => {
-            setActiveTab('feedback');
-            void loadFeedback();
-          }}
-          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
-            activeTab === 'feedback'
-              ? 'bg-slate-900 text-white'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <MessageSquare className="w-4 h-4 text-emerald-500" />
-          <span>Предложения</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('promotions')}
-          className={`px-3 py-2 rounded-lg transition-colors ${activeTab === 'promotions' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-        >Акции</button>
-
-        <button
-          onClick={() => setActiveTab('gemini_ai')}
-          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
-            activeTab === 'gemini_ai'
-              ? 'bg-slate-900 text-white'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Sparkles className="w-4 h-4 text-purple-400" />
-          <span>{t('adminAi')}</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('settings')}
-          className={`px-3 py-2 rounded-lg transition-colors flex items-center gap-1.5 ${
-            activeTab === 'settings'
-              ? 'bg-slate-900 text-white'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-          }`}
-        >
-          <Settings className="w-4 h-4 text-blue-400" />
-          <span>{t('adminSettings')}</span>
-        </button>
-      </div>
+      <nav className="grid gap-3 border-b border-slate-200 pb-3 text-[11px] font-bold sm:grid-cols-2 xl:grid-cols-3" aria-label="Разделы панели администратора">
+        {[
+          {
+            title: 'Продажи',
+            tabs: [
+              { id: 'products' as const, label: `${t('adminCatalog')} (${adminProducts.length})`, icon: <Layers className="h-4 w-4 text-emerald-400" />, action: () => setActiveTab('products') },
+              { id: 'orders' as const, label: t('adminOrders'), icon: <Package className="h-4 w-4 text-amber-400" />, action: () => { setActiveTab('orders'); loadOrders(); }, badge: orders.length || undefined },
+              { id: 'discounts' as const, label: 'Скидки', icon: <Percent className="h-4 w-4 text-amber-500" />, action: () => setActiveTab('discounts') },
+              { id: 'promotions' as const, label: 'Акции', icon: <Sparkles className="h-4 w-4 text-purple-400" />, action: () => setActiveTab('promotions') },
+            ],
+          },
+          {
+            title: 'Аналитика и обратная связь',
+            tabs: [
+              { id: 'visitors' as const, label: 'Посещения', icon: <Eye className="h-4 w-4 text-sky-500" />, action: () => { setActiveTab('visitors'); void loadVisitAnalytics(); } },
+              { id: 'searches' as const, label: 'Поиски', icon: <Search className="h-4 w-4 text-amber-500" />, action: () => { setActiveTab('searches'); void loadSearchAnalytics(); } },
+              { id: 'feedback' as const, label: 'Предложения', icon: <MessageSquare className="h-4 w-4 text-emerald-500" />, action: () => { setActiveTab('feedback'); void loadFeedback(); } },
+            ],
+          },
+          {
+            title: 'Инструменты',
+            tabs: [
+              { id: 'gemini_ai' as const, label: t('adminAi'), icon: <Sparkles className="h-4 w-4 text-purple-400" />, action: () => setActiveTab('gemini_ai') },
+              { id: 'settings' as const, label: t('adminSettings'), icon: <Settings className="h-4 w-4 text-blue-400" />, action: () => setActiveTab('settings') },
+            ],
+          },
+        ].map((group) => (
+          <section key={group.title} className="min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+            <h2 className="mb-2 px-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-500">{group.title}</h2>
+            <div className="grid grid-cols-2 gap-1.5">
+              {group.tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={tab.action}
+                  aria-current={activeTab === tab.id ? 'page' : undefined}
+                  className={`flex min-h-10 min-w-0 items-center gap-1.5 rounded-lg px-2 py-2 text-left transition-colors ${
+                    activeTab === tab.id ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white hover:text-slate-900'
+                  }`}
+                >
+                  {tab.icon}<span className="truncate">{tab.label}</span>
+                  {'badge' in tab && tab.badge && <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-black">{tab.badge}</span>}
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+      </nav>
 
       {/* ========================================== */}
       {/* ВКЛАДКА 1: НАВИГАТОР ТОВАРОВ И КАТАЛОГА */}
       {/* ========================================== */}
       {activeTab === 'promotions' && <PromotionsAdmin products={adminProducts} categories={categories} />}
+      {activeTab === 'discounts' && <ProductDiscountsAdmin products={adminProducts} onSaved={() => { void loadAdminData(); }} />}
       {activeTab === 'feedback' && (
         <section className="space-y-3 py-4">
           <div className="flex items-center justify-between gap-3">
@@ -2624,29 +2559,81 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
 
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                <h4 className="border-b border-slate-200 px-4 py-3 text-sm font-bold text-slate-900">
-                  Все запросы ({searchAnalytics.unique_queries})
-                </h4>
+                <div className="space-y-3 border-b border-slate-200 p-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">Запросы поиска ({searchAnalytics.unique_queries})</h4>
+                    <p className="mt-1 text-[11px] text-slate-500">Публичные подсказки: запросы от 3 поисков и вручную добавленные, максимум 10.</p>
+                  </div>
+                  <form
+                    className="flex flex-col gap-2 sm:flex-row"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (newSearchQuery.trim()) void manageSearchQuery('POST', { query: newSearchQuery });
+                    }}
+                  >
+                    <input
+                      value={newSearchQuery}
+                      onChange={(event) => setNewSearchQuery(event.target.value)}
+                      maxLength={80}
+                      placeholder="Добавить публичную подсказку"
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-xs outline-none focus:border-amber-400"
+                    />
+                    <button type="submit" disabled={!newSearchQuery.trim()} className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+                      Добавить запрос
+                    </button>
+                  </form>
+                </div>
                 {searchAnalytics.queries.length ? (
                   <>
                     <div className="max-h-[55vh] overflow-auto">
-                      <table className="w-full min-w-[480px] text-left text-xs">
+                      <table className="w-full min-w-[760px] text-left text-xs">
                         <thead className="sticky top-0 bg-slate-50 text-slate-500">
                           <tr>
                             <th className="px-4 py-2 font-semibold">Запрос</th>
                             <th className="px-4 py-2 font-semibold">Поисков</th>
                             <th className="px-4 py-2 font-semibold">Последний поиск</th>
+                            <th className="px-4 py-2 font-semibold">Публично</th>
+                            <th className="px-4 py-2 font-semibold">Действия</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                           {searchAnalytics.queries.map((query) => (
                             <tr key={query.query_text}>
-                              <td className="px-4 py-2.5 font-medium text-slate-700">{query.query_text}</td>
+                              <td className="px-4 py-2.5 font-medium text-slate-700">
+                                {query.query_text}{query.is_manual ? <span className="ml-2 rounded bg-sky-50 px-1.5 py-0.5 text-[9px] text-sky-700">вручную</span> : null}
+                              </td>
                               <td className="px-4 py-2.5 font-mono text-slate-700">{query.searches_count.toLocaleString()}</td>
                               <td className="px-4 py-2.5 text-slate-600">
-                                {new Date(query.last_searched_at).toLocaleString(
+                                {query.searches_count ? new Date(query.last_searched_at).toLocaleString(
                                   language === 'tg' ? 'tg-TJ' : language === 'en' ? 'en-GB' : 'ru-RU',
-                                )}
+                                ) : '—'}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button
+                                  type="button"
+                                  onClick={() => void manageSearchQuery('PUT', {
+                                    normalized_query: query.query_text.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('ru'),
+                                    public_enabled: !query.public_enabled,
+                                  })}
+                                  className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${query.public_enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}
+                                >
+                                  {query.public_enabled ? 'Скрыть' : 'Показывать'}
+                                </button>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (window.confirm(`Удалить поисковый запрос «${query.query_text}» и его статистику?`)) {
+                                      void manageSearchQuery('DELETE', {
+                                        normalized_query: query.query_text.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('ru'),
+                                      });
+                                    }
+                                  }}
+                                  className="rounded-lg border border-red-200 px-2.5 py-1.5 text-[10px] font-semibold text-red-700 hover:bg-red-50"
+                                >
+                                  Удалить
+                                </button>
                               </td>
                             </tr>
                           ))}
@@ -2754,7 +2741,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <section className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <h3 className="font-bold text-slate-800">Привязка расширения и автоматический ИИ</h3>
             <p className="text-xs text-slate-600">Создайте отдельный ключ и один раз вставьте его в расширение. Новый ключ отключит все предыдущие привязки. Не передавайте его посторонним.</p>
-            <p className="text-xs text-slate-600">После импорта через расширение черновик сохраняется сразу, затем TokenPlan обрабатывает название и описание и подбирает категорию. Лимит: 60 импортов в час на IP-адрес в одном процессе сервера, счётчик сбрасывается при перезапуске. Запросы расходуют токены.</p>
+            <p className="text-xs text-slate-600">После импорта через расширение TokenPlan подбирает категорию по сохранённому названию и описанию. Лимит: 60 импортов в час на IP-адрес в одном процессе сервера, счётчик сбрасывается при перезапуске. Запросы расходуют токены.</p>
             <div className="flex flex-wrap gap-2">
               <button type="button" disabled={extensionKeySaving} onClick={() => void manageExtensionKey(false)} className="rounded-xl bg-slate-800 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">Создать или заменить ключ</button>
               <button type="button" disabled={extensionKeySaving} onClick={() => void manageExtensionKey(true)} className="rounded-xl border border-red-300 px-4 py-2 text-xs font-bold text-red-700 disabled:opacity-50">Отозвать ключ</button>
@@ -3573,23 +3560,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <span>{productSaveError}</span>
               </div>
             )}
-            {editingProduct.id !== 0 && (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <button type="button" disabled={importSourceLoading} onClick={() => void loadImportSource(editingProduct.id)}
-                  className="font-bold text-slate-700 disabled:opacity-50">
-                  {importSourceLoading ? 'Загрузка…' : 'Показать исходные данные и статус импорта'}
-                </button>
-                {importSource && importSource.id === editingProduct.id && (
-                  <div className="mt-2 space-y-2 break-words text-slate-700">
-                    <p>{importSource.message}</p>
-                    <p><strong>Исходное название:</strong> {importSource.title || 'Не найдено'}</p>
-                    {importSource.description && <p className="whitespace-pre-wrap"><strong>Исходное описание:</strong> {importSource.description}</p>}
-                    <details><summary>Текст, извлечённый со страницы</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap font-sans">{importSource.context || 'Не найден'}</pre></details>
-                  </div>
-                )}
-              </div>
-            )}
-
             <form onSubmit={handleSaveProduct} className="space-y-5">
               {/* НАЗВАНИЕ */}
               <div>
@@ -4013,8 +3983,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
 
                 <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                  {editingProduct.variants?.length === 0 && (
+                    <p className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
+                      Варианты удалены. Добавьте вариант, если он нужен товару.
+                    </p>
+                  )}
                   {editingProduct.variants?.map((v: any, vIdx: number) => (
-                    <div key={vIdx} className="p-2 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-2 sm:grid-cols-12 gap-1.5 items-center text-[11px]">
+                    <div key={v.id ?? v.variant_sku ?? `${v.color}-${v.size}-${vIdx}`} className="p-2 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-2 sm:grid-cols-12 gap-1.5 items-center text-[11px]">
                       <div className="sm:col-span-3">
                         <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цвет:</span>
                         <input
@@ -4086,9 +4061,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <div className="sm:col-span-1 flex justify-end sm:pt-4">
                         <button
                           type="button"
-                          disabled={editingProduct.variants.length <= 1}
                           onClick={() => handleRemoveVariantRow(vIdx)}
-                          className="p-2 text-slate-400 hover:text-red-600 disabled:opacity-20 rounded-xl hover:bg-red-50 transition-colors"
+                          className="p-2 text-slate-400 hover:text-red-600 rounded-xl hover:bg-red-50 transition-colors"
                           title="Удалить вариант"
                         >
                           <Trash2 className="w-4 h-4" />

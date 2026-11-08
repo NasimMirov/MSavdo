@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Product } from '../types';
 import { Eye, Truck, Clock } from 'lucide-react';
 import { useI18n } from '../i18n';
+import { calculateDiscountedPriceTjs } from '../utils/pricing';
 
 interface ProductCardProps {
   product: Product;
@@ -20,9 +21,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const variants = product.variants || [];
 
   // Диапазон цен в TJS
-  const prices = variants.map(v => v.price_tjs).filter(p => p > 0);
-  const minPrice = prices.length > 0 ? Math.min(...prices) : (product.min_price_tjs || 0);
-  const maxPrice = prices.length > 0 ? Math.max(...prices) : (product.max_price_tjs || 0);
+  const prices = variants.map((variant) => {
+    if (variant.original_price_tjs !== undefined) return variant.price_tjs;
+    return calculateDiscountedPriceTjs(variant.price_tjs, product.discount_percent || 0);
+  }).filter((price) => price > 0);
+  const originalPrices = variants.map((variant) => variant.original_price_tjs ?? variant.price_tjs).filter((price) => price > 0);
+  const minPrice = prices.length > 0
+    ? Math.min(...prices)
+    : calculateDiscountedPriceTjs(product.min_price_tjs || 0, product.discount_percent || 0);
+  const maxPrice = prices.length > 0
+    ? Math.max(...prices)
+    : calculateDiscountedPriceTjs(product.max_price_tjs || 0, product.discount_percent || 0);
+  const minOriginalPrice = originalPrices.length > 0 ? Math.min(...originalPrices) : (product.min_price_tjs || 0);
+  const hasDiscount = (product.discount_percent || 0) > 0 && minOriginalPrice > minPrice;
 
   const isStock = product.delivery_type === 'stock';
   const productSlug = product.title
@@ -81,6 +92,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             <span className="min-w-0 leading-tight">{t('delivery18to30')}</span>
           </div>
         )}
+        {hasDiscount && (
+          <div className="absolute left-2 top-2 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-slate-950 shadow-sm">
+            −{product.discount_percent}%
+          </div>
+        )}
 
         {/* Быстрый выбор при наведении */}
         <div className="pointer-events-none absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -112,7 +128,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         <div className="mt-1.5 flex items-center justify-between gap-1.5 px-0.5 py-0.5 sm:mt-2 sm:px-1 sm:py-1">
           <div className="min-w-0">
             <div className="text-[7px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[8px]">{t('inSomoni')}</div>
-            <div className="mt-0.5 whitespace-nowrap text-[17px] font-extrabold leading-none tracking-tight text-slate-950 price-text sm:text-xl">
+            {hasDiscount && (
+              <div className="mb-1 whitespace-nowrap text-[10px] font-semibold leading-none text-slate-500 line-through">
+                {minOriginalPrice.toLocaleString('ru-RU')} с.
+              </div>
+            )}
+            <div className={`mt-0.5 whitespace-nowrap text-[17px] font-extrabold leading-none tracking-tight sm:text-xl ${hasDiscount ? 'product-sale-price' : 'text-slate-950 price-text'}`}>
               {maxPrice > minPrice && <span className="mr-0.5 text-[10px] font-bold text-slate-500 sm:text-xs">от</span>}
               {minPrice.toLocaleString('ru-RU')}
               <span className="ml-1 text-[9px] font-bold text-slate-600 sm:text-[10px]">с.</span>

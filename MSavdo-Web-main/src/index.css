@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+.product-sale-price {
+  color: #d49b00;
+}
+
+html[data-theme="dark"] .product-sale-price,
+html[data-theme="dark"] .product-sale-price * {
+  color: #4ade80 !important;
+}
+
 html[data-theme="dark"] {
   color-scheme: dark;
   background: #000;

@@ -162,6 +162,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
   // Текущая цена в сомони
   const currentPriceTjs = activeVariant ? activeVariant.price_tjs : (product?.min_price_tjs || 0);
+  const currentOriginalPriceTjs = activeVariant?.original_price_tjs ?? currentPriceTjs;
+  const hasCurrentDiscount = currentOriginalPriceTjs > currentPriceTjs;
 
   // Список всех фото товара
   const allGalleryImages = useMemo(() => {
@@ -543,7 +545,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               <div className="mt-1 sm:mt-2.5 p-2 sm:p-3.5 bg-gradient-to-br from-slate-50 to-slate-100/70 border border-slate-200/90 rounded-xl sm:rounded-2xl flex items-center justify-between">
                 <div>
                   <div className="text-[10px] sm:text-xs text-slate-500 font-medium">{t('finalPrice')}</div>
-                  <div className="text-lg sm:text-3xl font-extrabold text-slate-900 price-text font-mono mt-0.5">
+                  {hasCurrentDiscount && (
+                    <div className="text-xs font-semibold text-slate-500 line-through">
+                      {currentOriginalPriceTjs.toLocaleString('ru-RU')} <span>TJS</span>
+                      <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800">−{product?.discount_percent}%</span>
+                    </div>
+                  )}
+                  <div className={`text-lg sm:text-3xl font-extrabold font-mono mt-0.5 ${hasCurrentDiscount ? 'product-sale-price' : 'text-slate-900 price-text'}`}>
                     {currentPriceTjs} <span className="text-sm sm:text-base font-bold text-slate-600">TJS</span>
                   </div>
                 </div>
@@ -754,6 +762,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                         || related.images?.split(',')[0]?.trim()
                         || related.variants?.[0]?.image_url
                         || '';
+                      const regularPrices = related.variants?.map((variant) => variant.original_price_tjs ?? variant.price_tjs)
+                        .filter((price) => price > 0) || [];
+                      const regularPrice = regularPrices.length
+                        ? Math.min(...regularPrices)
+                        : Number(related.min_price_tjs || 0);
+                      const salePrice = Number(related.min_price_tjs || 0);
+                      const hasDiscount = regularPrice > salePrice;
                       return (
                         <button
                           key={related.id}
@@ -778,8 +793,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                               {related.title}
                             </p>
                             <div className="flex min-h-10 items-center justify-between gap-1">
-                              <span className="text-sm font-extrabold text-emerald-700 price-text">
-                                {Number(related.min_price_tjs || 0).toLocaleString('ru-RU')} TJS
+                              <span className="flex flex-col">
+                                {hasDiscount && <span className="text-[9px] font-semibold text-slate-400 line-through">{regularPrice.toLocaleString('ru-RU')} TJS</span>}
+                                <span className={`text-sm font-extrabold ${hasDiscount ? 'product-sale-price' : 'text-emerald-700 price-text'}`}>
+                                  {salePrice.toLocaleString('ru-RU')} TJS
+                                </span>
                               </span>
                               <span className={`min-w-0 max-w-[65%] whitespace-normal break-words rounded-full px-2 py-1 text-right text-[9px] font-bold leading-tight ${
                                 related.delivery_type === 'stock'

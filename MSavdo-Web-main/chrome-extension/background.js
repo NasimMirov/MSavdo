@@ -125,7 +125,8 @@ async function handleImportProduct(payload, sender) {
   }
 
   const images = (Array.isArray(payload.images) ? payload.images : [])
-    .filter((url) => typeof url === "string" && url.length <= 2048);
+    .filter((url) => typeof url === "string" && url.length <= 2048)
+    .slice(0, 50);
   const videoUrls = (Array.isArray(payload.video_urls) ? payload.video_urls : [])
     .filter((url) => typeof url === "string" && url.length <= 2048)
     .slice(0, 12);
@@ -148,12 +149,13 @@ async function handleImportProduct(payload, sender) {
         .map((title) => title.slice(0, 500)),
       specifications: (Array.isArray(sourceStructuredData.specifications) ? sourceStructuredData.specifications : [])
         .filter((item) => item && typeof item.name === "string" && typeof item.value === "string")
-        .map((item) => ({ name: item.name, value: item.value })),
+        .slice(0, 100)
+        .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) })),
       variants: (Array.isArray(sourceStructuredData.variants) ? sourceStructuredData.variants : [])
         .filter((item) => item && typeof item === "object")
         .map((item) => ({
-          color: typeof item.color === "string" ? item.color : "",
-          size: typeof item.size === "string" ? item.size : "",
+          color: typeof item.color === "string" ? item.color.slice(0, 120) : "",
+          size: typeof item.size === "string" ? item.size.slice(0, 120) : "",
           price_cny: Number.isFinite(Number(item.price_cny)) ? Number(item.price_cny) : 0,
           stock: Number.isFinite(Number(item.stock)) ? Number(item.stock) : 0,
           weight_kg: Number.isFinite(Number(item.weight_kg)) ? Number(item.weight_kg) : 0,
@@ -161,7 +163,8 @@ async function handleImportProduct(payload, sender) {
           sku_id: typeof item.sku_id === "string" ? item.sku_id.slice(0, 120) : "",
         })),
       images: (Array.isArray(sourceStructuredData.images) ? sourceStructuredData.images : [])
-        .filter((url) => typeof url === "string" && url.length <= 2048),
+        .filter((url) => typeof url === "string" && url.length <= 2048)
+        .slice(0, 32),
       video_urls: (Array.isArray(sourceStructuredData.video_urls) ? sourceStructuredData.video_urls : [])
         .filter((url) => typeof url === "string" && url.length <= 2048)
         .slice(0, 12),
@@ -173,6 +176,7 @@ async function handleImportProduct(payload, sender) {
 
   const visualSkuMap = (Array.isArray(payload.visual_sku_map) ? payload.visual_sku_map : [])
     .filter((item) => item && typeof item.raw_color === "string" && typeof item.image_url === "string" && item.image_url.length <= 2048)
+    .slice(0, 12)
     .map((item) => ({ raw_color: item.raw_color.slice(0, 120), image_url: item.image_url }));
   const variantPrice = structuredData?.variants.find((variant) => variant.price_cny > 0)?.price_cny;
   const sourcePrice = typeof payload.price_cny === "number" || typeof payload.price_cny === "string"
@@ -202,8 +206,6 @@ async function handleImportProduct(payload, sender) {
         price_cny: Number.isFinite(priceCny) ? priceCny : 0,
         structured_data: structuredData,
         automatic_ai: true,
-        preserve_reviewed_data: true,
-        preserve_variant_names: true,
       })
     }, 45000);
 

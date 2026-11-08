@@ -29,7 +29,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
   const secret = "local-test-secret-0123456789-abcdefgh";
   const child = spawn(process.execPath, ["--require", path.join(project, "chrome-extension", "tokenplan-fixture.cjs"), "--import", "tsx", "server.ts"], {
     cwd: temp,
-    env: { ...process.env, NODE_ENV: "development", PORT: String(port), GEMINI_API_KEY: "", ADMIN_JWT_SECRET: secret, ADMIN_TELEGRAM_ALLOWED_IDS: "111,222" },
+    env: { ...process.env, NODE_ENV: "development", PORT: String(port), GEMINI_API_KEY: "", ADMIN_JWT_SECRET: secret, ADMIN_TELEGRAM_ALLOWED_IDS: "111,222", TOKENPLAN_TEST_LOG: path.join(temp, "tokenplan.log") },
     stdio: "ignore",
   });
   const base = `http://127.0.0.1:${port}`;
@@ -148,6 +148,34 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(invalidCategory.status, 400);
 
     const cookie = `__Host-msavdo_admin=${header}.${payload}.${signature}`;
+    const editUrl = `${base}/api/admin/products/${codeResult.product.id}`;
+    const editHeaders = { ...headers, Cookie: cookie };
+    const editableProduct = {
+      title: codeResult.product.title,
+      description: "Описание фонаря.",
+      category_id: codeResult.product.category_id,
+      status: "draft",
+      delivery_type: "order",
+      variants: [
+        { color: "Красный", size: "Стандарт", price_cny: 0, price_tjs: 0, stock: 0, weight_kg: 0.5 },
+        { color: "Черный", size: "Стандарт", price_cny: 0, price_tjs: 0, stock: 0, weight_kg: 0.5 },
+      ],
+    };
+    const updateVariants = (nextVariants, status = "draft") => fetch(editUrl, {
+      method: "PUT", headers: editHeaders, body: JSON.stringify({ ...editableProduct, variants: nextVariants, status }),
+    });
+    assert.equal((await updateVariants(editableProduct.variants)).status, 200);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM product_variants WHERE product_id = ?").get(codeResult.product.id).count, 2);
+    assert.equal((await updateVariants([editableProduct.variants[1]])).status, 200);
+    assert.deepEqual(
+      db.prepare("SELECT color FROM product_variants WHERE product_id = ?").all(codeResult.product.id).map((variant) => variant.color),
+      ["Черный"],
+    );
+    assert.equal((await updateVariants([])).status, 200);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM product_variants WHERE product_id = ?").get(codeResult.product.id).count, 0);
+    const emptyVariantsAdmin = await fetch(`${base}/api/admin/products`, { headers: editHeaders });
+    assert.equal((await emptyVariantsAdmin.json()).products.find((product) => product.id === codeResult.product.id).variants.length, 0);
+    assert.equal((await updateVariants([], "active")).status, 400);
     const pairDenied = await fetch(`${base}/api/admin/extension-import-key`, { method: "POST" });
     assert.equal(pairDenied.status, 401);
     const pairResponse = await fetch(`${base}/api/admin/extension-import-key`, { method: "POST", headers: { Cookie: cookie } });
@@ -155,13 +183,11 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const importKey = (await pairResponse.json()).key;
     assert.match(importKey, /^[a-f0-9]{64}$/);
     assert.notEqual(db.prepare("SELECT value FROM settings WHERE key = 'extension_import_key_hash'").get().value, importKey);
-    const autoSpecs = Array.from({ length: 120 }, (_, i) => ({ name: `参数${i}`, value: i === 119 ? "值".repeat(600) : `值${i}` }));
-    const autoImages = Array.from({ length: 40 }, (_, i) => `https://example.com/product-${i}.jpg`);
     const autoPayload = {
-      raw_text: "Solar camping light", raw_title: "Solar camping light", description: "原始描述完整",
-      automatic_ai: true, preserve_reviewed_data: true, preserve_variant_names: true,
-      images: autoImages,
-      structured_data: { variants, specifications: autoSpecs },
+      raw_text: "Solar camping light", raw_title: "Solar camping light", description: "Описание фонаря для кемпинга.",
+      automatic_ai: true, preserve_variant_names: true,
+      images: ["https://example.com/product.jpg"],
+      structured_data: { variants, specifications: [{ name: "Материал", value: "Пластик" }] },
     };
     const countBefore = db.prepare("SELECT COUNT(*) AS count FROM products").get().count;
     const deniedAuto = await fetch(`${base}/api/add-product`, {
@@ -253,6 +279,13 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const categorySuggestion = await (await suggest("category")).json();
     assert.equal(categorySuggestion.category_name, "Туризм, кемпинг и пикник");
     assert.ok(categorySuggestion.category_id > 0);
+    const baselineResponse = await fetch(`${base}/api/add-product`, {
+      method: "POST", headers, body: JSON.stringify({ ...autoPayload, automatic_ai: false }),
+    });
+    assert.equal(baselineResponse.status, 201);
+    const baseline = await baselineResponse.json();
+    const baselineSaved = db.prepare("SELECT title, description, specifications, images FROM products WHERE id = ?").get(baseline.product.id);
+    fs.writeFileSync(path.join(temp, "tokenplan.log"), "");
     const autoResponse = await fetch(`${base}/api/add-product`, {
       method: "POST", headers: autoHeaders, body: JSON.stringify(autoPayload),
     });
@@ -260,41 +293,20 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const auto = await autoResponse.json();
     assert.equal((await waitForJob(auto.product.id)).status, "completed");
     const autoSaved = db.prepare("SELECT title, description, specifications, images, category_id FROM products WHERE id = ?").get(auto.product.id);
-    assert.equal(autoSaved.title, "Солнечный фонарь");
-    assert.match(autoSaved.description, /Фонарь для кемпинга/);
-    assert.deepEqual(JSON.parse(autoSaved.specifications), autoSpecs);
-    assert.deepEqual(autoSaved.images.split(","), autoImages);
-    const sourcePath = `${base}/api/admin/products/${auto.product.id}/import-source`;
-    assert.equal((await fetch(sourcePath)).status, 401);
-    const sourceResponse = await fetch(sourcePath, { headers: { Cookie: cookie } });
-    const sourceResult = await sourceResponse.json();
-    assert.equal(sourceResult.source.description, "原始描述完整");
-    assert.equal(sourceResult.source.title, "Solar camping light");
-    assert.equal(sourceResult.job.status, "completed");
+    assert.equal(autoSaved.title, baselineSaved.title);
+    assert.equal(autoSaved.description, baselineSaved.description);
+    assert.equal(autoSaved.specifications, baselineSaved.specifications);
+    assert.equal(autoSaved.images, baselineSaved.images);
+    const requests = fs.readFileSync(path.join(temp, "tokenplan.log"), "utf8").trim().split("\n").map(JSON.parse);
+    assert.equal(requests.length, 1);
+    assert.match(requests[0].prompt, /подкатегорию/);
+    assert.ok(requests[0].prompt.includes(autoSaved.title));
+    assert.ok(requests[0].prompt.includes(autoSaved.description.slice(0, 4000).replace(/\n/g, "\\n")));
     assert.equal(autoSaved.category_id, categorySuggestion.category_id);
     const autoVariants = db.prepare("SELECT color, price_cny, price_tjs FROM product_variants WHERE product_id = ? ORDER BY id").all(auto.product.id);
     assert.equal(autoVariants.length, 600);
     assert.equal(autoVariants[599].color, "型号599");
     assert.ok(autoVariants.every((variant) => variant.price_cny === 0 && variant.price_tjs === 0));
-    const automaticHtml = `window.context = ${JSON.stringify({ offerDetail: {
-      subject: "Solar camping light", featureAttributes: autoSpecs, galleryImages: autoImages,
-      skuInfoMap: { "红色": { price: 12, canBookCount: 3, skuId: "red" } },
-    } })};`;
-    const automaticHtmlResponse = await fetch(`${base}/api/add-product`, {
-      method: "POST", headers: autoHeaders, body: JSON.stringify({
-        raw_html_text: automaticHtml, automatic_ai: true, preserve_reviewed_data: true, preserve_variant_names: true,
-      }),
-    });
-    assert.equal(automaticHtmlResponse.status, 201);
-    const automaticHtmlImport = await automaticHtmlResponse.json();
-    assert.equal((await waitForJob(automaticHtmlImport.product.id)).status, "completed");
-    const automaticHtmlSaved = db.prepare("SELECT specifications, images FROM products WHERE id = ?").get(automaticHtmlImport.product.id);
-    assert.ok(autoSpecs.every((spec) => JSON.parse(automaticHtmlSaved.specifications).some((item) => item.name === spec.name && item.value === spec.value)));
-    assert.deepEqual(automaticHtmlSaved.images.split(","), autoImages);
-    const automaticHtmlVariant = db.prepare("SELECT color, price_cny, price_tjs FROM product_variants WHERE product_id = ?").get(automaticHtmlImport.product.id);
-    assert.equal(automaticHtmlVariant.color, "红色");
-    assert.equal(automaticHtmlVariant.price_cny, 0);
-    assert.equal(automaticHtmlVariant.price_tjs, 0);
     const raceResponse = await fetch(`${base}/api/add-product`, {
       method: "POST", headers: autoHeaders, body: JSON.stringify({ ...autoPayload, description: "TEST_DELAY" }),
     });
@@ -305,13 +317,13 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.match(raceJob.message, /изменён/);
     assert.equal(db.prepare("SELECT title FROM products WHERE id = ?").get(raceImport.product.id).title, "Название изменено администратором");
     const partialResponse = await fetch(`${base}/api/add-product`, {
-      method: "POST", headers: autoHeaders, body: JSON.stringify({ ...autoPayload, description: "TEST_CATEGORY_FAILURE" }),
+      method: "POST", headers: autoHeaders, body: JSON.stringify({ ...autoPayload, manual_title: "TEST_CATEGORY_FAILURE" }),
     });
     const partialImport = await partialResponse.json();
     const partialJob = await waitForJob(partialImport.product.id);
-    assert.equal(partialJob.status, "partial");
+    assert.equal(partialJob.status, "failed");
     assert.match(partialJob.message, /429/);
-    assert.equal(db.prepare("SELECT title FROM products WHERE id = ?").get(partialImport.product.id).title, "Фонарь без категории");
+    assert.equal(db.prepare("SELECT title FROM products WHERE id = ?").get(partialImport.product.id).title, partialImport.product.title);
     let limited = false;
     for (let i = 0; i < 60; i++) {
       const attempt = await fetch(`${base}/api/add-product`, {
@@ -328,6 +340,63 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     db.prepare("UPDATE products SET status = 'active' WHERE id = ?").run(result.product.id);
     db.prepare("UPDATE product_variants SET price_tjs = 100 WHERE product_id = ?").run(result.product.id);
     const variant = db.prepare("SELECT id FROM product_variants WHERE product_id = ? ORDER BY id LIMIT 1").get(result.product.id);
+    const discountResponse = await fetch(`${base}/api/admin/products/${result.product.id}/discount`, {
+      method: 'PUT', headers: { ...headers, Cookie: cookie }, body: JSON.stringify({ discount_percent: 10 }),
+    });
+    assert.equal(discountResponse.status, 200);
+    const discountedQuote = await (await fetch(`${base}/api/order-quote`, {
+      method: 'POST', headers, body: JSON.stringify({ items: [{ product_id: result.product.id, variant_id: variant.id, quantity: 2 }] }),
+    })).json();
+    assert.deepEqual([
+      discountedQuote.original_subtotal,
+      discountedQuote.product_discount,
+      discountedQuote.subtotal,
+      discountedQuote.total,
+      discountedQuote.items[0].original_price_tjs,
+      discountedQuote.items[0].price_tjs,
+    ], [200, 20, 180, 180, 100, 90]);
+    const publicProduct = await (await fetch(`${base}/api/products/${result.product.id}`)).json();
+    assert.equal(publicProduct.product.variants[0].original_price_tjs, 100);
+    assert.equal(publicProduct.product.variants[0].price_tjs, 90);
+    db.prepare('UPDATE products SET discount_percent = 0 WHERE id = ?').run(result.product.id);
+
+    for (let i = 0; i < 2; i += 1) {
+      const tracked = await fetch(`${base}/api/searches`, { method: 'POST', headers, body: JSON.stringify({ query: 'редкий запрос тест' }) });
+      assert.equal(tracked.status, 204);
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const tracked = await fetch(`${base}/api/searches`, { method: 'POST', headers, body: JSON.stringify({ query: 'частый запрос тест' }) });
+      assert.equal(tracked.status, 204);
+    }
+    const insertPublicQuery = db.prepare(`
+      INSERT INTO site_search_queries (normalized_query, query_text, searches_count, first_searched_at, last_searched_at)
+      VALUES (?, ?, 5, ?, ?)
+    `);
+    for (let i = 0; i < 12; i += 1) {
+      insertPublicQuery.run(`popular test ${i}`, `popular test ${i}`, new Date().toISOString(), new Date().toISOString());
+    }
+    const popularList = await (await fetch(`${base}/api/search/suggestions`)).json();
+    assert.equal(popularList.popular.length, 10);
+    const hiddenRare = await (await fetch(`${base}/api/search/suggestions?q=${encodeURIComponent('редкий запрос тест')}`)).json();
+    assert.equal(hiddenRare.suggestions.includes('редкий запрос тест'), false);
+    const visibleFrequent = await (await fetch(`${base}/api/search/suggestions?q=${encodeURIComponent('частый')}`)).json();
+    assert.ok(visibleFrequent.suggestions.includes('частый запрос тест'));
+
+    const manualQuery = 'Подсказка вручную';
+    const addManualQuery = await fetch(`${base}/api/admin/search-queries`, {
+      method: 'POST', headers: { ...headers, Cookie: cookie }, body: JSON.stringify({ query: manualQuery }),
+    });
+    assert.equal(addManualQuery.status, 201);
+    const manualSuggestions = await (await fetch(`${base}/api/search/suggestions?q=${encodeURIComponent('подсказка')}`)).json();
+    assert.ok(manualSuggestions.suggestions.includes(manualQuery));
+    const hideManualQuery = await fetch(`${base}/api/admin/search-queries`, {
+      method: 'PUT', headers: { ...headers, Cookie: cookie },
+      body: JSON.stringify({ normalized_query: manualQuery.toLocaleLowerCase('ru'), public_enabled: false }),
+    });
+    assert.equal(hideManualQuery.status, 200);
+    const hiddenManual = await (await fetch(`${base}/api/search/suggestions?q=${encodeURIComponent('подсказка')}`)).json();
+    assert.equal(hiddenManual.suggestions.includes(manualQuery), false);
+
     const promo = {
       title: 'Промокод', kind: 'discount', discount_type: 'percent', discount_value: 10,
       scope: 'order', product_ids: [], category_ids: [], min_quantity: 1, min_total: 0,

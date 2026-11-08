@@ -9,12 +9,12 @@ import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
-import { calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
+import { calculateDiscountedPriceTjs, calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
 import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { calculatePromotions } from './src/utils/promotions.js';
 import type { Promotion } from './src/utils/promotions.js';
-import { requestImportText, requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
+import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -175,6 +175,7 @@ db.exec(`
     video_urls TEXT,
     youtube_url TEXT,
     specifications TEXT,
+    discount_percent INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE SET NULL
   );
@@ -354,7 +355,9 @@ db.exec(`
     query_text TEXT NOT NULL,
     searches_count INTEGER NOT NULL DEFAULT 0,
     first_searched_at TEXT NOT NULL,
-    last_searched_at TEXT NOT NULL
+    last_searched_at TEXT NOT NULL,
+    public_enabled INTEGER NOT NULL DEFAULT 1,
+    is_manual INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS customer_feedback (
@@ -385,6 +388,17 @@ db.exec('UPDATE orders SET total_amount_tjs = total_amount WHERE total_amount_tj
 const variantColumns = db.prepare('PRAGMA table_info(product_variants)').all() as Array<{ name: string }>;
 if (!variantColumns.some((column) => column.name === 'volume_m3')) {
   db.exec('ALTER TABLE product_variants ADD COLUMN volume_m3 REAL NOT NULL DEFAULT 0;');
+}
+const productColumns = db.prepare('PRAGMA table_info(products)').all() as Array<{ name: string }>;
+if (!productColumns.some((column) => column.name === 'discount_percent')) {
+  db.exec('ALTER TABLE products ADD COLUMN discount_percent INTEGER NOT NULL DEFAULT 0;');
+}
+const searchQueryColumns = db.prepare('PRAGMA table_info(site_search_queries)').all() as Array<{ name: string }>;
+if (!searchQueryColumns.some((column) => column.name === 'public_enabled')) {
+  db.exec('ALTER TABLE site_search_queries ADD COLUMN public_enabled INTEGER NOT NULL DEFAULT 1;');
+}
+if (!searchQueryColumns.some((column) => column.name === 'is_manual')) {
+  db.exec('ALTER TABLE site_search_queries ADD COLUMN is_manual INTEGER NOT NULL DEFAULT 0;');
 }
 const variantsMissingVolume = db.prepare(`
   SELECT v.id, p.specifications
@@ -1016,6 +1030,14 @@ function parseSpecifications(value: unknown): Array<{ name: string; value: strin
 
 function calculateVariantPriceTjs(priceCny: number, weightKg: number = 0.5, volumeM3 = 0): number {
   return calculatePriceTjs(Number(priceCny), Number(weightKg), Number(volumeM3));
+}
+
+function applyProductDiscount<T extends { price_tjs: number }>(variants: T[], discountPercent: number) {
+  return variants.map((variant) => ({
+    ...variant,
+    original_price_tjs: variant.price_tjs,
+    price_tjs: calculateDiscountedPriceTjs(variant.price_tjs, discountPercent),
+  }));
 }
 
 function calculateLegacyVariantPriceTjs(priceCny: number, weightKg: number = 0.5): number {
@@ -2003,8 +2025,9 @@ app.get('/api/search/suggestions', (req, res) => {
     const popularQueries = db.prepare(`
       SELECT query_text, searches_count
       FROM site_search_queries
-      ORDER BY searches_count DESC, last_searched_at DESC
-      LIMIT 8
+      WHERE public_enabled = 1 AND (is_manual = 1 OR searches_count >= 3)
+      ORDER BY searches_count DESC, last_searched_at DESC, normalized_query ASC
+      LIMIT 10
     `).all() as Array<{ query_text: string; searches_count: number }>;
     if (!query) return res.json({ suggestions: [], popular: popularQueries });
 
@@ -2013,8 +2036,8 @@ app.get('/api/search/suggestions', (req, res) => {
     const matchingQueries = db.prepare(`
       SELECT query_text, searches_count
       FROM site_search_queries
-      WHERE normalized_query LIKE ?
-      ORDER BY searches_count DESC, last_searched_at DESC
+      WHERE normalized_query LIKE ? AND public_enabled = 1 AND (is_manual = 1 OR searches_count >= 3)
+      ORDER BY searches_count DESC, last_searched_at DESC, normalized_query ASC
       LIMIT 6
     `).all(pattern) as Array<{ query_text: string; searches_count: number }>;
     const variants = getSearchCaseVariants(query);
@@ -2154,11 +2177,12 @@ app.get('/api/admin/search-analytics', (req, res) => {
     const popularQueries = db.prepare(`
       SELECT query_text, searches_count, last_searched_at
       FROM site_search_queries
-      ORDER BY searches_count DESC, last_searched_at DESC
+      WHERE public_enabled = 1 AND (is_manual = 1 OR searches_count >= 3)
+      ORDER BY searches_count DESC, last_searched_at DESC, normalized_query ASC
       LIMIT 10
     `).all();
     const queries = db.prepare(`
-      SELECT query_text, searches_count, first_searched_at, last_searched_at
+      SELECT query_text, searches_count, first_searched_at, last_searched_at, public_enabled, is_manual
       FROM site_search_queries
       ORDER BY searches_count DESC, last_searched_at DESC
       LIMIT ? OFFSET ?
@@ -2174,6 +2198,61 @@ app.get('/api/admin/search-analytics', (req, res) => {
   } catch (error) {
     console.error('[Admin Search Analytics Error]', error);
     return res.status(500).json({ error: 'Не удалось загрузить статистику поиска' });
+  }
+});
+
+app.post('/api/admin/search-queries', requireAdmin, (req, res) => {
+  const query = typeof req.body?.query === 'string'
+    ? req.body.query.normalize('NFKC').replace(/\s+/g, ' ').trim().slice(0, 80)
+    : '';
+  if (!query) return res.status(400).json({ error: 'Введите поисковый запрос длиной до 80 символов.' });
+  const normalizedQuery = query.toLocaleLowerCase('ru');
+  const now = new Date().toISOString();
+  try {
+    db.prepare(`
+      INSERT INTO site_search_queries (
+        normalized_query, query_text, searches_count, first_searched_at, last_searched_at, public_enabled, is_manual
+      ) VALUES (?, ?, 0, ?, ?, 1, 1)
+      ON CONFLICT(normalized_query) DO UPDATE SET
+        query_text = excluded.query_text, public_enabled = 1, is_manual = 1
+    `).run(normalizedQuery, query, now, now);
+    return res.status(201).json({ success: true });
+  } catch (error) {
+    console.error('[Admin Search Query Create]', error);
+    return res.status(500).json({ error: 'Не удалось добавить поисковый запрос.' });
+  }
+});
+
+app.put('/api/admin/search-queries', requireAdmin, (req, res) => {
+  const normalizedQuery = typeof req.body?.normalized_query === 'string'
+    ? req.body.normalized_query.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('ru').slice(0, 80)
+    : '';
+  if (!normalizedQuery || typeof req.body?.public_enabled !== 'boolean') {
+    return res.status(400).json({ error: 'Некорректные настройки поискового запроса.' });
+  }
+  try {
+    const result = db.prepare('UPDATE site_search_queries SET public_enabled = ? WHERE normalized_query = ?')
+      .run(req.body.public_enabled ? 1 : 0, normalizedQuery);
+    if (!result.changes) return res.status(404).json({ error: 'Поисковый запрос не найден.' });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('[Admin Search Query Update]', error);
+    return res.status(500).json({ error: 'Не удалось изменить видимость поискового запроса.' });
+  }
+});
+
+app.delete('/api/admin/search-queries', requireAdmin, (req, res) => {
+  const normalizedQuery = typeof req.body?.normalized_query === 'string'
+    ? req.body.normalized_query.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('ru').slice(0, 80)
+    : '';
+  if (!normalizedQuery) return res.status(400).json({ error: 'Некорректный поисковый запрос.' });
+  try {
+    const result = db.prepare('DELETE FROM site_search_queries WHERE normalized_query = ?').run(normalizedQuery);
+    if (!result.changes) return res.status(404).json({ error: 'Поисковый запрос не найден.' });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('[Admin Search Query Delete]', error);
+    return res.status(500).json({ error: 'Не удалось удалить поисковый запрос.' });
   }
 });
 
@@ -2348,13 +2427,14 @@ app.get('/api/products', (req, res) => {
     const orderBy = sort === 'popular'
       ? 'p.views_count DESC, p.id DESC'
       : sort === 'price_asc'
-        ? '(SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0) ASC, p.id DESC'
+        ? '(SELECT MIN(MAX(1, ROUND(v.price_tjs * (100 - p.discount_percent) / 100.0))) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0) ASC, p.id DESC'
         : sort === 'price_desc'
-          ? '(SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0) DESC, p.id DESC'
+          ? '(SELECT MIN(MAX(1, ROUND(v.price_tjs * (100 - p.discount_percent) / 100.0))) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0) DESC, p.id DESC'
           : 'p.id DESC';
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
              p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications, p.created_at,
+             p.discount_percent,
              c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
@@ -2374,7 +2454,7 @@ app.get('/api/products', (req, res) => {
     // Используем безопасный цикл for ... of
     const enriched: any[] = [];
     for (const p of products) {
-      const variants = getVariants.all(p.id) as any[];
+      const variants = applyProductDiscount(getVariants.all(p.id) as any[], Number(p.discount_percent) || 0);
       let minPrice = 0;
       let maxPrice = 0;
       if (variants.length > 0) {
@@ -2452,7 +2532,7 @@ app.get('/api/products/:id', (req, res) => {
     const product = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
              p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications,
-             p.created_at, p.views_count, c.name AS category_name,
+             p.created_at, p.views_count, p.discount_percent, c.name AS category_name,
              COALESCE(MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS min_price_tjs,
              COALESCE(MAX(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS max_price_tjs
       FROM products p
@@ -2482,12 +2562,13 @@ app.get('/api/products/:id', (req, res) => {
       specifications = fallbackAnalysis('', product.title, 50, 0.5).specifications || [];
     }
 
-    const variants = db.prepare(`
+    const rawVariants = db.prepare(`
       SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
       FROM product_variants
       WHERE product_id = ?
       ORDER BY id ASC
     `).all(productId);
+    const variants = applyProductDiscount(rawVariants as Array<{ price_tjs: number }>, Number(product.discount_percent) || 0);
 
     return res.json({
       product: {
@@ -2525,7 +2606,7 @@ app.get('/api/products/:id/related', (req, res) => {
 
     const selectFields = `
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status,
-             p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url,
+             p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.discount_percent,
              c.name AS category_name,
              COALESCE((
                SELECT MIN(v.price_tjs)
@@ -2549,9 +2630,15 @@ app.get('/api/products/:id/related', (req, res) => {
         if (relatedProducts.length >= 4) break;
         if (seenIds.has(candidate.id)) continue;
         seenIds.add(candidate.id);
+        const variants = applyProductDiscount(
+          getRelatedVariants.all(candidate.id) as Array<{ price_tjs: number }>,
+          Number(candidate.discount_percent) || 0,
+        );
+        const prices = variants.map((variant) => variant.price_tjs).filter((price) => price > 0);
         relatedProducts.push({
           ...candidate,
-          variants: getRelatedVariants.all(candidate.id),
+          min_price_tjs: prices.length ? Math.min(...prices) : candidate.min_price_tjs,
+          variants,
           delivery_type: candidate.delivery_type || 'order',
           video_urls: normalizeVideoUrls(candidate.video_urls, candidate.youtube_url || candidate.video_url || ''),
           youtube_url: candidate.youtube_url || candidate.video_url || '',
@@ -2634,6 +2721,7 @@ type PromotionRow = { id: number; title: string; config_json: string; uses: numb
 type OrderCatalogItem = {
   product_id: number; variant_id: number; category_id: number | null;
   title: string; color: string; size: string; quantity: number; price_tjs: number;
+  original_price_tjs: number; discount_percent?: number;
   variant_sku: string; base_sku: string; image: string; delivery_type: string;
 };
 
@@ -2745,7 +2833,7 @@ function buildOrderQuote(input: unknown, code: unknown) {
   if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{0,40}$/.test(code.trim())) throw new Error('Некорректный промокод.');
   const getVariant = db.prepare(`
     SELECT p.id AS product_id, v.id AS variant_id, p.category_id, p.title, v.color, v.size,
-           v.price_tjs, v.variant_sku, p.base_sku, COALESCE(NULLIF(v.image_url, ''), p.main_image, '') AS image,
+         v.price_tjs AS original_price_tjs, p.discount_percent, v.variant_sku, p.base_sku, COALESCE(NULLIF(v.image_url, ''), p.main_image, '') AS image,
            COALESCE(p.delivery_type, 'order') AS delivery_type
     FROM product_variants v JOIN products p ON p.id = v.product_id
     WHERE v.id = ? AND p.id = ? AND p.status = 'active' AND v.price_tjs > 0
@@ -2764,13 +2852,26 @@ function buildOrderQuote(input: unknown, code: unknown) {
     seen.add(variantId);
     const found = getVariant.get(variantId, productId) as Omit<OrderCatalogItem, 'quantity'> | undefined;
     if (!found) throw new Error('Товар или вариант больше недоступен. Обновите корзину.');
-    if (!Number.isSafeInteger(found.price_tjs) || !Number.isSafeInteger(found.price_tjs * quantity)) throw new Error('Некорректная цена товара.');
-    return { ...found, quantity };
+    const discountPercent = Number(found.discount_percent) || 0;
+    const originalPrice = Number(found.original_price_tjs);
+    if (!Number.isSafeInteger(originalPrice) || originalPrice <= 0 ||
+        !Number.isSafeInteger(calculateDiscountedPriceTjs(originalPrice, discountPercent) * quantity)) {
+      throw new Error('Некорректная цена товара.');
+    }
+    const { discount_percent: _discountPercent, original_price_tjs: _originalPrice, ...catalogItem } = found;
+    return {
+      ...catalogItem,
+      original_price_tjs: originalPrice,
+      price_tjs: calculateDiscountedPriceTjs(originalPrice, discountPercent),
+      quantity,
+    };
   });
-  if (!Number.isSafeInteger(items.reduce((sum, item) => sum + item.price_tjs * item.quantity, 0))) throw new Error('Сумма заказа слишком велика.');
+  const originalSubtotal = items.reduce((sum, item) => sum + item.original_price_tjs * item.quantity, 0);
+  const subtotal = items.reduce((sum, item) => sum + item.price_tjs * item.quantity, 0);
+  if (!Number.isSafeInteger(originalSubtotal) || !Number.isSafeInteger(subtotal)) throw new Error('Сумма заказа слишком велика.');
   const result = calculatePromotions(items, readPromotions(), code.trim(), new Date());
   const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ items, result })).digest('hex');
-  return { items, ...result, fingerprint };
+  return { items, original_subtotal: originalSubtotal, product_discount: originalSubtotal - subtotal, ...result, fingerprint };
 }
 
 const quoteRateLimiter = rateLimit({ windowMs: 60 * 1000, limit: 90, standardHeaders: 'draft-8', legacyHeaders: false });
@@ -3125,7 +3226,8 @@ app.delete('/api/orders/:id', (req, res) => {
 app.get('/api/admin/products', requireAdmin, (req, res) => {
   try {
     const products = db.prepare(`
-      SELECT p.*, c.name as category_name
+      SELECT p.*, c.name as category_name,
+             COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       ORDER BY p.id DESC
@@ -3479,7 +3581,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     }
     const existingStatus = db.prepare('SELECT status FROM products WHERE id = ?').get(id) as { status: string } | undefined;
     if (existingStatus?.status === 'draft' && status === 'active') {
-      const prices: unknown[] = Array.isArray(variants) && variants.length
+      const prices: unknown[] = Array.isArray(variants)
         ? variants.map((variant: any) => variant.price_tjs)
         : (db.prepare('SELECT price_tjs FROM product_variants WHERE product_id = ?').all(id) as Array<{ price_tjs: number }>).map((variant) => variant.price_tjs);
       if (!prices.length || prices.some((price) => !Number.isSafeInteger(Number(price)) || Number(price) <= 0)) {
@@ -3550,7 +3652,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs, id);
 
     // Если передан полный обновленный массив вариантов: синхронизируем матрицу
-    if (Array.isArray(variants) && variants.length > 0) {
+    if (Array.isArray(variants)) {
       db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(id);
 
       const insertVar = db.prepare(`
@@ -3596,6 +3698,24 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
   } catch (err: any) {
     console.error('[Admin Update Product Error]', err);
     return res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/products/:id/discount', requireAdmin, (req, res) => {
+  const productId = Number(req.params.id);
+  const discountPercent = req.body?.discount_percent;
+  if (!Number.isSafeInteger(productId) || productId <= 0 ||
+      !Number.isSafeInteger(discountPercent) || discountPercent < 0 || discountPercent > 90) {
+    return res.status(400).json({ error: 'Укажите скидку целым числом от 0 до 90 процентов.' });
+  }
+  try {
+    const result = db.prepare('UPDATE products SET discount_percent = ? WHERE id = ?')
+      .run(discountPercent, productId);
+    if (!result.changes) return res.status(404).json({ error: 'Товар не найден.' });
+    return res.json({ success: true, discount_percent: discountPercent });
+  } catch (error) {
+    console.error('[Admin Product Discount]', error);
+    return res.status(500).json({ error: 'Не удалось сохранить скидку товара.' });
   }
 });
 
@@ -3679,14 +3799,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS extension_import_jobs (
   status TEXT NOT NULL,
   message TEXT NOT NULL
 )`);
-db.exec(`CREATE TABLE IF NOT EXISTS extension_import_sources (
-  product_id INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL,
-  context TEXT NOT NULL
-)`);
 db.prepare("UPDATE extension_import_jobs SET status = 'failed', message = ? WHERE status IN ('queued', 'processing')")
-  .run('Сервер перезапущен во время обработки. Черновик сохранён; используйте кнопки ИИ в редакторе.');
+  .run('Сервер перезапущен во время подбора категории. Черновик сохранён; используйте кнопку категории в редакторе.');
 
 app.get('/api/extension/import-status/:id', (req, res) => {
   if (!validExtensionImportKey(req)) return res.status(401).json({ error: 'Ключ привязки недействителен.' });
@@ -3696,16 +3810,6 @@ app.get('/api/extension/import-status/:id', (req, res) => {
   if (!job) return res.status(404).json({ error: 'Обработка этого товара не найдена.' });
   res.setHeader('Cache-Control', 'no-store');
   return res.json(job);
-});
-
-app.get('/api/admin/products/:id/import-source', requireAdmin, (req, res) => {
-  const id = Number(req.params.id);
-  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Некорректный ID товара.' });
-  const source = db.prepare('SELECT title, description, context FROM extension_import_sources WHERE product_id = ?').get(id);
-  const job = db.prepare('SELECT status, message FROM extension_import_jobs WHERE product_id = ?').get(id);
-  if (!source) return res.status(404).json({ error: 'Исходные данные импорта не найдены.' });
-  res.setHeader('Cache-Control', 'no-store');
-  return res.json({ source, job });
 });
 
 const importQueue: Array<() => Promise<void>> = [];
@@ -3767,7 +3871,7 @@ app.post('/api/add-product', (req, res, next) => {
       return res.status(400).json({ status: 'error', message: 'Код страницы слишком большой: максимум 2 000 000 символов.' });
     }
     const fullRawText = raw_html_text.trim() || raw_text.trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
-    const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText, automatic_ai === true);
+    const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
     if (structured_data && typeof structured_data === 'object' && !Array.isArray(structured_data)) {
       const structuredTitleCandidates = [
         structured_data.title,
@@ -3781,14 +3885,15 @@ app.post('/api/add-product', (req, res, next) => {
       if (Array.isArray(structured_data.specifications)) {
         structuredMedia.specifications = structured_data.specifications
           .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
+          .slice(0, 100)
           .map((item: any) => {
-            const name = preserve_reviewed_data === true ? item.name.trim() : item.name.trim().slice(0, 120);
+            const name = item.name.trim().slice(0, 120);
             const colorImageMatch = name.match(/^Фото цвета:\s*(.+)$/i);
             return {
               name: preserve_reviewed_data === true ? name : colorImageMatch
                 ? `Фото цвета: ${translateVariantName(colorImageMatch[1])}`
                 : translateVariantName(name),
-              value: preserve_reviewed_data === true ? item.value.trim() : colorImageMatch
+              value: preserve_reviewed_data === true ? item.value.trim().slice(0, 500) : colorImageMatch
                 ? item.value.trim().slice(0, 2048)
                 : translateVariantName(item.value.trim().slice(0, 500)),
             };
@@ -3799,8 +3904,8 @@ app.post('/api/add-product', (req, res, next) => {
         structuredMedia.variants = structured_data.variants
           .filter((item: any) => item && typeof item === 'object')
           .map((item: any) => ({
-            color: typeof item.color === 'string' ? (preserve_variant_names === true ? item.color : item.color.slice(0, 120)) : 'Стандарт',
-            size: typeof item.size === 'string' ? (preserve_variant_names === true ? item.size : item.size.slice(0, 120)) : 'Стандарт',
+            color: typeof item.color === 'string' ? item.color.slice(0, 120) : 'Стандарт',
+            size: typeof item.size === 'string' ? item.size.slice(0, 120) : 'Стандарт',
             price_cny: Number.isFinite(Number(item.price_cny)) && Number(item.price_cny) > 0 ? Number(item.price_cny) : 0,
             stock: Number.isFinite(Number(item.stock)) && Number(item.stock) >= 0 ? Math.floor(Number(item.stock)) : 0,
             weight_kg: normalizeWeightKg(item.weight_kg) || 0.5,
@@ -3809,7 +3914,7 @@ app.post('/api/add-product', (req, res, next) => {
           }));
       }
       if (Array.isArray(structured_data.images)) {
-        structuredMedia.images = filterProductImageUrls(structured_data.images, Number.MAX_SAFE_INTEGER);
+        structuredMedia.images = filterProductImageUrls(structured_data.images);
       }
       if (Array.isArray(structured_data.video_urls)) {
         structuredMedia.videoUrls = normalizeVideoUrls(structured_data.video_urls).slice(0, 12);
@@ -3873,7 +3978,7 @@ app.post('/api/add-product', (req, res, next) => {
     let specificationsToProcess: Array<{ name: string; value: string }> = [];
 
     // Приоритет разбора: Gemini Flash-Lite
-    if (automatic_ai !== true && use_gemini !== false && aiClient && fullRawText.length > 0) {
+    if (use_gemini !== false && aiClient && fullRawText.length > 0) {
       console.log('[Gemini Flash-Lite] Интеллектуальный разбор с привязкой картинок visual_sku_map...');
       const aiAnalysis = await analyzeProductWithGemini(
         structuredMedia.rawSnippetForAi || fullRawText,
@@ -3924,14 +4029,12 @@ app.post('/api/add-product', (req, res, next) => {
       ? structuredMedia.specifications
       : [...specificationsToProcess, ...structuredMedia.specifications];
     for (const specification of sourceSpecifications) {
-      const normalizedName = (preserve_reviewed_data === true
-        ? `${specification.name}\u0000${specification.value}`
-        : translateVariantName(specification.name)).toLocaleLowerCase('ru');
+      const normalizedName = translateVariantName(specification.name).toLocaleLowerCase('ru');
       if (normalizedName && !specificationMap.has(normalizedName)) {
         specificationMap.set(normalizedName, specification);
       }
     }
-    specificationsToProcess = [...specificationMap.values()];
+    specificationsToProcess = [...specificationMap.values()].slice(0, 100);
     if (structuredMedia.weightKg) finalWeight = structuredMedia.weightKg;
 
     // Если в названии остались китайские иероглифы или фабричные токены
@@ -4006,7 +4109,7 @@ app.post('/api/add-product', (req, res, next) => {
     const cleanImgArr = filterProductImageUrls([
       ...structuredMedia.images,
       ...(Array.isArray(images) ? images : typeof images === 'string' ? images.split(',') : []),
-    ], Number.MAX_SAFE_INTEGER);
+    ]);
     if (cleanImgArr.length > 0) {
       allImages = cleanImgArr.join(',');
       mainImage = cleanImgArr[0] || '';
@@ -4078,19 +4181,10 @@ app.post('/api/add-product', (req, res, next) => {
 
     let automaticAi: { status: string; message: string } | undefined;
     if (automatic_ai === true) {
-      db.prepare('INSERT INTO extension_import_sources (product_id, title, description, context) VALUES (?, ?, ?, ?)')
-        .run(productId, effectiveTitle, typeof inputDesc === 'string' ? inputDesc : '', structuredMedia.rawSnippetForAi || fullRawText.slice(0, MAX_IMPORT_TEXT_LENGTH));
       const originalTitle = finalTitle;
       const originalDescription = finalDesc;
       const credentialHash = getSetting('extension_import_key_hash', '');
-      const promptData = {
-        title: (effectiveTitle || finalTitle).slice(0, 500),
-        description: (typeof inputDesc === 'string' && inputDesc.trim() ? inputDesc : (structuredMedia.rawSnippetForAi || fullRawText || finalDesc)).slice(0, 4000),
-        specifications: specificationsToProcess.slice(0, 30).map((item) => ({
-          name: item.name.slice(0, 80), value: item.value.slice(0, 160),
-        })),
-      };
-      automaticAi = { status: 'queued', message: 'Черновик сохранён, обработка ИИ ожидает очереди.' };
+      automaticAi = { status: 'queued', message: 'Черновик сохранён, подбор категории ожидает очереди.' };
       db.prepare('INSERT INTO extension_import_jobs (product_id, status, message) VALUES (?, ?, ?)')
         .run(productId, automaticAi.status, automaticAi.message);
       importQueue.push(async () => {
@@ -4098,39 +4192,24 @@ app.post('/api/add-product', (req, res, next) => {
           db.prepare('UPDATE extension_import_jobs SET status = ?, message = ? WHERE product_id = ?')
             .run(status, message, productId);
         };
-        setJob('processing', 'Черновик сохранён, ИИ обрабатывает товар.');
+        setJob('processing', 'Черновик сохранён, ИИ подбирает категорию.');
         try {
           if (getSetting('extension_import_key_hash', '') !== credentialHash) throw new Error('Ключ привязки отозван или заменён.');
           const current = db.prepare('SELECT title, description, status FROM products WHERE id = ?').get(productId) as { title: string; description: string; status: string } | undefined;
           if (!current || current.status !== 'draft' || current.title !== originalTitle || current.description !== originalDescription) {
             throw new Error('Товар был изменён до обработки. Проверьте его в админке.');
           }
-          const key = readTokenPlanKey();
-          const improved = await requestImportText(key, promptData);
-          const improvedTitle = cleanBannedWordsAndPhrases(improved.title);
-          const improvedDescription = ensureOrderDeliveryNotice(cleanProductDescription(cleanBannedWordsAndPhrases(improved.description)));
-          if (!improvedTitle || !improvedDescription) throw new Error('ИИ вернул пустое название или описание.');
-          const textUpdate = db.prepare(`
-            UPDATE products SET title = ?, description = ?
-            WHERE id = ? AND status = 'draft' AND title = ? AND description = ?
-          `).run(improvedTitle, improvedDescription, productId, originalTitle, originalDescription);
-          if (Number(textUpdate.changes) !== 1) throw new Error('Товар был изменён во время обработки. Проверьте его в админке.');
-          try {
-            if (getSetting('extension_import_key_hash', '') !== credentialHash) throw new Error('Ключ привязки отозван или заменён.');
-            const suggestedCategory = await requestTokenPlanSuggestion(key, 'category', {
-              title: improvedTitle, description: improvedDescription.slice(0, 4000), specifications: [],
-            }, STRICT_ALLOWED_CATEGORIES, fetch, 100);
-            const categoryUpdate = db.prepare(`
-              UPDATE products SET category_id = ?
-              WHERE id = ? AND status = 'draft' AND title = ? AND description = ? AND category_id = ?
-            `).run(resolveCategoryId(suggestedCategory), productId, improvedTitle, improvedDescription, categoryId);
-            if (Number(categoryUpdate.changes) !== 1) throw new Error('Товар был изменён во время подбора категории.');
-            setJob('completed', 'Название, описание и категория обработаны ИИ. Проверьте товар перед публикацией.');
-          } catch (error) {
-            setJob('partial', `Название и описание улучшены, категория не изменена: ${error instanceof Error ? error.message : 'ошибка ИИ.'} Используйте кнопку категории в редакторе.`);
-          }
+          const suggestedCategory = await requestTokenPlanSuggestion(readTokenPlanKey(), 'category', {
+            title: originalTitle, description: originalDescription.slice(0, 4000), specifications: [],
+          }, STRICT_ALLOWED_CATEGORIES);
+          const categoryUpdate = db.prepare(`
+            UPDATE products SET category_id = ?
+            WHERE id = ? AND status = 'draft' AND title = ? AND description = ? AND category_id = ?
+          `).run(resolveCategoryId(suggestedCategory), productId, originalTitle, originalDescription, categoryId);
+          if (Number(categoryUpdate.changes) !== 1) throw new Error('Товар был изменён во время подбора категории.');
+          setJob('completed', 'Категория подобрана ИИ. Проверьте товар перед публикацией.');
         } catch (error) {
-          setJob('failed', `Черновик сохранён без улучшения ИИ: ${error instanceof Error ? error.message : 'ошибка ИИ.'} Повторите кнопками в редакторе.`);
+          setJob('failed', `Черновик сохранён, категория не изменена: ${error instanceof Error ? error.message : 'ошибка ИИ.'} Используйте кнопку категории в редакторе.`);
         }
       });
       setImmediate(() => void drainImportQueue().catch((error) => console.error('[Import AI queue]', error)));
@@ -4498,7 +4577,7 @@ app.get('/api/categories/:id/recommendations', (req, res) => {
     const placeholders = relatedCategoryIds.map(() => '?').join(',');
     const recommendations = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
-             p.main_image, p.images, p.video_url, p.youtube_url, p.created_at,
+             p.main_image, p.images, p.video_url, p.youtube_url, p.created_at, p.discount_percent,
              c.name AS category_name,
              COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs,
              COALESCE((SELECT MAX(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS max_price_tjs
@@ -4513,7 +4592,7 @@ app.get('/api/categories/:id/recommendations', (req, res) => {
       FROM product_variants WHERE product_id = ? ORDER BY id ASC
     `);
     for (const product of recommendations) {
-      product.variants = getVariants.all(product.id);
+      product.variants = applyProductDiscount(getVariants.all(product.id) as Array<{ price_tjs: number }>, Number(product.discount_percent) || 0);
       product.specifications = [];
       product.video_url = product.youtube_url || product.video_url || '';
       product.youtube_url = product.video_url;
@@ -4759,7 +4838,7 @@ app.post('/api/search-by-image', async (req, res) => {
 
     // Извлекаем все активные товары из базы
     const products = db.prepare(`
-      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, p.main_image, p.images, p.video_url, p.youtube_url, p.specifications,
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, p.main_image, p.images, p.video_url, p.youtube_url, p.specifications, p.discount_percent,
              c.name as category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
@@ -4802,7 +4881,7 @@ app.post('/api/search-by-image', async (req, res) => {
         if (specsLower.includes(term)) score += 8;
       }
 
-      const variants = getVariants.all(p.id) as any[];
+      const variants = applyProductDiscount(getVariants.all(p.id) as any[], Number(p.discount_percent) || 0);
       if (identified.color) {
         const colorLower = identified.color.toLowerCase();
         for (const v of variants) {
@@ -5309,7 +5388,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 
     const product = db.prepare(`
       SELECT p.id, p.title, p.description, p.base_sku, p.status, p.delivery_type,
-             p.main_image, p.images, p.specifications, p.created_at,
+             p.main_image, p.images, p.specifications, p.created_at, p.discount_percent,
              c.name AS category_name,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS min_price_tjs,
              MAX(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS max_price_tjs,
@@ -5330,6 +5409,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       images: string | null;
       specifications: string | null;
       created_at: string | null;
+      discount_percent: number;
       category_name: string | null;
       min_price_tjs: number | null;
       max_price_tjs: number | null;
@@ -5347,12 +5427,17 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       return res.redirect(301, canonicalUrl);
     }
 
+    const discountPercent = Number(product.discount_percent) || 0;
+    const originalMinPrice = Number(product.min_price_tjs) || 0;
+    const originalMaxPrice = Number(product.max_price_tjs) || originalMinPrice;
+    const minPrice = calculateDiscountedPriceTjs(originalMinPrice, discountPercent);
+    const maxPrice = calculateDiscountedPriceTjs(originalMaxPrice, discountPercent);
     const description = makeSearchDescription(
       product.description,
       product.title,
       product.category_name,
-      Number(product.min_price_tjs) || 0,
-      Number(product.max_price_tjs) || 0,
+      minPrice,
+      maxPrice,
       product.delivery_type,
     );
     const searchTitle = makeSearchTitle(product.title);
@@ -5371,7 +5456,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
         }).filter((item) => item.name && item.value);
       }
     }
-    const price = Number(product.min_price_tjs) || 0;
+    const price = minPrice;
     const availability = product.delivery_type === 'stock'
       ? 'https://schema.org/InStock'
       : 'https://schema.org/PreOrder';
@@ -5389,7 +5474,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
           '@type': 'AggregateOffer',
           priceCurrency: 'TJS',
           lowPrice: price,
-          highPrice: Number(product.max_price_tjs) || price,
+          highPrice: maxPrice || price,
           offerCount: Math.max(1, product.offer_count || 0),
           availability,
           url: canonicalUrl,
@@ -5413,7 +5498,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     const whatsappUrl = `https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`Ассаламу Алайкум! Меня интересует товар: ${product.title} ${canonicalUrl}`)}`;
     const productImage = imageList[0] || `${seoSiteUrl}/og-banner.jpg`;
     const priceLabel = price > 0
-      ? `${price}${product.max_price_tjs && product.max_price_tjs !== price ? `–${product.max_price_tjs}` : ''} сомони`
+      ? `${price}${maxPrice && maxPrice !== price ? `–${maxPrice}` : ''} сомони`
       : 'Уточните цену';
     const specsHtml = specifications.slice(0, 30)
       .map((spec) => `<li><strong>${escapeHtml(spec.name)}:</strong> ${escapeHtml(spec.value)}</li>`)
