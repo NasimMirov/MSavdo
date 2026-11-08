@@ -20,6 +20,7 @@ export interface CatalogSnapshotRestoreResult {
   restored: boolean;
   reason?: string;
   productsImported?: number;
+  productsActivated?: number;
   variantsImported?: number;
   backupPath?: string;
 }
@@ -61,6 +62,7 @@ export function restoreCatalogSnapshot(
   const snapshot = new DatabaseSync(snapshotPath, { readOnly: true });
   try {
     const snapshotProducts = snapshot.prepare('SELECT * FROM products ORDER BY id').all() as DatabaseRow[];
+    const snapshotProductIds = snapshotProducts.map((product) => Number(product.id));
     const snapshotDemoProducts = snapshotProducts.filter((product) => DEMO_PRODUCTS.has(Number(product.id)));
     const productsToRestore = snapshotProducts.filter((product) => !DEMO_PRODUCTS.has(Number(product.id)));
     const variantsToRestore = snapshot.prepare(`
@@ -85,42 +87,103 @@ export function restoreCatalogSnapshot(
       return { restored: false, reason: 'snapshot-content-mismatch' };
     }
 
-    const existingProducts = db.prepare('SELECT id, title, status FROM products ORDER BY id').all() as Array<{
+    const existingProducts = db.prepare('SELECT id, title, original_link, base_sku, status FROM products ORDER BY id').all() as Array<{
       id: number;
       title: string;
+      original_link: string | null;
+      base_sku: string;
       status: string;
     }>;
     const expectedDemoRows = Array.from(DEMO_PRODUCTS, ([id, title]) => ({ id, title }));
-    if (
-      existingProducts.length !== expectedDemoRows.length
-      || expectedDemoRows.some((expected) => {
-        const actual = existingProducts.find((product) => product.id === expected.id);
-        return !actual || actual.title !== expected.title || actual.status !== 'active';
-      })
-    ) {
-      return { restored: false, reason: 'live-database-does-not-match-empty-seed' };
-    }
-
-    const existingVariantIds = db.prepare('SELECT id FROM product_variants').all() as Array<{ id: number }>;
-    if (
-      existingVariantIds.length !== snapshotDemoVariants.count
-      || existingVariantIds.some((variant) => variant.id < 1 || variant.id > 35)
-    ) {
-      return { restored: false, reason: 'live-variant-data-does-not-match-empty-seed' };
-    }
-
-    for (const product of productsToRestore) {
-      const byId = db.prepare('SELECT 1 FROM products WHERE id = ?').get(product.id);
-      const bySku = db.prepare('SELECT 1 FROM products WHERE base_sku = ?').get(product.base_sku);
-      if (byId || bySku) {
-        return { restored: false, reason: 'product-id-or-sku-conflict' };
+    const productsById = new Map(snapshotProducts.map((product) => [Number(product.id), product]));
+    const existingProductsById = new Map(existingProducts.map((product) => [product.id, product]));
+    const productsToActivate: number[] = [];
+    for (const expected of expectedDemoRows) {
+      const actual = existingProductsById.get(expected.id);
+      if (!actual || actual.title !== expected.title || actual.status !== 'active') {
+        return { restored: false, reason: 'live-database-does-not-match-startup-samples' };
       }
     }
-    for (const variant of variantsToRestore) {
-      const byId = db.prepare('SELECT 1 FROM product_variants WHERE id = ?').get(variant.id);
-      const bySku = db.prepare('SELECT 1 FROM product_variants WHERE variant_sku = ?').get(variant.variant_sku);
-      if (byId || bySku) {
-        return { restored: false, reason: 'variant-id-or-sku-conflict' };
+
+    for (const product of existingProducts) {
+      if (DEMO_PRODUCTS.has(product.id)) continue;
+      const snapshotProduct = productsById.get(product.id);
+      if (
+        snapshotProduct
+        && snapshotProduct.title === product.title
+        && snapshotProduct.original_link === product.original_link
+        && snapshotProduct.base_sku === product.base_sku
+        && (product.status === 'active' || product.status === 'draft')
+      ) {
+        if (product.status === 'draft' && snapshotProduct.status === 'active') {
+          productsToActivate.push(product.id);
+        }
+        continue;
+      }
+      if (product.id > Math.max(...snapshotProductIds) && product.status === 'draft') continue;
+      return { restored: false, reason: 'live-product-data-conflict' };
+    }
+
+    const existingVariants = db.prepare('SELECT id, product_id, variant_sku FROM product_variants ORDER BY id').all() as Array<{
+      id: number;
+      product_id: number;
+      variant_sku: string;
+    }>;
+    const snapshotVariantsById = new Map(variantsToRestore.map((variant) => [Number(variant.id), variant]));
+    const existingVariantsById = new Map(existingVariants.map((variant) => [variant.id, variant]));
+    const snapshotVariantIds = snapshot.prepare('SELECT id FROM product_variants').all() as Array<{ id: number }>;
+    const expectedDemoVariantCounts = new Map<number, number>();
+    for (const variant of snapshot.prepare('SELECT product_id, COUNT(*) AS count FROM product_variants GROUP BY product_id').all() as Array<{
+      product_id: number;
+      count: number;
+    }>) {
+      expectedDemoVariantCounts.set(variant.product_id, variant.count);
+    }
+    for (const [productId, expectedCount] of expectedDemoVariantCounts) {
+      if (DEMO_PRODUCTS.has(productId)) {
+        const actualCount = existingVariants.filter((variant) => variant.product_id === productId).length;
+        if (actualCount !== expectedCount) {
+          return { restored: false, reason: 'live-startup-variant-count-mismatch' };
+        }
+      }
+    }
+    if (existingVariants.filter((variant) => variant.id <= 35).length !== snapshotDemoVariants.count) {
+      return { restored: false, reason: 'live-startup-variant-id-mismatch' };
+    }
+    const maxSnapshotProductId = Math.max(...snapshotProductIds);
+    const maxSnapshotVariantId = Math.max(...snapshotVariantIds.map((variant) => variant.id));
+    for (const variant of existingVariants) {
+      if (variant.id <= 35) {
+        if (!DEMO_PRODUCTS.has(variant.product_id)) {
+          return { restored: false, reason: 'live-startup-variant-product-mismatch' };
+        }
+        continue;
+      }
+      const snapshotVariant = snapshotVariantsById.get(variant.id);
+      if (
+        snapshotVariant
+        && Number(snapshotVariant.product_id) === variant.product_id
+        && snapshotVariant.variant_sku === variant.variant_sku
+      ) {
+        continue;
+      }
+      const liveProduct = existingProductsById.get(variant.product_id);
+      if (variant.id > maxSnapshotVariantId && liveProduct && liveProduct.id > maxSnapshotProductId && liveProduct.status === 'draft') {
+        continue;
+      }
+      return { restored: false, reason: 'live-variant-data-conflict' };
+    }
+
+    const productsToInsert = productsToRestore.filter((product) => !existingProductsById.has(Number(product.id)));
+    const variantsToInsert = variantsToRestore.filter((variant) => !existingVariantsById.has(Number(variant.id)));
+    for (const product of productsToInsert) {
+      if (db.prepare('SELECT 1 FROM products WHERE base_sku = ?').get(product.base_sku)) {
+        return { restored: false, reason: 'product-sku-conflict' };
+      }
+    }
+    for (const variant of variantsToInsert) {
+      if (db.prepare('SELECT 1 FROM product_variants WHERE variant_sku = ?').get(variant.variant_sku)) {
+        return { restored: false, reason: 'variant-sku-conflict' };
       }
     }
 
@@ -181,7 +244,7 @@ export function restoreCatalogSnapshot(
         }
       }
 
-      for (const product of productsToRestore) {
+      for (const product of productsToInsert) {
         const values = productColumns.map((column) => {
           if (column === 'category_id' && product.category_id !== null) {
             const categoryId = categoryIds.get(Number(product.category_id));
@@ -195,10 +258,12 @@ export function restoreCatalogSnapshot(
         insertProduct.run(...values);
       }
 
-      for (const variant of variantsToRestore) {
+      for (const variant of variantsToInsert) {
         insertVariant.run(...variantColumns.map((column) => variant[column]));
       }
 
+      const activateProduct = db.prepare("UPDATE products SET status = 'active' WHERE id = ? AND status = 'draft'");
+      for (const productId of productsToActivate) activateProduct.run(productId);
       db.prepare(`
         UPDATE products
         SET status = 'draft'
@@ -207,8 +272,9 @@ export function restoreCatalogSnapshot(
       db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
         .run(RESTORE_SETTING_KEY, JSON.stringify({
           snapshotHash,
-          productsImported: productsToRestore.length,
-          variantsImported: variantsToRestore.length,
+          productsImported: productsToInsert.length,
+          productsActivated: productsToActivate.length,
+          variantsImported: variantsToInsert.length,
           backupPath,
         }));
       db.exec('COMMIT');
@@ -219,8 +285,9 @@ export function restoreCatalogSnapshot(
 
     return {
       restored: true,
-      productsImported: productsToRestore.length,
-      variantsImported: variantsToRestore.length,
+      productsImported: productsToInsert.length,
+      productsActivated: productsToActivate.length,
+      variantsImported: variantsToInsert.length,
       backupPath,
     };
   } finally {

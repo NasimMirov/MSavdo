@@ -144,6 +144,43 @@ function createLiveDatabase(): { db: DatabaseSync; dbPath: string } {
   return { db, dbPath };
 }
 
+function addMatchingDraftFromSnapshot(db: DatabaseSync, productId: number): void {
+  const snapshot = new DatabaseSync(snapshotPath, { readOnly: true });
+  try {
+    const product = snapshot.prepare('SELECT * FROM products WHERE id = ?').get(productId) as
+      | Record<string, string | number | bigint | null>
+      | undefined;
+    assert.ok(product);
+    const productColumns = [
+      'id', 'title', 'description', 'original_link', 'category_id', 'base_sku', 'status',
+      'main_image', 'created_at', 'images', 'video_url', 'delivery_type', 'youtube_url',
+      'specifications', 'views_count', 'video_urls',
+    ];
+    const insertProduct = db.prepare(
+      `INSERT INTO products (${productColumns.join(', ')}) VALUES (${productColumns.map(() => '?').join(', ')})`,
+    );
+    insertProduct.run(...productColumns.map((column) => (
+      column === 'status' ? 'draft' : product[column]
+    )));
+
+    const variants = snapshot.prepare('SELECT * FROM product_variants WHERE product_id = ? ORDER BY id').all(productId) as Array<
+      Record<string, string | number | bigint | null>
+    >;
+    const variantColumns = [
+      'id', 'product_id', 'color', 'size', 'price_cny', 'price_tjs',
+      'stock', 'weight_kg', 'variant_sku', 'image_url', 'volume_m3',
+    ];
+    const insertVariant = db.prepare(
+      `INSERT INTO product_variants (${variantColumns.join(', ')}) VALUES (${variantColumns.map(() => '?').join(', ')})`,
+    );
+    for (const variant of variants) {
+      insertVariant.run(...variantColumns.map((column) => variant[column]));
+    }
+  } finally {
+    snapshot.close();
+  }
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -153,11 +190,13 @@ afterEach(() => {
 test('backs up the current database, restores imported products, and preserves orders', () => {
   const { db, dbPath } = createLiveDatabase();
   try {
+    addMatchingDraftFromSnapshot(db, 5);
     const result = restoreCatalogSnapshot(db, dbPath, snapshotPath);
 
     assert.equal(result.restored, true);
-    assert.equal(result.productsImported, 17);
-    assert.equal(result.variantsImported, 93);
+    assert.equal(result.productsImported, 16);
+    assert.equal(result.productsActivated, 1);
+    assert.equal(result.variantsImported, 91);
     assert.ok(result.backupPath && fs.existsSync(result.backupPath));
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 21);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM products WHERE status = 'active'").get()?.count, 17);
@@ -169,7 +208,7 @@ test('backs up the current database, restores imported products, and preserves o
     assert.equal(db.prepare('SELECT 1 FROM product_variants WHERE id = 36').get() !== undefined, true);
 
     const backup = new DatabaseSync(result.backupPath!, { readOnly: true });
-    assert.equal(backup.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 4);
+    assert.equal(backup.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 5);
     assert.equal(backup.prepare('SELECT COUNT(*) AS count FROM orders').get()?.count, 1);
     backup.close();
 
@@ -193,7 +232,7 @@ test('does not alter a database that contains products beyond the four startup s
     const result = restoreCatalogSnapshot(db, dbPath, snapshotPath);
 
     assert.equal(result.restored, false);
-    assert.equal(result.reason, 'live-database-does-not-match-empty-seed');
+    assert.equal(result.reason, 'live-product-data-conflict');
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 5);
     assert.equal(fs.readdirSync(path.dirname(dbPath)).some((name) => name.endsWith('.bak')), false);
   } finally {
