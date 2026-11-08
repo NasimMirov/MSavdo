@@ -42,7 +42,7 @@ test("imports to the main catalog even when an old server address is saved", asy
   const code = "x".repeat(210000);
   const result = await send({ raw_html_text: code, original_link: "https://detail.1688.com/offer/123.html" });
   assert.equal(result.success, true);
-  assert.equal(sent.url, "https://msavdo.shop/api/add-product");
+  assert.equal(sent.url, "https://api.msavdo.shop/api/add-product");
   assert.equal(sent.body.raw_html_text.length, code.length);
   assert.equal(sent.body.automatic_ai, true);
   assert.equal(sent.body.preserve_reviewed_data, undefined);
@@ -56,6 +56,45 @@ test("imports to the main catalog even when an old server address is saved", asy
   const invalid = await send({ raw_html_text: code, original_link: "https://example.com/" });
   assert.equal(invalid.success, false);
   assert.match(invalid.error, /маркетплейсов/);
+});
+
+test("reports structured errors and unexpected server responses without hiding HTTP status", async () => {
+  let listener;
+  let response;
+  const chrome = {
+    runtime: {
+      getURL: (name) => `chrome-extension://test/${name}`,
+      onMessage: { addListener(fn) { listener = fn; } },
+    },
+    storage: { local: {
+      get: async () => ({ importKey: "a".repeat(64) }),
+      setAccessLevel: async () => {},
+    } },
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, "background.js"), "utf8"), {
+    chrome, URL, AbortController, setTimeout, clearTimeout,
+    fetch: async () => response,
+  });
+  const send = () => new Promise((resolve) => listener({
+    action: "importProduct",
+    payload: { raw_text: "Product", original_link: "https://detail.1688.com/offer/123.html" },
+  }, { url: "chrome-extension://test/popup.html" }, resolve));
+
+  response = {
+    ok: false, status: 400, headers: { get: () => "application/json" },
+    json: async () => ({ error: { message: "Товар не прошёл проверку" } }),
+  };
+  assert.equal((await send()).error, "Товар не прошёл проверку");
+  response.json = async () => ({ error: { detail: "unavailable" } });
+  assert.equal((await send()).error, "Ошибка сервера: HTTP 400");
+  response.status = 500;
+  response.json = async () => ({ message: "Ошибка сохранения" });
+  assert.match((await send()).error, /Ошибка сохранения.*проверьте черновики/);
+  response = { ok: false, status: 404, headers: { get: () => "text/plain" } };
+  const result = await send();
+  assert.match(result.error, /HTTP 404/);
+  assert.match(result.error, /проверьте черновики/);
+  assert.doesNotMatch(result.error, /\[object Object\]/);
 });
 
 test("pairing is restricted to the popup and stores the key only after server verification", async () => {

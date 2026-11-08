@@ -1,4 +1,4 @@
-const DEFAULT_SERVER_URL = "https://msavdo.shop";
+const DEFAULT_SERVER_URL = "https://api.msavdo.shop";
 const MARKETPLACE_DOMAINS = [
   "1688.com",
   "yangkeduo.com",
@@ -44,13 +44,26 @@ function isPopup(sender) {
   return sender.url === chrome.runtime.getURL("popup.html");
 }
 
+function getErrorMessage(value) {
+  if (typeof value === "string") return value.trim();
+  if (!value || typeof value !== "object") return "";
+  for (const key of ["message", "error", "code"]) {
+    if (typeof value[key] === "string" && value[key].trim()) return value[key].trim();
+    if (value[key] && typeof value[key] === "object" && value[key] !== value) {
+      const nested = getErrorMessage(value[key]);
+      if (nested) return nested;
+    }
+  }
+  return "";
+}
+
 async function pairImportKey(key) {
   if (!/^[a-f0-9]{64}$/.test(key)) throw new Error("Скопируйте ключ привязки из настроек админки.");
   const response = await fetchWithTimeout(`${await getServerUrl()}/api/extension/import-access`, {
     headers: { "X-Msavdo-Import-Key": key },
   });
   const data = await response.json();
-  if (!response.ok || !data.success) throw new Error(data.error || `Ошибка проверки ключа: HTTP ${response.status}`);
+  if (!response.ok || !data.success) throw new Error(getErrorMessage(data.error) || `Ошибка проверки ключа: HTTP ${response.status}`);
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   await chrome.storage.local.set({ importKey: key });
   return { success: true };
@@ -63,7 +76,7 @@ async function importStatus(id) {
     headers: { "X-Msavdo-Import-Key": key },
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(getErrorMessage(data.error) || `HTTP ${response.status}`);
   return data;
 }
 
@@ -211,7 +224,7 @@ async function handleImportProduct(payload, sender) {
 
     const contentType = response.headers.get("content-type") || "";
     if (!contentType.includes("application/json")) {
-      throw new Error("Сервер вернул ответ не в формате JSON.");
+      throw new Error(`Сервер вернул ответ не в формате JSON (HTTP ${response.status}).`);
     }
 
     const data = await response.json();
@@ -219,7 +232,7 @@ async function handleImportProduct(payload, sender) {
       return {
         success: false,
         needsPairing: response.status === 401,
-        error: data.message || data.error || `Ошибка сервера: HTTP ${response.status}`
+        error: `${getErrorMessage(data.message) || getErrorMessage(data.error) || `Ошибка сервера: HTTP ${response.status}`}${response.status >= 500 ? " Перед повтором проверьте черновики в админке, чтобы не создать дубликат." : ""}`
       };
     }
     if (!Number.isSafeInteger(data.product?.id) || data.product.id <= 0 ||
