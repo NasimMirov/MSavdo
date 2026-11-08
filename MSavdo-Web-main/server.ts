@@ -9,7 +9,6 @@ import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import type { LookupFunction } from 'node:net';
-import sharp from 'sharp';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
@@ -21,6 +20,8 @@ import { calculatePromotions } from './src/utils/promotions.js';
 import type { Promotion } from './src/utils/promotions.js';
 import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
 import { restoreCatalogSnapshot } from './src/utils/catalogSnapshotRestore.js';
+import { createCatalogBackup } from './src/utils/catalogBackup.js';
+import { productImageToken, renderProductWatermark } from './src/utils/productWatermark.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -141,7 +142,6 @@ fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir, { maxAge: '365d', immutable: true }));
 const watermarkImagePath = path.join(__dirname, 'public', 'msavdo-watermark.png');
 const watermarkImage = fs.readFileSync(watermarkImagePath);
-const watermarkVersion = crypto.createHash('sha256').update(watermarkImage).digest('hex');
 
 function persistInlineImage(value: string, req: express.Request): string {
   const match = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=\s]+)$/i.exec(value.trim());
@@ -5018,6 +5018,23 @@ app.post('/api/search-by-image', async (req, res) => {
 });
 
 // 12. ЗАГРУЗКА ИЗОБРАЖЕНИЙ АДМИНИСТРАТОРОМ
+app.get('/api/admin/backup', requireAdmin, async (_req, res) => {
+  try {
+    const backup = await createCatalogBackup(db, uploadsDir);
+    res.setHeader('Cache-Control', 'no-store');
+    res.download(backup.archivePath, `msavdo-backup-${new Date().toISOString().slice(0, 10)}.zip`, (error) => {
+      if (error) console.error('[Backup] Не удалось передать архив:', error);
+      void backup.cleanup().catch((cleanupError) => {
+        console.error('[Backup] Не удалось удалить временный архив:', cleanupError);
+      });
+      if (error && !res.headersSent) res.status(500).json({ error: 'Не удалось скачать резервную копию' });
+    });
+  } catch (error) {
+    console.error('[Backup] Не удалось создать архив:', error);
+    res.status(500).json({ error: 'Не удалось создать резервную копию. Проверьте место на сервере и журналы.' });
+  }
+});
+
 app.post('/api/admin/upload-image', requireAdmin, (req, res) => {
   try {
     const { image, name } = req.body;
@@ -5151,8 +5168,8 @@ function getProductImageSources(
     .filter(Boolean))];
 }
 
-function getProductImageToken(source: string): string {
-  return crypto.createHash('sha256').update(`${watermarkVersion}\n${source.trim()}`).digest('hex');
+function getProductImageToken(source: string, legacy = false): string {
+  return productImageToken(source, watermarkImage, legacy);
 }
 
 function getWatermarkedImageUrl(productId: number, source: string): string | null {
@@ -5276,43 +5293,7 @@ async function loadProductImage(source: string): Promise<Buffer> {
 }
 
 async function createWatermarkedImage(source: string, token: string): Promise<Buffer> {
-  const input = await loadProductImage(source);
-  const image = sharp(input, { limitInputPixels: 40000000, animated: false });
-  const metadata = await image.metadata();
-  if (!metadata.width || !metadata.height || !['jpeg', 'png', 'webp', 'gif', 'heif', 'avif'].includes(metadata.format || '')) {
-    throw new Error('Формат фото не поддерживается');
-  }
-  const swapsDimensions = metadata.orientation !== undefined && metadata.orientation >= 5 && metadata.orientation <= 8;
-  const width = swapsDimensions ? metadata.height : metadata.width;
-  const height = swapsDimensions ? metadata.width : metadata.height;
-  const logoWidth = Math.min(256, Math.max(48, Math.round(width * 0.17)));
-  const resizedLogo = await sharp(watermarkImage)
-    .resize({ width: logoWidth, withoutEnlargement: true })
-    .ensureAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  for (let index = 3; index < resizedLogo.data.length; index += 4) {
-    resizedLogo.data[index] = Math.round(resizedLogo.data[index] * 0.78);
-  }
-  const logo = await sharp(resizedLogo.data, {
-    raw: { width: resizedLogo.info.width, height: resizedLogo.info.height, channels: 4 },
-  }).png().toBuffer();
-  const margin = Math.max(8, Math.round(Math.min(width, height) * 0.025));
-  const corners = [
-    { left: margin, top: margin },
-    { left: Math.max(margin, width - resizedLogo.info.width - margin), top: margin },
-    { left: margin, top: Math.max(margin, height - resizedLogo.info.height - margin) },
-    {
-      left: Math.max(margin, width - resizedLogo.info.width - margin),
-      top: Math.max(margin, height - resizedLogo.info.height - margin),
-    },
-  ];
-  const corner = corners[Number.parseInt(token.slice(0, 2), 16) % corners.length];
-  return image
-    .rotate()
-    .composite([{ input: logo, ...corner, blend: 'over' }])
-    .jpeg({ quality: 88, mozjpeg: true })
-    .toBuffer();
+  return renderProductWatermark(await loadProductImage(source), watermarkImage, token);
 }
 
 function escapeXml(value: unknown): string {
@@ -5660,7 +5641,7 @@ app.get('/product-image/:productId/:token.jpg', async (req, res) => {
       product.main_image,
       product.images,
       variants.map((variant) => variant.image_url),
-    ).find((image) => getProductImageToken(image) === token);
+    ).find((image) => getProductImageToken(image) === token || getProductImageToken(image, true) === token);
     if (!source) return res.status(404).type('text/plain').send('Фото не найдено');
 
     const image = await createWatermarkedImage(source, token);

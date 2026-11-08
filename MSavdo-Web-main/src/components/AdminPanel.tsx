@@ -139,6 +139,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   }, [editingProduct]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [backupDownloading, setBackupDownloading] = useState(false);
+  const [backupError, setBackupError] = useState('');
+
+  const downloadBackup = async () => {
+    setBackupDownloading(true);
+    setBackupError('');
+    try {
+      const response = await adminFetch('/api/admin/backup');
+      if (!response.ok) {
+        const data = await response.json() as { error?: string };
+        throw new Error(data.error || `Ошибка сервера: ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `msavdo-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      setBackupError(error instanceof Error ? error.message : 'Не удалось скачать резервную копию');
+    } finally {
+      setBackupDownloading(false);
+    }
+  };
 
   // Состояния для заказов клиентов (Требование 6)
   const [orders, setOrders] = useState<Order[]>([]);
@@ -2707,6 +2734,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* ========================================== */}
       {activeTab === 'settings' && (
         <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-sm max-w-2xl">
+          <section className="space-y-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <h3 className="font-bold text-slate-800">Резервная копия</h3>
+            <p className="text-xs text-slate-600">Скачайте архив с базой товаров, заказами, настройками и загруженными файлами. Фото, оставшиеся на внешних сайтах, в архив не входят. Храните копию в безопасном месте: она содержит данные клиентов и настройки.</p>
+            <button type="button" disabled={backupDownloading} onClick={() => void downloadBackup()}
+              className="rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+              {backupDownloading ? 'Создание и скачивание…' : 'Скачать резервную копию'}
+            </button>
+            {backupError && <p role="alert" className="text-xs text-red-700">{backupError}</p>}
+          </section>
           <section className="space-y-2 rounded-2xl border border-purple-200 bg-purple-50 p-4">
             <label htmlFor="tokenplan-key" className="block font-bold text-slate-800">Ключ TokenPlan для редактора товара</label>
             <p className="text-xs text-slate-600">Ключ хранится на сервере в зашифрованном виде и не отображается повторно. При запросе название, описание и характеристики отправляются в TokenPlan; расходуются токены.</p>
