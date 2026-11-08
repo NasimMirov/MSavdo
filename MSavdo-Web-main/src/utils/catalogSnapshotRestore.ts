@@ -16,12 +16,29 @@ const DEMO_PRODUCTS = new Map([
 type DatabaseValue = string | number | bigint | null;
 type DatabaseRow = Record<string, DatabaseValue>;
 
+interface SnapshotProductPlan {
+  source: DatabaseRow;
+  targetId: number;
+  insert: boolean;
+  draft: boolean;
+  cloned: boolean;
+  baseSku: string;
+}
+
+interface SnapshotVariantPlan {
+  source: DatabaseRow;
+  targetId: number;
+  productId: number;
+  variantSku: string;
+}
+
 export interface CatalogSnapshotRestoreResult {
   restored: boolean;
   reason?: string;
   details?: string;
   productsImported?: number;
   productsActivated?: number;
+  productsDrafted?: number;
   variantsImported?: number;
   backupPath?: string;
 }
@@ -38,6 +55,17 @@ function quoteIdentifier(identifier: string): string {
     throw new Error(`Недопустимое имя колонки базы данных: ${identifier}`);
   }
   return `"${identifier}"`;
+}
+
+function makeUniqueSku(originalSku: string, suffix: number, usedSkus: Set<string>): string {
+  const prefix = `${originalSku}-RESTORE-${SNAPSHOT_ID.replace(/-/g, '')}-${suffix}`;
+  let candidate = prefix;
+  let attempt = 1;
+  while (usedSkus.has(candidate)) {
+    candidate = `${prefix}-${attempt}`;
+    attempt += 1;
+  }
+  return candidate;
 }
 
 export function restoreCatalogSnapshot(
@@ -95,9 +123,15 @@ export function restoreCatalogSnapshot(
       base_sku: string;
       status: string;
     }>;
+    const existingVariants = db.prepare('SELECT id, product_id, variant_sku FROM product_variants ORDER BY id').all() as Array<{
+      id: number;
+      product_id: number;
+      variant_sku: string;
+    }>;
     const expectedDemoRows = Array.from(DEMO_PRODUCTS, ([id, title]) => ({ id, title }));
-    const productsById = new Map(snapshotProducts.map((product) => [Number(product.id), product]));
     const existingProductsById = new Map(existingProducts.map((product) => [product.id, product]));
+    const existingVariantsById = new Map(existingVariants.map((variant) => [variant.id, variant]));
+    const existingVariantsBySku = new Map(existingVariants.map((variant) => [variant.variant_sku, variant]));
     const productsToActivate: number[] = [];
     for (const expected of expectedDemoRows) {
       const actual = existingProductsById.get(expected.id);
@@ -106,44 +140,6 @@ export function restoreCatalogSnapshot(
       }
     }
 
-    for (const product of existingProducts) {
-      if (DEMO_PRODUCTS.has(product.id)) continue;
-      const snapshotProduct = productsById.get(product.id);
-      if (
-        snapshotProduct
-        && snapshotProduct.title === product.title
-        && snapshotProduct.original_link === product.original_link
-        && snapshotProduct.base_sku === product.base_sku
-        && (product.status === 'active' || product.status === 'draft')
-      ) {
-        if (product.status === 'draft' && snapshotProduct.status === 'active') {
-          productsToActivate.push(product.id);
-        }
-        continue;
-      }
-      if (product.id > Math.max(...snapshotProductIds) && product.status === 'draft') continue;
-      const conflictingFields = snapshotProduct
-        ? [
-          snapshotProduct.title !== product.title ? 'title' : null,
-          snapshotProduct.original_link !== product.original_link ? 'original_link' : null,
-          snapshotProduct.base_sku !== product.base_sku ? 'base_sku' : null,
-          product.status !== 'active' && product.status !== 'draft' ? 'status' : null,
-        ].filter((field): field is string => field !== null)
-        : ['not-in-snapshot'];
-      return {
-        restored: false,
-        reason: 'live-product-data-conflict',
-        details: `product-id=${product.id}; fields=${conflictingFields.join(',')}`,
-      };
-    }
-
-    const existingVariants = db.prepare('SELECT id, product_id, variant_sku FROM product_variants ORDER BY id').all() as Array<{
-      id: number;
-      product_id: number;
-      variant_sku: string;
-    }>;
-    const snapshotVariantsById = new Map(variantsToRestore.map((variant) => [Number(variant.id), variant]));
-    const existingVariantsById = new Map(existingVariants.map((variant) => [variant.id, variant]));
     const snapshotVariantIds = snapshot.prepare('SELECT id FROM product_variants').all() as Array<{ id: number }>;
     const expectedDemoVariantCounts = new Map<number, number>();
     for (const variant of snapshot.prepare('SELECT product_id, COUNT(*) AS count FROM product_variants GROUP BY product_id').all() as Array<{
@@ -163,42 +159,126 @@ export function restoreCatalogSnapshot(
     if (existingVariants.filter((variant) => variant.id <= 35).length !== snapshotDemoVariants.count) {
       return { restored: false, reason: 'live-startup-variant-id-mismatch' };
     }
-    const maxSnapshotProductId = Math.max(...snapshotProductIds);
-    const maxSnapshotVariantId = Math.max(...snapshotVariantIds.map((variant) => variant.id));
-    for (const variant of existingVariants) {
-      if (variant.id <= 35) {
-        if (!DEMO_PRODUCTS.has(variant.product_id)) {
-          return { restored: false, reason: 'live-startup-variant-product-mismatch' };
-        }
-        continue;
-      }
-      const snapshotVariant = snapshotVariantsById.get(variant.id);
-      if (
-        snapshotVariant
-        && Number(snapshotVariant.product_id) === variant.product_id
-        && snapshotVariant.variant_sku === variant.variant_sku
-      ) {
-        continue;
-      }
-      const liveProduct = existingProductsById.get(variant.product_id);
-      if (variant.id > maxSnapshotVariantId && liveProduct && liveProduct.id > maxSnapshotProductId && liveProduct.status === 'draft') {
-        continue;
-      }
-      return { restored: false, reason: 'live-variant-data-conflict' };
+
+    const orderItemColumns = getColumns(db, 'order_items');
+    const getMaxOrderReference = (column: string): number => {
+      if (!orderItemColumns.has(column)) return 0;
+      const row = db.prepare(
+        `SELECT MAX(${quoteIdentifier(column)}) AS max_id FROM order_items`,
+      ).get() as { max_id: number | null } | undefined;
+      return Number(row?.max_id ?? 0);
+    };
+    const usedProductIds = new Set([
+      ...existingProducts.map((product) => product.id),
+      ...snapshotProductIds,
+    ]);
+    const usedVariantIds = new Set([
+      ...existingVariants.map((variant) => variant.id),
+      ...snapshotVariantIds.map((variant) => variant.id),
+    ]);
+    let nextProductId = Math.max(...usedProductIds, getMaxOrderReference('product_id')) + 1;
+    let nextVariantId = Math.max(...usedVariantIds, getMaxOrderReference('variant_id')) + 1;
+    const allocateId = (usedIds: Set<number>, nextId: { value: number }): number => {
+      while (usedIds.has(nextId.value)) nextId.value += 1;
+      const allocatedId = nextId.value;
+      usedIds.add(allocatedId);
+      nextId.value += 1;
+      return allocatedId;
+    };
+    const productIdSequence = { value: nextProductId };
+    const variantIdSequence = { value: nextVariantId };
+    const usedProductSkus = new Set(existingProducts.map((product) => product.base_sku));
+    const usedVariantSkus = new Set(existingVariants.map((variant) => variant.variant_sku));
+    const snapshotVariantsByProduct = new Map<number, DatabaseRow[]>();
+    for (const variant of variantsToRestore) {
+      const productId = Number(variant.product_id);
+      const variants = snapshotVariantsByProduct.get(productId) ?? [];
+      variants.push(variant);
+      snapshotVariantsByProduct.set(productId, variants);
     }
 
-    const productsToInsert = productsToRestore.filter((product) => !existingProductsById.has(Number(product.id)));
-    const variantsToInsert = variantsToRestore.filter((variant) => !existingVariantsById.has(Number(variant.id)));
-    for (const product of productsToInsert) {
-      if (db.prepare('SELECT 1 FROM products WHERE base_sku = ?').get(product.base_sku)) {
-        return { restored: false, reason: 'product-sku-conflict' };
+    const productPlans: SnapshotProductPlan[] = [];
+    for (const source of productsToRestore) {
+      const sourceId = Number(source.id);
+      const sourceSku = String(source.base_sku);
+      const existing = existingProductsById.get(sourceId);
+      const matchesExisting = Boolean(
+        existing
+        && existing.title === source.title
+        && existing.original_link === source.original_link
+        && existing.base_sku === source.base_sku
+        && (existing.status === 'active' || existing.status === 'draft'),
+      );
+      const matchingVariants = snapshotVariantsByProduct.get(sourceId) ?? [];
+      const variantConflict = matchingVariants.some((variant) => {
+        const variantId = Number(variant.id);
+        const variantSku = String(variant.variant_sku);
+        const existingById = existingVariantsById.get(variantId);
+        const existingBySku = existingVariantsBySku.get(variantSku);
+        const isMatchingVariant = Boolean(
+          matchesExisting
+          && existingById
+          && existingById.product_id === sourceId
+          && existingById.variant_sku === variantSku,
+        );
+        return (existingById !== undefined && !isMatchingVariant)
+          || (existingBySku !== undefined && !isMatchingVariant);
+      });
+      const productSkuConflict = usedProductSkus.has(sourceSku)
+        && !(matchesExisting && !variantConflict && existing?.base_sku === sourceSku);
+      const cloned = (existing !== undefined && !matchesExisting) || variantConflict || productSkuConflict;
+      const targetId = cloned
+        ? allocateId(usedProductIds, productIdSequence)
+        : sourceId;
+      const baseSku = productSkuConflict
+        ? makeUniqueSku(sourceSku, targetId, usedProductSkus)
+        : sourceSku;
+      usedProductSkus.add(baseSku);
+      const insert = !matchesExisting || cloned;
+
+      productPlans.push({
+        source,
+        targetId,
+        insert,
+        draft: cloned,
+        cloned,
+        baseSku,
+      });
+      if (!cloned && existing?.status === 'draft') productsToActivate.push(sourceId);
+    }
+
+    const variantPlans: SnapshotVariantPlan[] = [];
+    for (const productPlan of productPlans) {
+      const sourceProductId = Number(productPlan.source.id);
+      for (const source of snapshotVariantsByProduct.get(sourceProductId) ?? []) {
+        const sourceId = Number(source.id);
+        const sourceSku = String(source.variant_sku);
+        const existing = existingVariantsById.get(sourceId);
+        const isAlreadyPresent = Boolean(
+          !productPlan.cloned
+          && !productPlan.insert
+          && existing
+          && existing.product_id === sourceProductId
+          && existing.variant_sku === sourceSku,
+        );
+        if (isAlreadyPresent) continue;
+
+        const targetId = productPlan.cloned || existing
+          ? allocateId(usedVariantIds, variantIdSequence)
+          : sourceId;
+        const variantSku = usedVariantSkus.has(sourceSku)
+          ? makeUniqueSku(sourceSku, targetId, usedVariantSkus)
+          : sourceSku;
+        usedVariantSkus.add(variantSku);
+        variantPlans.push({
+          source,
+          targetId,
+          productId: productPlan.targetId,
+          variantSku,
+        });
       }
     }
-    for (const variant of variantsToInsert) {
-      if (db.prepare('SELECT 1 FROM product_variants WHERE variant_sku = ?').get(variant.variant_sku)) {
-        return { restored: false, reason: 'variant-sku-conflict' };
-      }
-    }
+    const productsToInsert = productPlans.filter((product) => product.insert);
 
     const backupPath = `${dbPath}.before-catalog-restore-${SNAPSHOT_ID}-${Date.now()}.bak`;
     db.prepare('VACUUM INTO ?').run(backupPath);
@@ -259,20 +339,28 @@ export function restoreCatalogSnapshot(
 
       for (const product of productsToInsert) {
         const values = productColumns.map((column) => {
-          if (column === 'category_id' && product.category_id !== null) {
-            const categoryId = categoryIds.get(Number(product.category_id));
+          if (column === 'id') return product.targetId;
+          if (column === 'category_id' && product.source.category_id !== null) {
+            const categoryId = categoryIds.get(Number(product.source.category_id));
             if (categoryId === undefined) {
-              throw new Error(`Не найдена категория для товара ${product.id}`);
+              throw new Error(`Не найдена категория для товара ${product.source.id}`);
             }
             return categoryId;
           }
-          return product[column];
+          if (column === 'status' && product.draft) return 'draft';
+          if (column === 'base_sku') return product.baseSku;
+          return product.source[column];
         });
         insertProduct.run(...values);
       }
 
-      for (const variant of variantsToInsert) {
-        insertVariant.run(...variantColumns.map((column) => variant[column]));
+      for (const variant of variantPlans) {
+        insertVariant.run(...variantColumns.map((column) => {
+          if (column === 'id') return variant.targetId;
+          if (column === 'product_id') return variant.productId;
+          if (column === 'variant_sku') return variant.variantSku;
+          return variant.source[column];
+        }));
       }
 
       const activateProduct = db.prepare("UPDATE products SET status = 'active' WHERE id = ? AND status = 'draft'");
@@ -287,7 +375,8 @@ export function restoreCatalogSnapshot(
           snapshotHash,
           productsImported: productsToInsert.length,
           productsActivated: productsToActivate.length,
-          variantsImported: variantsToInsert.length,
+          productsDrafted: productPlans.filter((product) => product.draft).length,
+          variantsImported: variantPlans.length,
           backupPath,
         }));
       db.exec('COMMIT');
@@ -300,7 +389,8 @@ export function restoreCatalogSnapshot(
       restored: true,
       productsImported: productsToInsert.length,
       productsActivated: productsToActivate.length,
-      variantsImported: variantsToInsert.length,
+      productsDrafted: productPlans.filter((product) => product.draft).length,
+      variantsImported: variantPlans.length,
       backupPath,
     };
   } finally {

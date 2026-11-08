@@ -221,21 +221,60 @@ test('backs up the current database, restores imported products, and preserves o
   }
 });
 
-test('does not alter a database that contains products beyond the four startup samples', () => {
+test('preserves conflicting live products and imports snapshot copies as drafts', () => {
   const { db, dbPath } = createLiveDatabase();
   try {
+    const snapshot = new DatabaseSync(snapshotPath, { readOnly: true });
+    const snapshotProduct = snapshot.prepare('SELECT base_sku FROM products WHERE id = 5').get() as { base_sku: string };
+    const snapshotVariant = snapshot.prepare('SELECT variant_sku FROM product_variants WHERE id = 36').get() as {
+      variant_sku: string;
+    };
+    snapshot.close();
+
     db.prepare(`
       INSERT INTO products (title, base_sku, status)
       VALUES ('Additional live product', 'LIVE-EXTRA', 'active')
     `).run();
+    db.prepare(`
+      INSERT INTO products (id, title, base_sku, status)
+      VALUES (30, 'Another live product', ?, 'active')
+    `).run(snapshotProduct.base_sku);
+    db.prepare(`
+      INSERT INTO product_variants (id, product_id, color, size, price_cny, price_tjs, stock, weight_kg, variant_sku)
+      VALUES (36, 5, 'Live color', 'Live size', 10, 10, 1, 1, ?)
+    `).run(snapshotVariant.variant_sku);
 
     const result = restoreCatalogSnapshot(db, dbPath, snapshotPath);
 
-    assert.equal(result.restored, false);
-    assert.equal(result.reason, 'live-product-data-conflict');
-    assert.match(result.details ?? '', /product-id=5; fields=title,original_link,base_sku/);
-    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 5);
-    assert.equal(fs.readdirSync(path.dirname(dbPath)).some((name) => name.endsWith('.bak')), false);
+    assert.equal(result.restored, true);
+    assert.equal(result.productsImported, 17);
+    assert.equal(result.productsDrafted, 1);
+    assert.equal(result.variantsImported, 93);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 23);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM products WHERE status = 'active'").get()?.count, 18);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM products WHERE status = 'draft'").get()?.count, 5);
+    assert.equal(db.prepare("SELECT title FROM products WHERE id = 5").get()?.title, 'Additional live product');
+    assert.equal(db.prepare("SELECT title FROM products WHERE id = 30").get()?.title, 'Another live product');
+    assert.equal(db.prepare("SELECT status FROM products WHERE id = 31").get()?.status, 'draft');
+    assert.notEqual(db.prepare("SELECT base_sku FROM products WHERE id = 31").get()?.base_sku, snapshotProduct.base_sku);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM product_variants').get()?.count, 129);
+    assert.equal(db.prepare('SELECT product_id, variant_sku FROM product_variants WHERE id = 36').get()?.product_id, 5);
+    assert.equal(db.prepare('SELECT product_id, variant_sku FROM product_variants WHERE id = 151').get()?.product_id, 31);
+    assert.notEqual(db.prepare('SELECT variant_sku FROM product_variants WHERE id = 151').get()?.variant_sku, snapshotVariant.variant_sku);
+    assert.equal(db.prepare('SELECT product_id, variant_id FROM order_items WHERE id = 1').get()?.product_id, 5);
+    assert.equal(db.prepare('SELECT variant_id FROM order_items WHERE id = 1').get()?.variant_id, 36);
+    assert.ok(result.backupPath && fs.existsSync(result.backupPath));
+
+    const backup = new DatabaseSync(result.backupPath!, { readOnly: true });
+    assert.equal(backup.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 6);
+    assert.equal(backup.prepare('SELECT COUNT(*) AS count FROM product_variants').get()?.count, 36);
+    assert.equal(backup.prepare('SELECT COUNT(*) AS count FROM orders').get()?.count, 1);
+    backup.close();
+
+    const repeat = restoreCatalogSnapshot(db, dbPath, snapshotPath);
+    assert.equal(repeat.restored, false);
+    assert.equal(repeat.reason, 'already-restored');
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 23);
   } finally {
     db.close();
   }

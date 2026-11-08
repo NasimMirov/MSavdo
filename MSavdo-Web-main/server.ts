@@ -1229,7 +1229,8 @@ if (process.env.NODE_ENV === 'production') {
     if (restoreResult.restored) {
       console.info(
         `[Catalog Snapshot Restore] Restored ${restoreResult.productsImported} products and `
-        + `${restoreResult.productsActivated} existing products, plus ${restoreResult.variantsImported} variants. `
+        + `${restoreResult.productsActivated} existing products, drafted ${restoreResult.productsDrafted} for review, `
+        + `plus ${restoreResult.variantsImported} variants. `
         + `Backup: ${restoreResult.backupPath}`,
       );
     } else if (restoreResult.reason !== 'already-restored') {
