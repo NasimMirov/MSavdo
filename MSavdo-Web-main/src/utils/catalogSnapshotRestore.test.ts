@@ -233,6 +233,7 @@ test('does not alter a database that contains products beyond the four startup s
 
     assert.equal(result.restored, false);
     assert.equal(result.reason, 'live-product-data-conflict');
+    assert.match(result.details ?? '', /product-id=5; fields=title,original_link,base_sku/);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM products').get()?.count, 5);
     assert.equal(fs.readdirSync(path.dirname(dbPath)).some((name) => name.endsWith('.bak')), false);
   } finally {

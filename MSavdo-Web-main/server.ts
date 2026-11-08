@@ -1233,7 +1233,10 @@ if (process.env.NODE_ENV === 'production') {
         + `Backup: ${restoreResult.backupPath}`,
       );
     } else if (restoreResult.reason !== 'already-restored') {
-      console.info(`[Catalog Snapshot Restore] Skipped: ${restoreResult.reason}`);
+      console.info(
+        `[Catalog Snapshot Restore] Skipped: ${restoreResult.reason}`
+        + (restoreResult.details ? ` (${restoreResult.details})` : ''),
+      );
     }
   } catch (error) {
     console.error('[Catalog Snapshot Restore] Failed; the existing database was left in place.', error);

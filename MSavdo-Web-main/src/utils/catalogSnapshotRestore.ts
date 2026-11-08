@@ -19,6 +19,7 @@ type DatabaseRow = Record<string, DatabaseValue>;
 export interface CatalogSnapshotRestoreResult {
   restored: boolean;
   reason?: string;
+  details?: string;
   productsImported?: number;
   productsActivated?: number;
   variantsImported?: number;
@@ -121,7 +122,19 @@ export function restoreCatalogSnapshot(
         continue;
       }
       if (product.id > Math.max(...snapshotProductIds) && product.status === 'draft') continue;
-      return { restored: false, reason: 'live-product-data-conflict' };
+      const conflictingFields = snapshotProduct
+        ? [
+          snapshotProduct.title !== product.title ? 'title' : null,
+          snapshotProduct.original_link !== product.original_link ? 'original_link' : null,
+          snapshotProduct.base_sku !== product.base_sku ? 'base_sku' : null,
+          product.status !== 'active' && product.status !== 'draft' ? 'status' : null,
+        ].filter((field): field is string => field !== null)
+        : ['not-in-snapshot'];
+      return {
+        restored: false,
+        reason: 'live-product-data-conflict',
+        details: `product-id=${product.id}; fields=${conflictingFields.join(',')}`,
+      };
     }
 
     const existingVariants = db.prepare('SELECT id, product_id, variant_sku FROM product_variants ORDER BY id').all() as Array<{
