@@ -48,7 +48,7 @@ import { ProductDiscountsAdmin } from './ProductDiscountsAdmin';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { calculatePriceTjs } from '../utils/pricing';
-import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors, isProductColorSpecification } from '../utils/productDescription';
+import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors, normalizeProductColor, removeProductColor } from '../utils/productDescription';
 
 interface TelegramLoginResult {
   id_token?: string;
@@ -1083,45 +1083,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleRemoveColorOption = (color: string) => {
     if (!editingProduct) return;
-    const normalize = (value: string) => value
-      .replace(/\[[^\]]*\]|【[^】]*】/g, '')
-      .trim()
-      .toLocaleLowerCase('ru');
-    const specifications = (editingProduct.specifications || []).flatMap((spec: { name: string; value: string }) => {
-      if (spec.name.toLocaleLowerCase('ru') === `${COLOR_IMAGE_SPEC_PREFIX}${color}`.toLocaleLowerCase('ru')) return [];
-      if (!isProductColorSpecification(spec.name)) return [spec];
-
-      const remainingColors = spec.value
-        .split(/[,，、;；|\n/]+/)
-        .map((value: string) => value.trim())
-        .filter((value: string) => value && normalize(value) !== normalize(color));
-      return remainingColors.length > 0
-        ? [{ ...spec, value: remainingColors.join(', ') }]
-        : [];
-    });
-    const description = String(editingProduct.description || '')
-      .split(/\r?\n/)
-      .flatMap((line: string) => {
-        const match = line.match(/^(\s*(?:[•*-]\s*)?(?:доступные\s+цвета|цвет(?:а)?|colou?r)\s*[:：]\s*)(.+)$/i);
-        if (!match) return [line];
-        const remainingColors = match[2]
-          .split(/[,，、;；|\n/]+/)
-          .map((value: string) => value.trim())
-          .filter((value: string) => value && normalize(value) !== normalize(color));
-        return remainingColors.length > 0 ? [`${match[1]}${remainingColors.join(', ')}`] : [];
-      })
-      .join('\n');
+    const { specifications, description } = removeProductColor(
+      editingProduct.specifications || [],
+      String(editingProduct.description || ''),
+      color,
+    );
 
     setEditingProduct((current: any) => {
       if (!current) return current;
-      const currentVariants = current.variants || [];
+      const currentVariants = (current.variants || []).flatMap((variant: ProductVariant) => {
+        const remainingColors = String(variant.color || '')
+          .split(/[,，、;；|\n/]+/)
+          .map((value) => value.trim())
+          .filter((value) => value && normalizeProductColor(value) !== normalizeProductColor(color));
+        if (!remainingColors.length) return [];
+        return [remainingColors.length === 1 ? { ...variant, color: remainingColors[0] } : variant];
+      });
       return {
         ...current,
         description,
         specifications,
-        variants: currentVariants.filter(
-          (variant: ProductVariant) => normalize(variant.color || '') !== normalize(color),
-        ),
+        variants: currentVariants,
       };
     });
   };
@@ -3925,8 +3907,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       const colorImageSpec = (editingProduct.specifications || []).find(
                         (spec: { name: string; value: string }) => spec.name === `${COLOR_IMAGE_SPEC_PREFIX}${color}`,
                       );
+                      const colorImageSelectId = `color-image-${editingProduct.id}-${editingColorOptions.indexOf(color)}`;
                       return (
-                        <label key={color} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+                        <div key={color} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
                           {colorImageSpec?.value ? (
                             <img
                               src={colorImageSpec.value}
@@ -3937,17 +3920,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           ) : (
                             <span className="h-10 w-10 shrink-0 rounded-lg bg-slate-200" />
                           )}
-                          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-800">{color}</span>
+                          <label htmlFor={colorImageSelectId} className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-800">{color}</label>
                           <button
                             type="button"
-                            onClick={() => handleRemoveColorOption(color)}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              handleRemoveColorOption(color);
+                            }}
                             aria-label={`Удалить цвет ${color}`}
-                            title="Удалить этот вариант цвета"
+                            title="Удалить этот цвет из товара"
                             className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
                           >
                             <X className="h-4 w-4" />
                           </button>
                           <select
+                            id={colorImageSelectId}
                             value={colorImageSpec?.value || ''}
                             onChange={(event) => handleUpdateColorImage(color, event.target.value)}
                             aria-label={`Фото для цвета ${color}`}
@@ -3958,7 +3946,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                               <option key={`${imageIndex}-${image}`} value={image}>Фото {imageIndex + 1}</option>
                             ))}
                           </select>
-                        </label>
+                        </div>
                       );
                     })}
                   </div>

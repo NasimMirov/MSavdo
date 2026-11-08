@@ -1,6 +1,52 @@
 export const ORDER_DELIVERY_NOTICE = 'Доставка 18-30 дней!';
 export const COLOR_IMAGE_SPEC_PREFIX = 'Фото цвета: ';
 const PRODUCT_COLOR_SPEC_PATTERN = /^(?:доступные\s+цвета|цвет(?:а)?|цвет\s+товара|color(?:\s+classification)?|colou?r(?:\s+classification)?|颜色(?:分类)?|顏色)$/i;
+const PRODUCT_COLOR_LIST_SEPARATOR = /[,，、;；|\n/]+/;
+
+export function normalizeProductColor(color: string): string {
+  return cleanProductDescription(color)
+    .replace(/^(?:цвет|color|colour)\s*[:：-]\s*/i, '')
+    .replace(/[.:]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase('ru');
+}
+
+export function removeProductColor(
+  specifications: Array<{ name: string; value: string }>,
+  description: string,
+  color: string,
+): { specifications: Array<{ name: string; value: string }>; description: string } {
+  const normalizedColor = normalizeProductColor(color);
+  if (!normalizedColor) return { specifications, description };
+
+  const remainingSpecifications = specifications.flatMap((spec) => {
+    const colorImageMatch = spec.name.match(/^Фото цвета:\s*(.+)$/i);
+    if (colorImageMatch && normalizeProductColor(colorImageMatch[1]) === normalizedColor) return [];
+    if (!isProductColorSpecification(spec.name)) return [spec];
+
+    const remainingColors = spec.value
+      .split(PRODUCT_COLOR_LIST_SEPARATOR)
+      .map((value) => value.trim())
+      .filter((value) => value && normalizeProductColor(value) !== normalizedColor);
+    return remainingColors.length ? [{ ...spec, value: remainingColors.join(', ') }] : [];
+  });
+
+  const remainingDescription = description
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const match = line.match(/^(\s*(?:[•*-]\s*)?(?:доступные\s+цвета|цвет(?:а)?|colou?r)\s*[:：]\s*)(.+)$/i);
+      if (!match) return [line];
+      const remainingColors = match[2]
+        .split(PRODUCT_COLOR_LIST_SEPARATOR)
+        .map((value) => value.trim())
+        .filter((value) => value && normalizeProductColor(value) !== normalizedColor);
+      return remainingColors.length ? [`${match[1]}${remainingColors.join(', ')}`] : [];
+    })
+    .join('\n');
+
+  return { specifications: remainingSpecifications, description: remainingDescription };
+}
 
 export function isProductColorSpecification(name: string): boolean {
   return PRODUCT_COLOR_SPEC_PATTERN.test(name.trim());
@@ -31,9 +77,7 @@ export function extractProductColors(
   const colors = new Map<string, string>();
 
   for (const value of [...colorValues, ...descriptionColors]) {
-    for (const rawColor of value
-      .replace(/\[[^\]]*\]|【[^】]*】/g, '')
-      .split(/[,，、;；|\n/]+/)) {
+    for (const rawColor of value.split(PRODUCT_COLOR_LIST_SEPARATOR)) {
       const color = cleanProductDescription(rawColor)
         .replace(/^(?:цвет|color|colour)\s*[:：-]\s*/i, '')
         .replace(/[.:]+$/g, '')
