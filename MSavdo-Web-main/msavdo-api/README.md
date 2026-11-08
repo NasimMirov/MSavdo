@@ -49,6 +49,8 @@ python3 app.py
 
 ## Защита админ-панели (Node.js сервер)
 
+Витрина на Vercel использует `vercel.json` в корне проекта для передачи запросов `/product/*`, `/robots.txt`, `/sitemap.xml` и `/sitemap-products-*.xml` на API Amvera. Это необходимо для прямых ссылок на товары и индексации; остальные запросы обслуживаются витриной как прежде.
+
 Вход в админ-панель выполняется через Telegram Login. В BotFather выберите `@msavdo_login_bot`, откройте `Login Widget`, зарегистрируйте `https://msavdo.shop` как Allowed URL и получите Client ID. В серверных переменных окружения задайте `TELEGRAM_LOGIN_CLIENT_ID`, `ADMIN_TELEGRAM_ALLOWED_IDS` с ровно двумя числовыми Telegram user ID и `ADMIN_JWT_SECRET` случайным значением не короче 32 байт. Секрет можно сгенерировать командой `node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"`. Не коммитьте секрет.
 
 Сервер проверяет подпись Telegram ID token, issuer, audience, срок действия, одноразовый nonce и наличие Telegram ID в allowlist. Парольный вход отключён. Админская сессия живёт два часа и хранится только в cookie `HttpOnly`, `Secure`, `SameSite=Strict`; панель и API должны использовать HTTPS-домены одного сайта. Добавьте точный frontend origin в `ADMIN_ALLOWED_ORIGINS`. За reverse proxy задайте доверенное число прокси в `TRUST_PROXY_HOPS`.
