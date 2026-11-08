@@ -2345,7 +2345,10 @@ app.post('/api/admin/telegram-auth/login', checkTelegramLoginIpBlock, telegramLo
     }
     const telegramUserId = String(claims.id);
     if (!telegramUserId || !adminTelegramAllowedIds.has(telegramUserId)) {
-      return res.status(403).json({ error: 'Этот Telegram-аккаунт не разрешён для входа в админ-панель' });
+      return res.status(403).json({
+        error: `Telegram ID ${telegramUserId} не разрешён для входа. `
+          + 'Сравните его с ADMIN_TELEGRAM_ALLOWED_IDS в Amvera; после изменения списка перезапустите сервер.',
+      });
     }
 
     const adminUsername = `telegram_${telegramUserId}`;
