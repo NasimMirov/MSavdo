@@ -22,6 +22,7 @@ import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
 import { restoreCatalogSnapshot } from './src/utils/catalogSnapshotRestore.js';
 import { createCatalogBackup } from './src/utils/catalogBackup.js';
 import { productImageToken, renderProductWatermark } from './src/utils/productWatermark.js';
+import { shouldSeedDemoProducts } from './src/utils/demoSeed.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1107,7 +1108,7 @@ function generateVariantSku(baseSku: string, color?: string, size?: string): str
 // СИД НАЧАЛЬНЫХ ТОВАРОВ С МАТРИЦЕЙ ВАРИАНТОВ
 // ==========================================
 const countProducts = (db.prepare('SELECT COUNT(*) as count FROM products').get() as { count: number }).count;
-if (countProducts === 0) {
+if (shouldSeedDemoProducts(process.env.NODE_ENV, countProducts)) {
   console.log('Наполнение базы профессиональными мульти-вариативными товарами...');
 
   const hoodieCatId = getFixedSubcategoryId('Мужские футболки, майки и поло');
