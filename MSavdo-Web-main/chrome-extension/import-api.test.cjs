@@ -7,6 +7,7 @@ const net = require("node:net");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 const { DatabaseSync } = require("node:sqlite");
+const sharp = require("sharp");
 
 test("isolated import, AI authorization, server pricing and promotion limits", { timeout: 60000 }, async () => {
   const project = path.resolve(__dirname, "..");
@@ -14,9 +15,11 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
   const utils = path.join(temp, "src", "utils");
   fs.mkdirSync(utils, { recursive: true });
   fs.copyFileSync(path.join(project, "server.ts"), path.join(temp, "server.ts"));
-  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "promotions.ts", "tokenPlan.ts"]) {
+  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "importAiPrompt.ts", "promotions.ts", "tokenPlan.ts", "catalogSnapshotRestore.ts", "catalogBackup.ts", "productWatermark.ts", "demoSeed.ts"]) {
     fs.copyFileSync(path.join(project, "src", "utils", file), path.join(utils, file));
   }
+  fs.mkdirSync(path.join(temp, "public"));
+  fs.copyFileSync(path.join(project, "public", "msavdo-watermark.png"), path.join(temp, "public", "msavdo-watermark.png"));
   fs.symlinkSync(path.join(project, "node_modules"), path.join(temp, "node_modules"), "junction");
   const port = await new Promise((resolve, reject) => {
     const socket = net.createServer();
@@ -29,7 +32,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
   const secret = "local-test-secret-0123456789-abcdefgh";
   const child = spawn(process.execPath, ["--require", path.join(project, "chrome-extension", "tokenplan-fixture.cjs"), "--import", "tsx", "server.ts"], {
     cwd: temp,
-    env: { ...process.env, NODE_ENV: "development", PORT: String(port), GEMINI_API_KEY: "", ADMIN_JWT_SECRET: secret, ADMIN_TELEGRAM_ALLOWED_IDS: "111,222", TOKENPLAN_TEST_LOG: path.join(temp, "tokenplan.log") },
+    env: { ...process.env, NODE_ENV: "development", PORT: String(port), PUBLIC_BASE_URL: `http://127.0.0.1:${port}`, GEMINI_API_KEY: "", ADMIN_JWT_SECRET: secret, ADMIN_TELEGRAM_ALLOWED_IDS: "111,222", TOKENPLAN_TEST_LOG: path.join(temp, "tokenplan.log") },
     stdio: "ignore",
   });
   const base = `http://127.0.0.1:${port}`;
@@ -229,17 +232,31 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(createdManually.status, 201);
     const manualProduct = await createdManually.json();
     assert.equal(db.prepare("SELECT original_link FROM products WHERE id = ?").get(manualProduct.product.id).original_link, manualSourceLink);
+    const image = await sharp({ create: { width: 400, height: 300, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    const upload = await fetch(`${base}/api/admin/upload-image`, {
+      method: "POST", headers: { ...headers, Cookie: cookie },
+      body: JSON.stringify({ image: `data:image/png;base64,${image.toString("base64")}` }),
+    });
+    assert.equal(upload.status, 200);
+    const uploadedUrl = (await upload.json()).url;
+    assert.match(uploadedUrl, /\.watermarked\.jpg$/);
+    const uploadedImage = Buffer.from(await (await fetch(uploadedUrl)).arrayBuffer());
+    assert.notDeepEqual(uploadedImage, image);
     const updatedSourceLink = "https://detail.1688.com/offer/987654321.html";
     const updateManual = await fetch(`${base}/api/admin/products/${manualProduct.product.id}`, {
       method: "PUT", headers: { ...headers, Cookie: cookie },
       body: JSON.stringify({
         title: "Ручной заказ товара", description: "Описание товара для ручного заказа.",
         category_id: categoryId, delivery_type: "order", status: "active",
-        original_link: updatedSourceLink, images: [], specifications: [],
+        original_link: updatedSourceLink, main_image: uploadedUrl, images: [uploadedUrl], specifications: [],
       }),
     });
     assert.equal(updateManual.status, 200);
     assert.equal(db.prepare("SELECT original_link FROM products WHERE id = ?").get(manualProduct.product.id).original_link, updatedSourceLink);
+    const publicManualProduct = (await (await fetch(`${base}/api/products/${manualProduct.product.id}`)).json()).product;
+    const publicImageResponse = await fetch(publicManualProduct.main_image);
+    assert.equal(publicImageResponse.status, 200);
+    assert.deepEqual(Buffer.from(await publicImageResponse.arrayBuffer()), uploadedImage);
     const invalidSourceLink = await fetch(`${base}/api/admin/products/${manualProduct.product.id}`, {
       method: "PUT", headers: { ...headers, Cookie: cookie },
       body: JSON.stringify({

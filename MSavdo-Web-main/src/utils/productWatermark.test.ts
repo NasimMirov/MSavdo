@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { test } from 'node:test';
 import sharp from 'sharp';
-import { productImageToken, renderProductWatermark } from './productWatermark.js';
+import { isWatermarkedUpload, productImageToken, renderProductWatermark, saveWatermarkedUpload } from './productWatermark.js';
 
 test('watermark is small, grey, semi-transparent and fits the corner', async () => {
   const image = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#ffffff' } }).png().toBuffer();
@@ -16,6 +19,24 @@ test('watermark is small, grey, semi-transparent and fits the corner', async () 
   assert.ok(marked.every((channel) => channel > 110 && channel < 220));
   assert.ok(Math.max(...marked) - Math.min(...marked) <= 4);
   assert.ok(pixel(70, 15).every((channel) => channel > 245));
+});
+
+test('uploaded images have the watermark once and retain stable, trusted filenames', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'msavdo-watermark-test-'));
+  try {
+    const image = await sharp({ create: { width: 400, height: 300, channels: 3, background: '#ffffff' } }).png().toBuffer();
+    const logo = await sharp({ create: { width: 200, height: 100, channels: 4, background: '#000000' } }).png().toBuffer();
+    const filename = await saveWatermarkedUpload(image, logo, dir);
+    assert.equal(await saveWatermarkedUpload(image, logo, dir), filename);
+    const stored = await fs.readFile(path.join(dir, filename));
+    const token = filename.slice(0, 64);
+    assert.deepEqual(stored, await renderProductWatermark(image, logo, token));
+    assert.equal(isWatermarkedUpload(`/uploads/${filename}`, 'https://api.msavdo.shop'), true);
+    assert.equal(isWatermarkedUpload(`https://evil.example/uploads/${filename}`, 'https://api.msavdo.shop'), false);
+    assert.equal(isWatermarkedUpload('/uploads/old.jpg', 'https://api.msavdo.shop'), false);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('watermark handles tiny images and retains the old token calculation', async () => {

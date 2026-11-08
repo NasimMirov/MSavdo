@@ -32,6 +32,27 @@ test('rejects untranslated Chinese from title or description suggestions', async
   }
 });
 
+test('omits image URL metadata from language prompts but keeps product facts', async () => {
+  const data = {
+    title: 'Фонарь',
+    description: 'Работает от батареек.',
+    specifications: [
+      { name: 'Фото цвета: Красный', value: 'https://example.test/image.jpg' },
+      { name: 'Материал', value: 'Пластик' },
+    ],
+  };
+  for (const action of ['title', 'description'] as const) {
+    await requestTokenPlanSuggestion('test-key', action, data, categories, async (_input, init) => {
+      const prompt = JSON.parse(String(init?.body)).messages[0].content;
+      assert.doesNotMatch(prompt, /example\.test/);
+      assert.match(prompt, /Пластик/);
+      assert.match(prompt, /Красный/);
+      assert.match(prompt, /Работает от батареек/);
+      return Response.json({ choices: [{ message: { content: 'Фонарь для кемпинга' } }] });
+    });
+  }
+});
+
 test('TokenPlan errors do not expose key or use fallback', async () => {
   for (const status of [401, 403, 429, 500]) {
     await assert.rejects(requestTokenPlanSuggestion('test-key', 'title', product, categories,

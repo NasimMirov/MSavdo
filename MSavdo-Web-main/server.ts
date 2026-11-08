@@ -16,12 +16,13 @@ import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculateDiscountedPriceTjs, calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
 import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
 import { normalizeImportVariants } from './src/utils/importVariants.js';
+import { importVariantInstructions } from './src/utils/importAiPrompt.js';
 import { calculatePromotions } from './src/utils/promotions.js';
 import type { Promotion } from './src/utils/promotions.js';
 import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
 import { restoreCatalogSnapshot } from './src/utils/catalogSnapshotRestore.js';
 import { createCatalogBackup } from './src/utils/catalogBackup.js';
-import { productImageToken, renderProductWatermark } from './src/utils/productWatermark.js';
+import { isWatermarkedUpload, productImageToken, renderProductWatermark, saveWatermarkedUpload } from './src/utils/productWatermark.js';
 import { shouldSeedDemoProducts } from './src/utils/demoSeed.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1434,7 +1435,7 @@ async function analyzeProductWithGemini(
     );
 
   try {
-    const skuMapSnippet = JSON.stringify(visualSkuMap || [], null, 2);
+    const variantPrompt = importVariantInstructions(Boolean(structuredContext?.variants.length), visualSkuMap);
     const categoryOptions = STRICT_ALLOWED_CATEGORIES.join('\n   - ');
 
     const prompt = `Ты — ведущий международный e-commerce аналитик маркетплейса M.Savdo (Душанбе, Таджикистан).
@@ -1465,18 +1466,7 @@ async function analyzeProductWithGemini(
    Категория источника (если извлечена): ${JSON.stringify(structuredContext?.categoryHint || 'не указана')}.
    Определяй категорию по самому товару из заголовка и его характеристик. Подсказка категории источника и текст страницы могут содержать общие разделы, рекомендации или товары продавца — не позволяй им перевесить ясное название целевого товара.
 5. "weight_kg": Извлеки вес единицы товара в кг.
-6. "variants": Для любой категории сохраняй каждый подтвержденный вариант SKU, включая цвет, размер, комплектацию, фасовку и другие отличия.
-   - "price_cny": всегда 0, цены будут назначены вручную.
-   - "stock": Реальный остаток из canBookCount / amountOnSale / quantity; если его нет, верни 0.
-   - "weight_kg": Вес варианта в кг, если он указан.
-   - "image_url": Прямая ссылка на фото только при точном соответствии модификации.
-
-Карта соответствия цветов и фотографий visual_sku_map:
-${skuMapSnippet}
-
-ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ПЕРЕВОДА И СОПОСТАВЛЕНИЯ SKU:
-«Переведи название товара на понятный русский язык без мусора маркетплейсов и слов 'Alibaba'. Найди все доступные цвета и размеры. Переводи только подтвержденные источником сведения. Для каждого цвета сопоставляй изображение только по подтвержденному соответствию из visual_sku_map.»
-Используй image_url из visual_sku_map только для соответствующего цвета; не назначай одному цвету изображение другого цвета и не придумывай ссылки. Если соответствие не найдено, оставь image_url пустым.
+${variantPrompt.instructions}
 
 Заголовок со страницы: "${effectiveTitle}"
 Текстовый слой страницы товара:
@@ -1492,17 +1482,7 @@ ${textSnippet}
   "weight_kg": 0.5,
   "specifications": [
     { "name": "Название характеристики", "value": "Значение" }
-  ],
-  "variants": [
-    {
-      "color": "Цвет / Модификация на русском",
-      "size": "Размер / Фасовка",
-      "price_cny": 0,
-      "stock": 0,
-      "weight_kg": 0.5,
-      "image_url": ""
-    }
-  ]
+  ]${variantPrompt.schema}
 }`;
 
     let responseText = '';
@@ -3996,9 +3976,6 @@ app.post('/api/add-product', (req, res, next) => {
         structuredMedia.specifications.length
           ? `ХАРАКТЕРИСТИКИ ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.specifications.map((item) => `• ${item.name}: ${item.value}`).join('\n')}`
           : '',
-        structuredMedia.variants.length
-          ? `ТОЧНЫЕ SKU ИЗ ДАННЫХ СТРАНИЦЫ:\n${structuredMedia.variants.slice(0, 300).map((item) => `• ${item.color} | ${item.size} | остаток ${item.stock}`).join('\n')}`
-          : '',
         structuredMedia.rawSnippetForAi,
       ].filter(Boolean);
       structuredMedia.rawSnippetForAi = structuredLines.join('\n\n').slice(0, 30000);
@@ -5036,22 +5013,29 @@ app.get('/api/admin/backup', requireAdmin, async (_req, res) => {
   }
 });
 
-app.post('/api/admin/upload-image', requireAdmin, (req, res) => {
+app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
   try {
     const { image, name } = req.body;
-    if (typeof image !== 'string' || !image.startsWith('data:image/')) {
-      return res.status(400).json({ error: 'Изображение не предоставлено' });
-    }
-    const url = persistInlineImage(image, req);
-    if (url === image) {
+    const match = typeof image === 'string'
+      ? /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=\s]+)$/i.exec(image.trim())
+      : null;
+    if (!match) {
       return res.status(400).json({ error: 'Не удалось сохранить изображение. Загрузите файл в формате PNG, JPEG, WebP или GIF размером до 8 МБ.' });
     }
+    const input = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+    if (!input.length || input.length > 8 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Фото должно быть размером до 8 МБ.' });
+    }
+    const filename = await saveWatermarkedUpload(input, watermarkImage, uploadsDir);
+    const base = (process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+    const url = `${base}/uploads/${filename}`;
     return res.json({
       success: true,
       url,
       name: name || 'uploaded_image.jpg',
     });
   } catch (err: any) {
+    console.error('[Upload Image]', err);
     return res.status(500).json({ error: err.message });
   }
 });
@@ -5294,7 +5278,10 @@ async function loadProductImage(source: string): Promise<Buffer> {
 }
 
 async function createWatermarkedImage(source: string, token: string): Promise<Buffer> {
-  return renderProductWatermark(await loadProductImage(source), watermarkImage, token);
+  const image = await loadProductImage(source);
+  return isWatermarkedUpload(source, publicMediaBaseUrl)
+    ? image
+    : renderProductWatermark(image, watermarkImage, token);
 }
 
 function escapeXml(value: unknown): string {

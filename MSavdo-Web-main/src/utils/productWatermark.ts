@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import sharp from 'sharp';
 
 const WATERMARK_STYLE = 'gray-small-v2';
@@ -7,6 +9,29 @@ export function productImageToken(source: string, watermark: Buffer, legacy = fa
   const hash = crypto.createHash('sha256').update(watermark).digest('hex');
   const version = legacy ? hash : `${hash}\n${WATERMARK_STYLE}`;
   return crypto.createHash('sha256').update(`${version}\n${source.trim()}`).digest('hex');
+}
+
+export async function saveWatermarkedUpload(input: Buffer, watermark: Buffer, uploadsDir: string): Promise<string> {
+  const imageHash = crypto.createHash('sha256').update(input).digest('hex');
+  const token = productImageToken(imageHash, watermark);
+  const filename = `${token}.watermarked.jpg`;
+  const output = await renderProductWatermark(input, watermark, token);
+  try {
+    await fs.writeFile(path.join(uploadsDir, filename), output, { flag: 'wx' });
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+  }
+  return filename;
+}
+
+export function isWatermarkedUpload(source: string, mediaBaseUrl: string): boolean {
+  try {
+    const url = new URL(source, mediaBaseUrl);
+    return url.origin === new URL(mediaBaseUrl).origin &&
+      /^\/uploads\/[a-f0-9]{64}\.watermarked\.jpg$/.test(url.pathname);
+  } catch {
+    return false;
+  }
 }
 
 export async function renderProductWatermark(input: Buffer, watermark: Buffer, token: string): Promise<Buffer> {
