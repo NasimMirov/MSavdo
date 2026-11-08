@@ -5,6 +5,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import crypto from 'node:crypto';
+import dns from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
+import type { LookupFunction } from 'node:net';
+import sharp from 'sharp';
 import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
@@ -135,6 +140,9 @@ const db = new DatabaseSync(dbPath);
 const uploadsDir = path.join(path.dirname(dbPath), 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir, { maxAge: '365d', immutable: true }));
+const watermarkImagePath = path.join(__dirname, 'public', 'msavdo-watermark.png');
+const watermarkImage = fs.readFileSync(watermarkImagePath);
+const watermarkVersion = crypto.createHash('sha256').update(watermarkImage).digest('hex');
 
 function persistInlineImage(value: string, req: express.Request): string {
   const match = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=\s]+)$/i.exec(value.trim());
@@ -2455,6 +2463,12 @@ app.get('/api/products', (req, res) => {
     const enriched: any[] = [];
     for (const p of products) {
       const variants = applyProductDiscount(getVariants.all(p.id) as any[], Number(p.discount_percent) || 0);
+      const publicImages = getPublicProductImageUrls(
+        p.id,
+        p.main_image,
+        p.images,
+        variants.map((variant) => variant.image_url || null),
+      );
       let minPrice = 0;
       let maxPrice = 0;
       if (variants.length > 0) {
@@ -2498,6 +2512,8 @@ app.get('/api/products', (req, res) => {
 
       enriched.push({
         ...p,
+        main_image: publicImages[0] || '',
+        images: publicImages.slice(1).join(','),
         delivery_type: p.delivery_type || 'order',
         video_urls: normalizeVideoUrls(p.video_urls, p.youtube_url || p.video_url || ''),
         youtube_url: p.youtube_url || p.video_url || '',
@@ -2505,7 +2521,10 @@ app.get('/api/products', (req, res) => {
         min_price_tjs: minPrice,
         max_price_tjs: maxPrice,
         specifications: parsedSpecs,
-        variants,
+        variants: variants.map((variant) => ({
+          ...variant,
+          image_url: getWatermarkedImageUrl(p.id, variant.image_url || '') || '',
+        })),
       });
     }
 
@@ -2568,17 +2587,31 @@ app.get('/api/products/:id', (req, res) => {
       WHERE product_id = ?
       ORDER BY id ASC
     `).all(productId);
-    const variants = applyProductDiscount(rawVariants as Array<{ price_tjs: number }>, Number(product.discount_percent) || 0);
+    const variants = applyProductDiscount(
+      rawVariants as Array<{ price_tjs: number; image_url: string | null }>,
+      Number(product.discount_percent) || 0,
+    );
+    const publicImages = getPublicProductImageUrls(
+      productId,
+      product.main_image,
+      product.images,
+      variants.map((variant) => variant.image_url || null),
+    );
 
     return res.json({
       product: {
         ...product,
+        main_image: publicImages[0] || '',
+        images: publicImages.slice(1).join(','),
         delivery_type: product.delivery_type || 'order',
         video_urls: normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || ''),
         video_url: product.youtube_url || product.video_url || '',
         youtube_url: product.youtube_url || product.video_url || '',
         specifications,
-        variants,
+        variants: variants.map((variant) => ({
+          ...variant,
+          image_url: getWatermarkedImageUrl(productId, variant.image_url || '') || '',
+        })),
       },
     });
   } catch (error) {
@@ -2631,14 +2664,25 @@ app.get('/api/products/:id/related', (req, res) => {
         if (seenIds.has(candidate.id)) continue;
         seenIds.add(candidate.id);
         const variants = applyProductDiscount(
-          getRelatedVariants.all(candidate.id) as Array<{ price_tjs: number }>,
+          getRelatedVariants.all(candidate.id) as Array<{ price_tjs: number; image_url: string | null }>,
           Number(candidate.discount_percent) || 0,
+        );
+        const publicImages = getPublicProductImageUrls(
+          candidate.id,
+          candidate.main_image,
+          candidate.images,
+          variants.map((variant) => variant.image_url || null),
         );
         const prices = variants.map((variant) => variant.price_tjs).filter((price) => price > 0);
         relatedProducts.push({
           ...candidate,
+          main_image: publicImages[0] || '',
+          images: publicImages.slice(1).join(','),
           min_price_tjs: prices.length ? Math.min(...prices) : candidate.min_price_tjs,
-          variants,
+          variants: variants.map((variant) => ({
+            ...variant,
+            image_url: getWatermarkedImageUrl(candidate.id, variant.image_url || '') || '',
+          })),
           delivery_type: candidate.delivery_type || 'order',
           video_urls: normalizeVideoUrls(candidate.video_urls, candidate.youtube_url || candidate.video_url || ''),
           youtube_url: candidate.youtube_url || candidate.video_url || '',
@@ -5050,6 +5094,7 @@ app.get('/api/extension-file', (req, res) => {
 // VITE DEV SERVER MIDDLEWARE
 // ==========================================
 const seoSiteUrl = (process.env.PUBLIC_SITE_URL || 'https://msavdo.shop').replace(/\/+$/, '');
+const publicMediaBaseUrl = (process.env.PUBLIC_BASE_URL || 'https://api.msavdo.shop').replace(/\/+$/, '');
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
@@ -5073,20 +5118,178 @@ function getPublicProductUrl(id: number, title: string): string {
   return `${seoSiteUrl}/product/${id}/${makeProductSlug(title)}`;
 }
 
-function getPublicImageUrls(mainImage: string | null, images: string | null, limit = 8): string[] {
-  const imageUrls = new Set<string>();
-  for (const rawImage of [mainImage, ...(images || '').split(',')]) {
-    const image = rawImage?.trim();
-    if (!image) continue;
-    try {
-      const url = new URL(image, seoSiteUrl);
-      if (url.protocol === 'http:' || url.protocol === 'https:') imageUrls.add(url.href);
-    } catch {
-      continue;
-    }
-    if (imageUrls.size >= limit) break;
+function getProductImageSources(
+  mainImage: string | null,
+  images: string | null,
+  variantImages: Array<string | null> = [],
+): string[] {
+  return [...new Set([mainImage, ...(images || '').split(','), ...variantImages]
+    .map((image) => image?.trim() || '')
+    .filter(Boolean))];
+}
+
+function getProductImageToken(source: string): string {
+  return crypto.createHash('sha256').update(`${watermarkVersion}\n${source.trim()}`).digest('hex');
+}
+
+function getWatermarkedImageUrl(productId: number, source: string): string | null {
+  const normalizedSource = source.trim();
+  if (!normalizedSource) return null;
+  try {
+    const url = new URL(normalizedSource, publicMediaBaseUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:' && url.protocol !== 'data:') return null;
+    const token = getProductImageToken(normalizedSource);
+    return `${publicMediaBaseUrl}/product-image/${productId}/${token}.jpg`;
+  } catch {
+    return null;
   }
-  return [...imageUrls];
+}
+
+function getPublicProductImageUrls(
+  productId: number,
+  mainImage: string | null,
+  images: string | null,
+  variantImages: Array<string | null> = [],
+  limit = Number.POSITIVE_INFINITY,
+): string[] {
+  return getProductImageSources(mainImage, images, variantImages)
+    .map((source) => getWatermarkedImageUrl(productId, source))
+    .filter((image): image is string => Boolean(image))
+    .slice(0, limit);
+}
+
+function isPublicIpAddress(address: string): boolean {
+  if (address.includes('.')) {
+    const octets = address.split('.').map(Number);
+    if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
+    const [a, b, c] = octets;
+    return !(
+      a === 0 || a === 10 || a === 127 || a >= 224 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && (b === 168 || (b === 0 && c === 0) || (b === 0 && c === 2))) ||
+      (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+      (a === 203 && b === 0 && c === 113)
+    );
+  }
+  const firstHextet = Number.parseInt(address.split(':')[0] || '0', 16);
+  return firstHextet >= 0x2000 && firstHextet <= 0x3fff && !address.toLowerCase().startsWith('2001:db8:');
+}
+
+async function downloadRemoteImage(source: string, redirects = 0): Promise<Buffer> {
+  if (redirects > 3) throw new Error('Слишком много перенаправлений при загрузке фото');
+  const url = new URL(source);
+  if (
+    (url.protocol !== 'https:' && url.protocol !== 'http:') ||
+    url.username ||
+    url.password ||
+    (url.protocol === 'https:' && url.port && url.port !== '443') ||
+    (url.protocol === 'http:' && url.port && url.port !== '80')
+  ) {
+    throw new Error('Некорректный адрес фото');
+  }
+  const addresses = await dns.lookup(url.hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(({ address }) => !isPublicIpAddress(address))) {
+    throw new Error('Адрес сервера изображения не является общедоступным');
+  }
+  const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
+    if (options.all) callback(null, addresses);
+    else callback(null, addresses[0].address, addresses[0].family);
+  };
+  const response = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+    const request = (url.protocol === 'https:' ? https : http).get(url, {
+      lookup: pinnedLookup,
+      timeout: 10000,
+      headers: { 'User-Agent': 'MSavdo-Image-Processor/1.0', Accept: 'image/*' },
+    }, resolve);
+    request.on('timeout', () => request.destroy(new Error('Превышено время загрузки фото')));
+    request.on('error', reject);
+  });
+  if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400) {
+    const location = response.headers.location;
+    response.resume();
+    if (!location) throw new Error('Некорректное перенаправление изображения');
+    return downloadRemoteImage(new URL(location, url).href, redirects + 1);
+  }
+  if (response.statusCode !== 200) {
+    response.resume();
+    throw new Error('Источник изображения вернул ошибку');
+  }
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  for await (const chunk of response) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > 8 * 1024 * 1024) {
+      response.destroy();
+      throw new Error('Фото превышает допустимый размер 8 МБ');
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+async function loadProductImage(source: string): Promise<Buffer> {
+  const inlineImage = /^data:image\/(png|jpe?g|webp|gif);base64,([A-Za-z0-9+/=\s]+)$/i.exec(source);
+  if (inlineImage) {
+    const buffer = Buffer.from(inlineImage[2].replace(/\s+/g, ''), 'base64');
+    if (!buffer.length || buffer.length > 8 * 1024 * 1024) throw new Error('Фото превышает допустимый размер 8 МБ');
+    return buffer;
+  }
+
+  const url = new URL(source, publicMediaBaseUrl);
+  const mediaOrigin = new URL(publicMediaBaseUrl).origin;
+  if (url.hostname === new URL(mediaOrigin).hostname && url.pathname.startsWith('/uploads/')) {
+    const relativePath = decodeURIComponent(url.pathname.slice('/uploads/'.length));
+    const uploadsRoot = path.resolve(uploadsDir);
+    const imagePath = path.resolve(uploadsRoot, relativePath);
+    if (!imagePath.startsWith(`${uploadsRoot}${path.sep}`)) throw new Error('Некорректный путь к фото');
+    const image = await fs.promises.readFile(imagePath);
+    if (image.length > 8 * 1024 * 1024) throw new Error('Фото превышает допустимый размер 8 МБ');
+    return image;
+  }
+  return downloadRemoteImage(url.href);
+}
+
+async function createWatermarkedImage(source: string, token: string): Promise<Buffer> {
+  const input = await loadProductImage(source);
+  const image = sharp(input, { limitInputPixels: 40000000, animated: false });
+  const metadata = await image.metadata();
+  if (!metadata.width || !metadata.height || !['jpeg', 'png', 'webp', 'gif', 'heif', 'avif'].includes(metadata.format || '')) {
+    throw new Error('Формат фото не поддерживается');
+  }
+  const swapsDimensions = metadata.orientation !== undefined && metadata.orientation >= 5 && metadata.orientation <= 8;
+  const width = swapsDimensions ? metadata.height : metadata.width;
+  const height = swapsDimensions ? metadata.width : metadata.height;
+  const logoWidth = Math.min(256, Math.max(48, Math.round(width * 0.17)));
+  const resizedLogo = await sharp(watermarkImage)
+    .resize({ width: logoWidth, withoutEnlargement: true })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  for (let index = 3; index < resizedLogo.data.length; index += 4) {
+    resizedLogo.data[index] = Math.round(resizedLogo.data[index] * 0.78);
+  }
+  const logo = await sharp(resizedLogo.data, {
+    raw: { width: resizedLogo.info.width, height: resizedLogo.info.height, channels: 4 },
+  }).png().toBuffer();
+  const margin = Math.max(8, Math.round(Math.min(width, height) * 0.025));
+  const corners = [
+    { left: margin, top: margin },
+    { left: Math.max(margin, width - resizedLogo.info.width - margin), top: margin },
+    { left: margin, top: Math.max(margin, height - resizedLogo.info.height - margin) },
+    {
+      left: Math.max(margin, width - resizedLogo.info.width - margin),
+      top: Math.max(margin, height - resizedLogo.info.height - margin),
+    },
+  ];
+  const corner = corners[Number.parseInt(token.slice(0, 2), 16) % corners.length];
+  return image
+    .rotate()
+    .composite([{ input: logo, ...corner, blend: 'over' }])
+    .jpeg({ quality: 88, mozjpeg: true })
+    .toBuffer();
 }
 
 function escapeXml(value: unknown): string {
@@ -5158,7 +5361,8 @@ app.get('/somon-feed.xml', (_req, res) => {
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.main_image, p.images,
              p.specifications,
-             MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs
+             MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
+             GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images
       FROM products p
       LEFT JOIN product_variants v ON v.product_id = p.id
       WHERE p.status = 'active'
@@ -5173,6 +5377,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       images: string | null;
       specifications: string | null;
       price_tjs: number | null;
+      variant_images: string | null;
     }>;
 
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -5225,7 +5430,13 @@ app.get('/somon-feed.xml', (_req, res) => {
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 10000) || title;
-      const images = getPublicImageUrls(product.main_image, product.images, 32)
+      const images = getPublicProductImageUrls(
+        product.id,
+        product.main_image,
+        product.images,
+        product.variant_images ? product.variant_images.split(',') : [],
+        32,
+      )
         .filter((image) => !/\.(?:gif|webp|svg|avif|bmp|tiff?)$/i.test(new URL(image).pathname))
         .slice(0, 16);
       const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
@@ -5316,7 +5527,7 @@ app.get('/robots.txt', (_req, res) => {
   );
 });
 
-const SEO_SITEMAP_PAGE_SIZE = 10000;
+const SEO_SITEMAP_PAGE_SIZE = 100;
 
 app.get('/sitemap.xml', (_req, res) => {
   try {
@@ -5360,17 +5571,38 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
       return res.status(404).type('text/plain').send('Карта сайта не найдена');
     }
 
+    const variantImagesByProduct = new Map<number, string[]>();
+    if (products.length) {
+      const placeholders = products.map(() => '?').join(',');
+      const variantImages = db.prepare(`
+        SELECT product_id, image_url
+        FROM product_variants
+        WHERE product_id IN (${placeholders}) AND image_url IS NOT NULL AND image_url != ''
+      `).all(...products.map((product) => product.id)) as Array<{ product_id: number; image_url: string }>;
+      for (const variant of variantImages) {
+        const images = variantImagesByProduct.get(variant.product_id) || [];
+        images.push(variant.image_url);
+        variantImagesByProduct.set(variant.product_id, images);
+      }
+    }
+
     const productEntries = products.map((product) => {
       const timestamp = product.created_at ? Date.parse(product.created_at) : NaN;
       const lastModified = Number.isFinite(timestamp)
         ? `<lastmod>${new Date(timestamp).toISOString().slice(0, 10)}</lastmod>`
         : '';
-      const imageEntries = getPublicImageUrls(product.main_image, product.images, 3)
-        .map((image) => `<image:image><image:loc>${escapeHtml(image)}</image:loc><image:title>${escapeHtml(product.title)}</image:title></image:image>`)
+      const imageEntries = getPublicProductImageUrls(
+        product.id,
+        product.main_image,
+        product.images,
+        variantImagesByProduct.get(product.id) || [],
+        1000,
+      )
+        .map((image) => `<image:image><image:loc>${escapeXml(image)}</image:loc></image:image>`)
         .join('');
-      return `<url><loc>${escapeHtml(getPublicProductUrl(product.id, product.title))}</loc>${lastModified}${imageEntries}</url>`;
+      return `<url><loc>${escapeXml(getPublicProductUrl(product.id, product.title))}</loc>${lastModified}${imageEntries}</url>`;
     }).join('');
-    const homeEntry = page === 1 ? `<url><loc>${escapeHtml(`${seoSiteUrl}/`)}</loc></url>` : '';
+    const homeEntry = page === 1 ? `<url><loc>${escapeXml(`${seoSiteUrl}/`)}</loc></url>` : '';
 
     return res.type('application/xml')
       .set('Cache-Control', 'public, max-age=900')
@@ -5378,6 +5610,45 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
   } catch (error) {
     console.error('[SEO Sitemap] Не удалось сформировать раздел карты сайта:', error);
     return res.status(500).type('text/plain').send('Не удалось сформировать карту сайта');
+  }
+});
+
+app.get('/product-image/:productId/:token.jpg', async (req, res) => {
+  const productId = Number(req.params.productId);
+  const token = req.params.token;
+  if (!Number.isSafeInteger(productId) || productId <= 0 || !/^[a-f0-9]{64}$/.test(token)) {
+    return res.status(404).type('text/plain').send('Фото не найдено');
+  }
+
+  try {
+    const product = db.prepare(`
+      SELECT main_image, images
+      FROM products
+      WHERE id = ? AND status = 'active'
+    `).get(productId) as { main_image: string | null; images: string | null } | undefined;
+    if (!product) return res.status(404).type('text/plain').send('Фото не найдено');
+
+    const variants = db.prepare(`
+      SELECT image_url
+      FROM product_variants
+      WHERE product_id = ? AND image_url IS NOT NULL AND image_url != ''
+    `).all(productId) as Array<{ image_url: string }>;
+    const source = getProductImageSources(
+      product.main_image,
+      product.images,
+      variants.map((variant) => variant.image_url),
+    ).find((image) => getProductImageToken(image) === token);
+    if (!source) return res.status(404).type('text/plain').send('Фото не найдено');
+
+    const image = await createWatermarkedImage(source, token);
+    return res
+      .type('image/jpeg')
+      .set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+      .set('X-Content-Type-Options', 'nosniff')
+      .send(image);
+  } catch (error) {
+    console.error(`[Product Image] Не удалось обработать фото товара ${productId}:`, error);
+    return res.status(502).type('text/plain').send('Не удалось обработать фото товара');
   }
 });
 
@@ -5441,7 +5712,26 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       product.delivery_type,
     );
     const searchTitle = makeSearchTitle(product.title);
-    const imageList = getPublicImageUrls(product.main_image, product.images);
+    const variants = db.prepare(`
+      SELECT color, size, price_tjs, stock, variant_sku, image_url
+      FROM product_variants
+      WHERE product_id = ?
+      ORDER BY id ASC
+    `).all(productId) as Array<{
+      color: string | null;
+      size: string | null;
+      price_tjs: number;
+      stock: number;
+      variant_sku: string;
+      image_url: string | null;
+    }>;
+    const imageList = getPublicProductImageUrls(
+      productId,
+      product.main_image,
+      product.images,
+      variants.map((variant) => variant.image_url),
+    );
+    const discountedVariants = applyProductDiscount(variants, discountPercent);
     let specifications: Array<{ name: string; value: string }> = [];
     if (product.specifications) {
       try {
@@ -5469,6 +5759,27 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       url: canonicalUrl,
       ...(imageList.length ? { image: imageList } : {}),
       ...(product.category_name ? { category: product.category_name } : {}),
+      ...(discountedVariants.length ? {
+        hasVariant: discountedVariants.map((variant) => ({
+          '@type': 'Product',
+          name: [product.title, variant.color, variant.size].filter(Boolean).join(' '),
+          sku: variant.variant_sku,
+          ...(variant.color ? { color: variant.color } : {}),
+          ...(variant.size ? { size: variant.size } : {}),
+          ...(variant.image_url ? {
+            image: getWatermarkedImageUrl(productId, variant.image_url) || undefined,
+          } : {}),
+          ...(variant.price_tjs > 0 ? {
+            offers: {
+              '@type': 'Offer',
+              priceCurrency: 'TJS',
+              price: variant.price_tjs,
+              availability,
+              url: canonicalUrl,
+            },
+          } : {}),
+        })),
+      } : {}),
       ...(price > 0 ? {
         offers: {
           '@type': 'AggregateOffer',
@@ -5500,8 +5811,16 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     const priceLabel = price > 0
       ? `${price}${maxPrice && maxPrice !== price ? `–${maxPrice}` : ''} сомони`
       : 'Уточните цену';
-    const specsHtml = specifications.slice(0, 30)
+    const specsHtml = specifications
       .map((spec) => `<li><strong>${escapeHtml(spec.name)}:</strong> ${escapeHtml(spec.value)}</li>`)
+      .join('');
+    const variantsHtml = discountedVariants
+      .map((variant) => {
+        const label = [variant.color, variant.size].filter(Boolean).map(escapeHtml).join(' / ');
+        const variantPrice = variant.price_tjs > 0 ? `${escapeHtml(variant.price_tjs)} сомони` : '';
+        return label ? `<li>${label}${variantPrice ? ` — ${variantPrice}` : ''}</li>` : '';
+      })
+      .filter(Boolean)
       .join('');
     const galleryHtml = imageList.map((image) => `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`).join('');
     const safeStructuredData = JSON.stringify([structuredData, breadcrumbData]).replace(/</g, '\\u003c');
@@ -5527,6 +5846,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 <section class="details"><p>${escapeHtml(product.category_name || 'Каталог M.Savdo')}</p><h1>${escapeHtml(product.title)}</h1>
 <p class="price">${escapeHtml(priceLabel)}</p><p>${escapeHtml(description)}</p>
 ${specsHtml ? `<h2>Характеристики</h2><ul class="specs">${specsHtml}</ul>` : ''}
+${variantsHtml ? `<h2>Варианты</h2><ul class="specs">${variantsHtml}</ul>` : ''}
 <p>Артикул: ${escapeHtml(product.base_sku)}</p><a class="button" href="${escapeHtml(whatsappUrl)}" target="_blank" rel="noopener noreferrer">Уточнить и заказать в WhatsApp</a>
 <a class="button secondary" href="/">Открыть каталог M.Savdo</a></section></article></main>${appRedirect}</body></html>`);
   } catch (error) {
