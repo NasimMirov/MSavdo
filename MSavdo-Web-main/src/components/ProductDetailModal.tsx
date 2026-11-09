@@ -5,6 +5,7 @@ import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { ProductShareButton } from './ProductShareButton';
 import { cleanProductDescription, extractProductColors, extractProductColorImages } from '../utils/productDescription';
+import { calculateQuantityDiscountedPriceTjs } from '../utils/pricing';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -160,9 +161,15 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     );
   }, [variants, selectedColor, selectedSize]);
 
-  // Текущая цена в сомони
-  const currentPriceTjs = activeVariant ? activeVariant.price_tjs : (product?.min_price_tjs || 0);
-  const currentOriginalPriceTjs = activeVariant?.original_price_tjs ?? currentPriceTjs;
+  const regularPriceTjs = activeVariant ? activeVariant.price_tjs : (product?.min_price_tjs || 0);
+  const currentPriceTjs = calculateQuantityDiscountedPriceTjs(
+    regularPriceTjs,
+    selectedQuantity,
+    activeVariant?.quantity_discount_min || 0,
+    activeVariant?.quantity_discount_percent || 0,
+  );
+  const currentOriginalPriceTjs = activeVariant?.original_price_tjs ?? regularPriceTjs;
+  const hasQuantityDiscount = currentPriceTjs < regularPriceTjs;
   const hasCurrentDiscount = currentOriginalPriceTjs > currentPriceTjs;
 
   // Список всех фото товара
@@ -299,7 +306,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
       title: product.title,
       color: selectedColor || activeVariant.color || 'Стандарт',
       size: selectedSize || activeVariant.size || 'One Size',
-      price_tjs: activeVariant.price_tjs,
+      price_tjs: currentPriceTjs,
+      original_price_tjs: currentOriginalPriceTjs,
+      quantity_discount_min: activeVariant.quantity_discount_min || 0,
+      quantity_discount_percent: activeVariant.quantity_discount_percent || 0,
       image: selectedColorImage || activeVariant.image_url || product.main_image,
       quantity: selectedQuantity,
       stock: activeVariant.stock,
@@ -548,7 +558,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   {hasCurrentDiscount && (
                     <div className="text-xs font-semibold text-slate-500 line-through">
                       {currentOriginalPriceTjs.toLocaleString('ru-RU')} <span>TJS</span>
-                      <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800">−{product?.discount_percent}%</span>
+                      {(product?.discount_percent || 0) > 0 && (
+                        <span className="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-800">−{product?.discount_percent}%</span>
+                      )}
+                    </div>
+                  )}
+                  {hasQuantityDiscount && (
+                    <div className="text-[10px] font-semibold text-slate-500 line-through">
+                      {regularPriceTjs.toLocaleString('ru-RU')} TJS
                     </div>
                   )}
                   <div className={`text-lg sm:text-3xl font-extrabold font-mono mt-0.5 ${hasCurrentDiscount ? 'product-sale-price' : 'text-slate-900 price-text'}`}>
@@ -570,6 +587,17 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   )}
                 </div>
               </div>
+
+              {(activeVariant?.quantity_discount_min || 0) >= 2 && (activeVariant?.quantity_discount_percent || 0) > 0 && (
+                <div className={`mt-2 rounded-xl border px-3 py-2 text-xs ${
+                  hasQuantityDiscount
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-amber-200 bg-amber-50 text-amber-900'
+                }`}>
+                  <strong>Скидка на выбранный вариант: {activeVariant.quantity_discount_percent}% от {activeVariant.quantity_discount_min} шт.</strong>
+                  {hasQuantityDiscount && <span className="ml-1">Цена за штуку с учетом скидки: {currentPriceTjs} TJS.</span>}
+                </div>
+              )}
 
               {/* Авторитетный инфо-блок доставки */}
               {product.delivery_type === 'stock' ? (

@@ -137,3 +137,14 @@ export function calculateDiscountedPriceTjs(priceTjs: number, discountPercent: n
   }
   return Math.max(1, Math.round(priceTjs * (100 - discountPercent) / 100));
 }
+
+export function calculateQuantityDiscountedPriceTjs(
+  priceTjs: number,
+  quantity: number,
+  minimumQuantity: number,
+  discountPercent: number,
+): number {
+  if (!Number.isSafeInteger(quantity) || !Number.isSafeInteger(minimumQuantity) ||
+      minimumQuantity < 2 || quantity < minimumQuantity) return priceTjs;
+  return calculateDiscountedPriceTjs(priceTjs, discountPercent);
+}

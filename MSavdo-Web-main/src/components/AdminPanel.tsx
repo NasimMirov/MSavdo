@@ -47,7 +47,6 @@ import { PromotionsAdmin } from './PromotionsAdmin';
 import { ProductDiscountsAdmin } from './ProductDiscountsAdmin';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
-import { calculatePriceTjs } from '../utils/pricing';
 import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors, normalizeProductColor, removeProductColor } from '../utils/productDescription';
 
 interface TelegramLoginResult {
@@ -795,7 +794,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setNewImageUrl('');
     setEditingProduct({
       id: 0,
-      base_sku: 'MS-НОВЫЙ',
+      base_sku: 'НОВЫЙ',
       title: '',
       description: '',
       original_link: '',
@@ -821,6 +820,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           price_tjs: 120,
           price_cny: 0,
           stock: 15,
+          quantity_discount_min: 0,
+          quantity_discount_percent: 0,
           weight_kg: 0.5,
           image_url: '',
         },
@@ -848,6 +849,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       price_tjs: v.price_tjs || 0,
       price_cny: v.price_cny || 0,
       stock: v.stock !== undefined ? v.stock : 10,
+      quantity_discount_min: v.quantity_discount_min || 0,
+      quantity_discount_percent: v.quantity_discount_percent || 0,
       weight_kg: v.weight_kg || 0.5,
       volume_m3: v.volume_m3 || 0,
       variant_sku: v.variant_sku || '',
@@ -1196,6 +1199,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       price_tjs: 120,
       price_cny: 0,
       stock: 15,
+      quantity_discount_min: 0,
+      quantity_discount_percent: 0,
       weight_kg: 0.5,
       volume_m3: 0,
       image_url: editingProduct.main_image || '',
@@ -1393,7 +1398,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         video_first: Boolean(editingProduct.video_first),
         default_weight_kg: editingProduct.default_weight_kg || 0.5,
         specifications: (editingProduct.specifications || []).filter((s: any) => s.name.trim() && s.value.trim()),
-        variants: editingProduct.variants || [],
+        variants: (editingProduct.variants || []).map((variant: any) => ({
+          ...variant,
+          price_tjs: variant.price_tjs === '' ? 0 : Number(variant.price_tjs),
+          quantity_discount_min: variant.quantity_discount_min === '' ? 0 : Number(variant.quantity_discount_min) || 0,
+          quantity_discount_percent: variant.quantity_discount_percent === '' ? 0 : Number(variant.quantity_discount_percent) || 0,
+        })),
       };
       const uploadedImages = new Map<string, Promise<string>>();
       const toStoredImage = (image: string): Promise<string> => {
@@ -3994,7 +4004,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div className="flex items-center justify-between">
                   <div>
                     <label className="font-bold text-slate-800 text-xs">Матрица вариантов SKU:</label>
-                    <p className="text-[10px] text-slate-400">Цены закупки, розничные цены в TJS и фото вариантов (из файлов/буфера)</p>
+                    <p className="text-[10px] text-slate-400">Розничная цена и скидка отдельно для каждого варианта. Укажите оба значения: от 2 до 10 000 шт. и скидку 1–90%; чтобы отключить — оставьте оба поля пустыми.</p>
                   </div>
                   <button
                     type="button"
@@ -4013,7 +4023,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </p>
                   )}
                   {editingProduct.variants?.map((v: any, vIdx: number) => (
-                    <div key={v.id ?? v.variant_sku ?? `${v.color}-${v.size}-${vIdx}`} className="p-2 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-2 sm:grid-cols-12 gap-1.5 items-center text-[11px]">
+                    <div key={v.id ?? `new-variant-${vIdx}`} className="p-2 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-2 sm:grid-cols-12 gap-1.5 items-center text-[11px]">
                       <div className="sm:col-span-3">
                         <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цвет:</span>
                         <input
@@ -4037,36 +4047,38 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         />
                       </div>
                       <div className="sm:col-span-2">
-                        <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цена закупки (CNY):</span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={v.price_cny ?? 0}
-                          onChange={(e) => handleUpdateVariantField(vIdx, 'price_cny', Number(e.target.value))}
-                          className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono focus:border-amber-400 outline-none"
-                        />
-                      </div>
-                      <div className="sm:col-span-2">
                         <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цена продажи (TJS):</span>
                         <input
-                          type="number"
+                          type="text"
+                          inputMode="numeric"
                           required
-                          min="0"
-                          step="1"
-                          value={v.price_tjs ?? calculatePriceTjs(Number(v.price_cny) || 0, Number(v.weight_kg) || 0.5, Number(v.volume_m3) || 0)}
-                          onChange={(e) => handleUpdateVariantField(vIdx, 'price_tjs', e.target.value === '' ? '' : Number(e.target.value))}
+                          autoComplete="off"
+                          value={v.price_tjs ?? 0}
+                          onChange={(e) => handleUpdateVariantField(vIdx, 'price_tjs', e.target.value)}
                           className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono font-black text-slate-900 focus:border-amber-400 outline-none"
                         />
                       </div>
-                      <div className="sm:col-span-1">
-                        <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Stock:</span>
+                      <div className="sm:col-span-2">
+                        <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Скидка от, шт.:</span>
                         <input
-                          type="number"
-                          min="0"
-                          step="1"
-                          value={v.stock ?? 10}
-                          onChange={(e) => handleUpdateVariantField(vIdx, 'stock', Number(e.target.value))}
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          value={v.quantity_discount_min || ''}
+                          onChange={(e) => handleUpdateVariantField(vIdx, 'quantity_discount_min', e.target.value)}
+                          placeholder="Например, 2"
+                          className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono focus:border-amber-400 outline-none"
+                        />
+                      </div>
+                      <div className="sm:col-span-1">
+                        <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Скидка %:</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          value={v.quantity_discount_percent || ''}
+                          onChange={(e) => handleUpdateVariantField(vIdx, 'quantity_discount_percent', e.target.value)}
+                          placeholder="%"
                           className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono focus:border-amber-400 outline-none"
                         />
                       </div>

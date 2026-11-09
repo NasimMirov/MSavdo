@@ -7,6 +7,8 @@ export interface ProductVariant {
   price_tjs: number;
   original_price_tjs?: number;
   stock: number;
+  quantity_discount_min?: number;
+  quantity_discount_percent?: number;
   weight_kg: number;
   volume_m3?: number;
   variant_sku: string;
@@ -34,6 +36,8 @@ export interface Product {
   specifications?: Array<{ name: string; value: string }> | string;
   variants?: ProductVariant[];
   discount_percent?: number;
+  quantity_discount_min?: number;
+  quantity_discount_percent?: number;
   min_price_tjs?: number;
   max_price_tjs?: number;
 }
@@ -60,6 +64,8 @@ export interface CartItem {
   image: string;
   quantity: number;
   stock: number;
+  quantity_discount_min?: number;
+  quantity_discount_percent?: number;
   delivery_type?: 'stock' | 'order';
   variants?: ProductVariant[];
 }

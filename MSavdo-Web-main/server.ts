@@ -13,7 +13,7 @@ import { rateLimit } from 'express-rate-limit';
 import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
-import { calculateDiscountedPriceTjs, calculatePriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
+import { calculateDiscountedPriceTjs, calculatePriceTjs, calculateQuantityDiscountedPriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
 import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { importVariantInstructions } from './src/utils/importAiPrompt.js';
@@ -197,6 +197,8 @@ db.exec(`
     price_cny REAL NOT NULL,
     price_tjs INTEGER NOT NULL,
     stock INTEGER DEFAULT 10,
+    quantity_discount_min INTEGER NOT NULL DEFAULT 0,
+    quantity_discount_percent INTEGER NOT NULL DEFAULT 0,
     weight_kg REAL DEFAULT 0.5,
     volume_m3 REAL NOT NULL DEFAULT 0,
     variant_sku TEXT UNIQUE NOT NULL,
@@ -397,6 +399,12 @@ db.exec('UPDATE orders SET total_amount_tjs = total_amount WHERE total_amount_tj
 const variantColumns = db.prepare('PRAGMA table_info(product_variants)').all() as Array<{ name: string }>;
 if (!variantColumns.some((column) => column.name === 'volume_m3')) {
   db.exec('ALTER TABLE product_variants ADD COLUMN volume_m3 REAL NOT NULL DEFAULT 0;');
+}
+if (!variantColumns.some((column) => column.name === 'quantity_discount_min')) {
+  db.exec('ALTER TABLE product_variants ADD COLUMN quantity_discount_min INTEGER NOT NULL DEFAULT 0;');
+}
+if (!variantColumns.some((column) => column.name === 'quantity_discount_percent')) {
+  db.exec('ALTER TABLE product_variants ADD COLUMN quantity_discount_percent INTEGER NOT NULL DEFAULT 0;');
 }
 const productColumns = db.prepare('PRAGMA table_info(products)').all() as Array<{ name: string }>;
 if (!productColumns.some((column) => column.name === 'discount_percent')) {
@@ -1068,38 +1076,23 @@ function resolveRetailPriceTjs(value: unknown, priceCny: number, weightKg: numbe
     : Number(value);
 }
 
-// Генератор короткого артикула: две буквы категории и четыре цифры.
-function generateBaseSku(categoryId?: number | null): string {
-  const category = categoryId
-    ? db.prepare('SELECT name FROM categories WHERE id = ?').get(categoryId) as { name: string } | undefined
-    : undefined;
-  const transliteration: Record<string, string> = {
-    а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i',
-    й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't',
-    у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sh', ъ: '', ы: 'y', ь: '',
-    э: 'e', ю: 'yu', я: 'ya',
-  };
-  const categoryLetters = (category?.name || '')
-    .toLocaleLowerCase('ru')
-    .replace(/[а-яё]/g, (letter) => transliteration[letter] || '')
-    .replace(/[^a-z]/g, '')
-    .slice(0, 2)
-    .toUpperCase();
-  const prefix = categoryLetters ? categoryLetters.padEnd(2, 'P') : 'MS';
+function randomSkuSegment(length: number): string {
+  const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  return Array.from(crypto.randomBytes(length), (byte) => alphabet[byte % alphabet.length]).join('');
+}
 
+function generateBaseSku(_categoryId?: number | null): string {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const sku = `${prefix}${Math.floor(1000 + Math.random() * 9000)}`;
+    const sku = randomSkuSegment(6);
     const existing = db.prepare('SELECT 1 FROM products WHERE base_sku = ?').get(sku);
     if (!existing) return sku;
   }
   throw new Error('Не удалось создать уникальный артикул товара');
 }
 
-function generateVariantSku(baseSku: string, color?: string, size?: string): string {
-  const cleanSize = (size || 'OS').replace(/[^a-zA-Z0-9]/g, '').slice(0, 4) || 'SZ';
+function generateVariantSku(baseSku: string, _color?: string, _size?: string): string {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
-    const sku = `${baseSku}-${cleanSize}-${randomHex}`;
+    const sku = `${baseSku}-${randomSkuSegment(5)}`;
     if (!db.prepare('SELECT 1 FROM product_variants WHERE variant_sku = ?').get(sku)) return sku;
   }
   throw new Error('Не удалось создать уникальный артикул варианта');
@@ -2457,7 +2450,8 @@ app.get('/api/products', (req, res) => {
 
     // Прикрепляем варианты (строго без price_cny для защиты коммерческой тайны!)
     const getVariants = db.prepare(`
-      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
+      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url,
+             quantity_discount_min, quantity_discount_percent
       FROM product_variants
       WHERE product_id = ?
       ORDER BY id ASC
@@ -2586,7 +2580,8 @@ app.get('/api/products/:id', (req, res) => {
     }
 
     const rawVariants = db.prepare(`
-      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
+      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url,
+             quantity_discount_min, quantity_discount_percent
       FROM product_variants
       WHERE product_id = ?
       ORDER BY id ASC
@@ -2657,7 +2652,8 @@ app.get('/api/products/:id/related', (req, res) => {
     const relatedProducts: any[] = [];
     const seenIds = new Set<number>();
     const getRelatedVariants = db.prepare(`
-      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
+      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url,
+             quantity_discount_min, quantity_discount_percent
       FROM product_variants
       WHERE product_id = ?
       ORDER BY id ASC
@@ -2770,6 +2766,7 @@ type OrderCatalogItem = {
   product_id: number; variant_id: number; category_id: number | null;
   title: string; color: string; size: string; quantity: number; price_tjs: number;
   original_price_tjs: number; discount_percent?: number;
+  quantity_discount_min: number; quantity_discount_percent: number;
   variant_sku: string; base_sku: string; image: string; delivery_type: string;
 };
 
@@ -2881,12 +2878,23 @@ function buildOrderQuote(input: unknown, code: unknown) {
   if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{0,40}$/.test(code.trim())) throw new Error('Некорректный промокод.');
   const getVariant = db.prepare(`
     SELECT p.id AS product_id, v.id AS variant_id, p.category_id, p.title, v.color, v.size,
-         v.price_tjs AS original_price_tjs, p.discount_percent, v.variant_sku, p.base_sku, COALESCE(NULLIF(v.image_url, ''), p.main_image, '') AS image,
+         v.price_tjs AS original_price_tjs, p.discount_percent, v.quantity_discount_min, v.quantity_discount_percent,
+         v.variant_sku, p.base_sku, COALESCE(NULLIF(v.image_url, ''), p.main_image, '') AS image,
            COALESCE(p.delivery_type, 'order') AS delivery_type
     FROM product_variants v JOIN products p ON p.id = v.product_id
     WHERE v.id = ? AND p.id = ? AND p.status = 'active' AND v.price_tjs > 0
   `);
   const seen = new Set<number>();
+  const quantityByVariant = new Map<number, number>();
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue;
+    const entry = item as Record<string, unknown>;
+    const variantId = Number(entry.variant_id);
+    const quantity = Number(entry.quantity);
+    if (Number.isSafeInteger(variantId) && Number.isSafeInteger(quantity) && quantity > 0) {
+      quantityByVariant.set(variantId, (quantityByVariant.get(variantId) || 0) + quantity);
+    }
+  }
   const items: OrderCatalogItem[] = input.map((item: unknown) => {
     if (!item || typeof item !== 'object') throw new Error('Некорректная позиция корзины.');
     const entry = item as Record<string, unknown>;
@@ -2906,11 +2914,24 @@ function buildOrderQuote(input: unknown, code: unknown) {
         !Number.isSafeInteger(calculateDiscountedPriceTjs(originalPrice, discountPercent) * quantity)) {
       throw new Error('Некорректная цена товара.');
     }
+    const quantityDiscountMin = Number(found.quantity_discount_min) || 0;
+    const quantityDiscountPercent = Number(found.quantity_discount_percent) || 0;
+    const priceAfterProductDiscount = calculateDiscountedPriceTjs(originalPrice, discountPercent);
+    const priceAfterQuantityDiscount = calculateQuantityDiscountedPriceTjs(
+      priceAfterProductDiscount,
+      quantityByVariant.get(variantId) || quantity,
+      quantityDiscountMin,
+      quantityDiscountPercent,
+    );
     const { discount_percent: _discountPercent, original_price_tjs: _originalPrice, ...catalogItem } = found;
     return {
       ...catalogItem,
       original_price_tjs: originalPrice,
-      price_tjs: calculateDiscountedPriceTjs(originalPrice, discountPercent),
+      price_tjs: priceAfterQuantityDiscount,
+      quantity_discount_min: quantityDiscountMin,
+      quantity_discount_percent: quantityDiscountMin > 1 && quantity >= quantityDiscountMin
+        ? quantityDiscountPercent
+        : 0,
       quantity,
     };
   });
@@ -3457,6 +3478,19 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
       return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
     }
+    if (Array.isArray(variants) && variants.some((variant: any) => {
+      const minimum = variant?.quantity_discount_min === undefined || variant.quantity_discount_min === ''
+        ? 0
+        : Number(variant.quantity_discount_min);
+      const percent = variant?.quantity_discount_percent === undefined || variant.quantity_discount_percent === ''
+        ? 0
+        : Number(variant.quantity_discount_percent);
+      return !Number.isSafeInteger(minimum) || minimum < 0 || minimum === 1 || minimum > 10000 ||
+        !Number.isSafeInteger(percent) || percent < 0 || percent > 90 ||
+        ((minimum === 0) !== (percent === 0));
+    })) {
+      return res.status(400).json({ error: 'Для скидки за количество укажите от 2 до 10 000 штук и скидку от 1 до 90%. Чтобы отключить скидку, обнулите оба поля.' });
+    }
 
     const cleanTitle = title.trim();
     let cleanDesc = (description || '').trim();
@@ -3516,8 +3550,11 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
 
     // Сохранение вариантов
     const insertVar = db.prepare(`
-      INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3, variant_sku, image_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO product_variants (
+        product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3,
+        variant_sku, image_url, quantity_discount_min, quantity_discount_percent
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const createdVars: any[] = [];
@@ -3539,13 +3576,20 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
           ? v.variant_sku.trim()
           : generateVariantSku(baseSku, vColor, vSize);
         const vImg = typeof v.image_url === 'string' ? persistInlineImage(v.image_url, req) : mImage;
+        const quantityDiscountMin = Number(v.quantity_discount_min) || 0;
+        const quantityDiscountPercent = Number(v.quantity_discount_percent) || 0;
 
-        insertVar.run(productId, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg);
+        insertVar.run(
+          productId, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg,
+          quantityDiscountMin, quantityDiscountPercent,
+        );
         createdVars.push({
           color: vColor,
           size: vSize,
           price_tjs: vTjs,
           stock: vStock,
+          quantity_discount_min: quantityDiscountMin,
+          quantity_discount_percent: quantityDiscountPercent,
           weight_kg: vWeight,
           volume_m3: vVolume,
           variant_sku: vSku,
@@ -3557,7 +3601,10 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       const defaultWeightKg = 0.5;
       const defaultPriceTjs = calculateVariantPriceTjs(defaultPriceCny, defaultWeightKg);
       const defaultSku = generateVariantSku(baseSku, 'Основной', 'Стандарт');
-      insertVar.run(productId, 'Основной', 'Стандарт', defaultPriceCny, defaultPriceTjs, 15, defaultWeightKg, productVolumeM3, defaultSku, mImage);
+      insertVar.run(
+        productId, 'Основной', 'Стандарт', defaultPriceCny, defaultPriceTjs, 15, defaultWeightKg,
+        productVolumeM3, defaultSku, mImage, 0, 0,
+      );
       createdVars.push({
         color: 'Основной',
         size: 'Стандарт',
@@ -3626,6 +3673,19 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     }
     if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
       return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
+    }
+    if (Array.isArray(variants) && variants.some((variant: any) => {
+      const minimum = variant?.quantity_discount_min === undefined || variant.quantity_discount_min === ''
+        ? 0
+        : Number(variant.quantity_discount_min);
+      const percent = variant?.quantity_discount_percent === undefined || variant.quantity_discount_percent === ''
+        ? 0
+        : Number(variant.quantity_discount_percent);
+      return !Number.isSafeInteger(minimum) || minimum < 0 || minimum === 1 || minimum > 10000 ||
+        !Number.isSafeInteger(percent) || percent < 0 || percent > 90 ||
+        ((minimum === 0) !== (percent === 0));
+    })) {
+      return res.status(400).json({ error: 'Для скидки за количество укажите от 2 до 10 000 штук и скидку от 1 до 90%. Чтобы отключить скидку, обнулите оба поля.' });
     }
     const existingStatus = db.prepare('SELECT status FROM products WHERE id = ?').get(id) as { status: string } | undefined;
     if (existingStatus?.status === 'draft' && status === 'active') {
@@ -3701,29 +3761,43 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
 
     // Если передан полный обновленный массив вариантов: синхронизируем матрицу
     if (Array.isArray(variants)) {
+      const existingVariantData = new Map(
+        (db.prepare('SELECT id, price_cny, stock FROM product_variants WHERE product_id = ?').all(id) as Array<{
+          id: number;
+          price_cny: number;
+          stock: number;
+        }>).map((variant) => [variant.id, variant]),
+      );
       db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(id);
 
       const insertVar = db.prepare(`
-        INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3, variant_sku, image_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO product_variants (
+          product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3,
+          variant_sku, image_url, quantity_discount_min, quantity_discount_percent
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const v of variants) {
         const vColor = (v.color || 'Основной цвет').trim();
         const vSize = (v.size || 'Стандарт').trim();
+        const existing = Number.isSafeInteger(Number(v.id)) ? existingVariantData.get(Number(v.id)) : undefined;
         const parsedWeight = Number(v.weight_kg);
         const vWeight = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 0.5;
         const parsedVolume = Number(v.volume_m3);
         const vVolume = Number.isFinite(parsedVolume) && parsedVolume > 0 ? parsedVolume : volumeFromSpecs;
-        const parsedCny = Number(v.price_cny);
-        const vCny = Number.isFinite(parsedCny) && parsedCny >= 0 ? parsedCny : 0;
+        const vCny = existing?.price_cny || 0;
         const vTjs = resolveRetailPriceTjs(v.price_tjs, vCny, vWeight, vVolume);
-        const parsedStock = Number(v.stock);
-        const vStock = Number.isFinite(parsedStock) && parsedStock >= 0 ? Math.floor(parsedStock) : 10;
+        const vStock = existing?.stock ?? 10;
+        const quantityDiscountMin = Number(v.quantity_discount_min) || 0;
+        const quantityDiscountPercent = Number(v.quantity_discount_percent) || 0;
         const vSku = v.variant_sku || generateVariantSku(baseSku, vColor, vSize);
         const vImg = typeof v.image_url === 'string' ? persistInlineImage(v.image_url, req) : mImage;
 
-        insertVar.run(id, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg);
+        insertVar.run(
+          id, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg,
+          quantityDiscountMin, quantityDiscountPercent,
+        );
       }
     } else if (default_weight_kg !== undefined && default_weight_kg !== null) {
       // Иначе если просто передан новый вес: пересчитываем существующие варианты
@@ -4633,7 +4707,8 @@ app.get('/api/categories/:id/recommendations', (req, res) => {
       LIMIT 12
     `).all(...relatedCategoryIds) as any[];
     const getVariants = db.prepare(`
-      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url
+      SELECT id, product_id, color, size, price_tjs, stock, weight_kg, variant_sku, image_url,
+             quantity_discount_min, quantity_discount_percent
       FROM product_variants WHERE product_id = ? ORDER BY id ASC
     `);
     for (const product of recommendations) {

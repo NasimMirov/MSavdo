@@ -34,6 +34,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({
     : calculateDiscountedPriceTjs(product.max_price_tjs || 0, product.discount_percent || 0);
   const minOriginalPrice = originalPrices.length > 0 ? Math.min(...originalPrices) : (product.min_price_tjs || 0);
   const hasDiscount = (product.discount_percent || 0) > 0 && minOriginalPrice > minPrice;
+  const quantityDeals = Array.from(new Map(
+    variants
+      .filter((variant) => (variant.quantity_discount_min || 0) >= 2 && (variant.quantity_discount_percent || 0) > 0)
+      .map((variant) => [`${variant.quantity_discount_min}-${variant.quantity_discount_percent}`, variant]),
+  ).values());
+  const quantityDealLabel = quantityDeals.length === 0
+    ? ''
+    : quantityDeals.length === 1
+      ? `От ${quantityDeals[0].quantity_discount_min} шт. −${quantityDeals[0].quantity_discount_percent}%`
+      : `Скидка от ${Math.min(...quantityDeals.map((deal) => deal.quantity_discount_min || 2))} шт. на отдельные варианты`;
 
   const isStock = product.delivery_type === 'stock';
   const productSlug = product.title
@@ -124,6 +134,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             </a>
           </h3>
         </div>
+
+        {quantityDealLabel && (
+          <div className="mt-1.5 flex items-center gap-1 rounded-lg border border-emerald-100 bg-emerald-50 px-1.5 py-1 text-[9px] font-bold leading-tight text-emerald-800 sm:text-[10px]">
+            <span aria-hidden="true">▦</span>
+            <span>{quantityDealLabel}</span>
+          </div>
+        )}
 
         <div className="mt-1.5 flex items-center justify-between gap-1.5 px-0.5 py-0.5 sm:mt-2 sm:px-1 sm:py-1">
           <div className="min-w-0">

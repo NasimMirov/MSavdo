@@ -153,6 +153,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const cookie = `__Host-msavdo_admin=${header}.${payload}.${signature}`;
     const editUrl = `${base}/api/admin/products/${codeResult.product.id}`;
     const editHeaders = { ...headers, Cookie: cookie };
+    const importedVariant = db.prepare("SELECT id, price_cny, stock FROM product_variants WHERE product_id = ?").get(codeResult.product.id);
     const editableProduct = {
       title: codeResult.product.title,
       description: "Описание фонаря.",
@@ -160,7 +161,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
       status: "draft",
       delivery_type: "order",
       variants: [
-        { color: "Красный", size: "Стандарт", price_cny: 0, price_tjs: 0, stock: 0, weight_kg: 0.5 },
+        { id: importedVariant.id, color: "Красный", size: "Стандарт", price_tjs: 0, quantity_discount_min: 2, quantity_discount_percent: 20, weight_kg: 0.5 },
         { color: "Черный", size: "Стандарт", price_cny: 0, price_tjs: 0, stock: 0, weight_kg: 0.5 },
       ],
     };
@@ -169,6 +170,11 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     });
     assert.equal((await updateVariants(editableProduct.variants)).status, 200);
     assert.equal(db.prepare("SELECT COUNT(*) AS count FROM product_variants WHERE product_id = ?").get(codeResult.product.id).count, 2);
+    const preservedVariant = db.prepare("SELECT price_cny, stock, quantity_discount_min, quantity_discount_percent FROM product_variants WHERE product_id = ? AND color = ?").get(codeResult.product.id, "Красный");
+    assert.deepEqual(
+      [preservedVariant.price_cny, preservedVariant.stock, preservedVariant.quantity_discount_min, preservedVariant.quantity_discount_percent],
+      [importedVariant.price_cny, importedVariant.stock, 2, 20],
+    );
     assert.equal((await updateVariants([editableProduct.variants[1]])).status, 200);
     assert.deepEqual(
       db.prepare("SELECT color FROM product_variants WHERE product_id = ?").all(codeResult.product.id).map((variant) => variant.color),
@@ -231,6 +237,8 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     });
     assert.equal(createdManually.status, 201);
     const manualProduct = await createdManually.json();
+    assert.match(manualProduct.product.base_sku, /^[A-Z0-9]{6}$/);
+    assert.match(manualProduct.product.variants[0].variant_sku, /^[A-Z0-9]{6}-[A-Z0-9]{5}$/);
     assert.equal(db.prepare("SELECT original_link FROM products WHERE id = ?").get(manualProduct.product.id).original_link, manualSourceLink);
     const image = await sharp({ create: { width: 400, height: 300, channels: 3, background: "#ffffff" } }).png().toBuffer();
     const upload = await fetch(`${base}/api/admin/upload-image`, {
@@ -372,9 +380,32 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
       discountedQuote.items[0].original_price_tjs,
       discountedQuote.items[0].price_tjs,
     ], [200, 20, 180, 180, 100, 90]);
+    db.prepare("UPDATE product_variants SET quantity_discount_min = 2, quantity_discount_percent = 20 WHERE id = ?").run(variant.id);
+    const bulkSingle = await (await fetch(`${base}/api/order-quote`, {
+      method: 'POST', headers, body: JSON.stringify({ items: [{ product_id: result.product.id, variant_id: variant.id, quantity: 1 }] }),
+    })).json();
+    assert.equal(bulkSingle.items[0].price_tjs, 90);
+    const bulkSameVariant = await (await fetch(`${base}/api/order-quote`, {
+      method: 'POST', headers, body: JSON.stringify({ items: [{ product_id: result.product.id, variant_id: variant.id, quantity: 2 }] }),
+    })).json();
+    assert.deepEqual([bulkSameVariant.items[0].price_tjs, bulkSameVariant.subtotal], [72, 144]);
+    const siblingSku = `TEST-${crypto.randomBytes(5).toString('hex')}`;
+    const siblingVariant = db.prepare(`
+      INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3, variant_sku, quantity_discount_min, quantity_discount_percent)
+      VALUES (?, 'Другой цвет', 'Стандарт', 0, 100, 10, 0.5, 0, ?, 2, 20)
+    `).run(result.product.id, siblingSku);
+    const separateVariants = await (await fetch(`${base}/api/order-quote`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ items: [
+        { product_id: result.product.id, variant_id: variant.id, quantity: 1 },
+        { product_id: result.product.id, variant_id: Number(siblingVariant.lastInsertRowid), quantity: 1 },
+      ] }),
+    })).json();
+    assert.deepEqual(separateVariants.items.map((item) => item.price_tjs), [90, 90]);
     const publicProduct = await (await fetch(`${base}/api/products/${result.product.id}`)).json();
     assert.equal(publicProduct.product.variants[0].original_price_tjs, 100);
     assert.equal(publicProduct.product.variants[0].price_tjs, 90);
+    db.prepare('UPDATE product_variants SET quantity_discount_min = 0, quantity_discount_percent = 0 WHERE product_id = ?').run(result.product.id);
     db.prepare('UPDATE products SET discount_percent = 0 WHERE id = ?').run(result.product.id);
 
     for (let i = 0; i < 2; i += 1) {

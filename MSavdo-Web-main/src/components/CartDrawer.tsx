@@ -9,7 +9,7 @@ type Quote = PromotionResult & {
   fingerprint: string;
   original_subtotal: number;
   product_discount: number;
-  items: Array<{ variant_id: number; title: string; color: string; size: string; quantity: number; price_tjs: number; original_price_tjs: number; delivery_type: string }>;
+  items: Array<{ variant_id: number; title: string; color: string; size: string; quantity: number; price_tjs: number; original_price_tjs: number; quantity_discount_min: number; quantity_discount_percent: number; delivery_type: string }>;
 };
 
 interface CartDrawerProps {
@@ -402,6 +402,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           {currentPrice} TJS
                         </span>
                       </div>
+                      {(quoteItem?.quantity_discount_percent || 0) > 0 && (
+                        <div className="mt-1 text-[10px] font-semibold text-emerald-700">
+                          Скидка {quoteItem?.quantity_discount_percent}% применена от {quoteItem?.quantity_discount_min} шт. этого варианта
+                        </div>
+                      )}
 
                       {/* Управление количеством */}
                       <div className="flex items-center justify-between mt-2.5">
