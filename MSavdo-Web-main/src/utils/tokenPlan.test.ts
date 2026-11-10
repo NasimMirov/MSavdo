@@ -9,7 +9,7 @@ test('TokenPlan suggestions use the configured endpoint and validate each output
   const replies = ['"Фонарь для кемпинга"', 'Описание товара с подтверждёнными характеристиками.', 'Туризм'];
   const prompts: string[] = [];
   const fetcher: typeof fetch = async (input, init) => {
-    assert.equal(input, 'https://tokenplan.lat/v1/chat/completions');
+    assert.equal(input, 'https://tokenplan.one/v1/chat/completions');
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer test-key');
     assert.equal(init?.redirect, 'error');
     assert.equal(JSON.stringify(init?.body).includes('test-key'), false);
