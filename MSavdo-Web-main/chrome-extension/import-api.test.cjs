@@ -277,6 +277,11 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(thumbnailMetadata.width, 640);
     assert.equal(thumbnailMetadata.height, 480);
     assert.ok(thumbnail.length < uploadedImage.length);
+    const thumbnailToken = /\/([a-f0-9]{64})\.jpg$/.exec(publicManualProduct.main_image)?.[1];
+    assert.ok(thumbnailToken);
+    assert.ok(fs.existsSync(path.join(temp, "product-thumbnails", `${thumbnailToken}-640.jpg`)));
+    const cachedThumbnailResponse = await fetch(`${publicManualProduct.main_image}?width=640`);
+    assert.deepEqual(Buffer.from(await cachedThumbnailResponse.arrayBuffer()), thumbnail);
     const invalidSourceLink = await fetch(`${base}/api/admin/products/${manualProduct.product.id}`, {
       method: "PUT", headers: { ...headers, Cookie: cookie },
       body: JSON.stringify({

@@ -143,6 +143,8 @@ const db = new DatabaseSync(dbPath);
 const uploadsDir = path.join(path.dirname(dbPath), 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir, { maxAge: '365d', immutable: true }));
+const productThumbnailCacheDir = path.join(path.dirname(dbPath), 'product-thumbnails');
+fs.mkdirSync(productThumbnailCacheDir, { recursive: true });
 const watermarkImagePath = path.join(__dirname, 'public', 'msavdo-watermark.png');
 const watermarkImage = fs.readFileSync(watermarkImagePath);
 
@@ -5719,14 +5721,31 @@ app.get('/product-image/:productId/:token.jpg', async (req, res) => {
     ).find((image) => getProductImageToken(image) === token || getProductImageToken(image, true) === token);
     if (!source) return res.status(404).type('text/plain').send('Фото не найдено');
 
-    const image = await createWatermarkedImage(source, token);
     const thumbnailWidth = req.query.width === '640' ? 640 : undefined;
-    const responseImage = thumbnailWidth
-      ? await sharp(image)
-        .resize({ width: thumbnailWidth, height: thumbnailWidth, fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality: 78, mozjpeg: true })
-        .toBuffer()
-      : image;
+    let responseImage: Buffer;
+    if (thumbnailWidth) {
+      const thumbnailPath = path.join(productThumbnailCacheDir, `${token}-${thumbnailWidth}.jpg`);
+      let cachedThumbnail: Buffer | undefined;
+      try {
+        const { mtimeMs } = await fs.promises.stat(thumbnailPath);
+        if (Date.now() - mtimeMs < 24 * 60 * 60 * 1000) cachedThumbnail = await fs.promises.readFile(thumbnailPath);
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      }
+
+      if (cachedThumbnail) {
+        responseImage = cachedThumbnail;
+      } else {
+        const image = await createWatermarkedImage(source, token);
+        responseImage = await sharp(image)
+          .resize({ width: thumbnailWidth, height: thumbnailWidth, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 78, mozjpeg: true })
+          .toBuffer();
+        await fs.promises.writeFile(thumbnailPath, responseImage);
+      }
+    } else {
+      responseImage = await createWatermarkedImage(source, token);
+    }
     return res
       .type('image/jpeg')
       .set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
