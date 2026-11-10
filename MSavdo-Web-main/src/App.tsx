@@ -6,11 +6,7 @@
 import React, { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Product, Category, CartItem } from './types';
 import { ProductCard } from './components/ProductCard';
-import { ProductDetailModal } from './components/ProductDetailModal';
-import { CartDrawer } from './components/CartDrawer';
-import { RulesView } from './components/RulesView';
 import { ToastContainer, ToastItem } from './components/Toast';
-import { SettingsModal } from './components/SettingsModal';
 import { apiFetch } from './api';
 import { useI18n } from './i18n';
 import { 
@@ -32,6 +28,10 @@ import {
 
 const BRAND_LOGO_URL = '/msavdo-logo.jpg';
 const AdminPanel = lazy(() => import('./components/AdminPanel').then((module) => ({ default: module.AdminPanel })));
+const ProductDetailModal = lazy(() => import('./components/ProductDetailModal').then((module) => ({ default: module.ProductDetailModal })));
+const CartDrawer = lazy(() => import('./components/CartDrawer').then((module) => ({ default: module.CartDrawer })));
+const RulesView = lazy(() => import('./components/RulesView').then((module) => ({ default: module.RulesView })));
+const SettingsModal = lazy(() => import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal })));
 
 function getCategoryIllustration(name: string): string {
   const category = name.toLocaleLowerCase('ru');
@@ -118,12 +118,29 @@ export default function App() {
   const catalogRequestId = useRef(0);
   useEffect(() => {
     const controller = new AbortController();
-    apiFetch('/api/promotions', { signal: controller.signal }).then(async (response) => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      setPublicOffers(data.promotions);
-    }).catch((error) => { if (!controller.signal.aborted) console.error('[Offers]', error); });
-    return () => controller.abort();
+    let active = true;
+    const timer = window.setTimeout(() => {
+      apiFetch('/api/promotions', { signal: controller.signal }).then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (active) setPublicOffers(data.promotions);
+      }).catch((error) => { if (!controller.signal.aborted) console.error('[Offers]', error); });
+    }, 18000);
+    const loadOffersAfterImage = () => {
+      window.clearTimeout(timer);
+      apiFetch('/api/promotions', { signal: controller.signal }).then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (active) setPublicOffers(data.promotions);
+      }).catch((error) => { if (!controller.signal.aborted) console.error('[Offers]', error); });
+    };
+    window.addEventListener('msavdo:primary-image-ready', loadOffersAfterImage, { once: true });
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      window.removeEventListener('msavdo:primary-image-ready', loadOffersAfterImage);
+      controller.abort();
+    };
   }, []);
   const isProductModalOpen = selectedProduct !== null;
   const activeBrowseTime = useRef(0);
@@ -254,6 +271,24 @@ export default function App() {
     return res.json();
   };
 
+  const loadSecondaryCatalogData = async (signal?: AbortSignal) => {
+    const [categoryResult, settingsResult] = await Promise.allSettled([
+      safeFetchJson('/api/categories', signal ? { signal } : undefined),
+      safeFetchJson('/api/settings', signal ? { signal } : undefined),
+    ]);
+    if (signal?.aborted) return;
+    if (categoryResult.status === 'fulfilled') {
+      setCategoriesTree(categoryResult.value?.tree || categoryResult.value?.categories || []);
+    } else {
+      console.warn('[M.Savdo] Категории временно недоступны:', categoryResult.reason);
+    }
+    if (settingsResult.status === 'fulfilled') {
+      if (settingsResult.value?.whatsapp_phone) setWhatsappPhone(settingsResult.value.whatsapp_phone);
+    } else {
+      console.warn('[M.Savdo] Настройки временно недоступны:', settingsResult.reason);
+    }
+  };
+
   const fetchProducts = async (append = false) => {
     const requestId = ++catalogRequestId.current;
     if (append) setIsLoadingMore(true);
@@ -271,6 +306,9 @@ export default function App() {
       const data = await safeFetchJson(`/api/products?${params.toString()}`);
       if (requestId !== catalogRequestId.current) return;
       const page = Array.isArray(data?.products) ? data.products as Product[] : [];
+      if (!page.slice(0, 2).some((product) => product.main_image)) {
+        window.dispatchEvent(new Event('msavdo:primary-image-ready'));
+      }
       setProducts((current) => append
         ? [...current, ...page.filter((product) => !current.some((item) => item.id === product.id))]
         : page);
@@ -297,30 +335,17 @@ export default function App() {
   };
 
   // Загрузка каталога с глобальным перехватом ошибок и авто-повтором
-  const fetchCatalog = async (retryCount = 0) => {
+  const fetchCatalog = async (retryCount = 0, loadSecondaryData = true) => {
     try {
       await fetchProducts();
 
-      try {
-        const dataCategories = await safeFetchJson('/api/categories');
-        setCategoriesTree(dataCategories?.tree || dataCategories?.categories || []);
-      } catch (catErr) {
-        console.warn('[M.Savdo] Категории временно недоступны:', catErr);
-      }
-
-      // 3. Контакты
-      try {
-        const dataSettings = await safeFetchJson('/api/settings');
-        if (dataSettings?.whatsapp_phone) {
-          setWhatsappPhone(dataSettings.whatsapp_phone);
-        }
-      } catch (setErr) {
-        console.warn('[M.Savdo] Настройки временно недоступны:', setErr);
+      if (loadSecondaryData) {
+        await loadSecondaryCatalogData();
       }
     } catch (err: any) {
       console.warn(`[M.Savdo] Попытка ${retryCount + 1}/3 загрузки каталога:`, err?.message);
       if (retryCount < 2) {
-        setTimeout(() => fetchCatalog(retryCount + 1), 1500);
+        setTimeout(() => fetchCatalog(retryCount + 1, loadSecondaryData), 1500);
         return;
       }
       if (products.length === 0) {
@@ -336,13 +361,28 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetchCatalog();
+    void fetchCatalog(0, false);
 
     // Проверка URL параметра для скрытого служебного входа (?admin=true)
     const params = new URLSearchParams(window.location.search);
     if (params.get('admin') === 'true' || params.get('manage') === '1') {
       setCurrentView('admin');
     }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => void loadSecondaryCatalogData(controller.signal), 18000);
+    const loadAfterPrimaryImage = () => {
+      window.clearTimeout(timer);
+      void loadSecondaryCatalogData(controller.signal);
+    };
+    window.addEventListener('msavdo:primary-image-ready', loadAfterPrimaryImage, { once: true });
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('msavdo:primary-image-ready', loadAfterPrimaryImage);
+      controller.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -393,7 +433,24 @@ export default function App() {
         keepalive: true,
       }).catch((error) => console.error('[Site Visit Tracking Error]', error));
     };
-    void sendVisit();
+    let visitSent = false;
+    const sendVisitOnce = () => {
+      if (visitSent) return;
+      visitSent = true;
+      void sendVisit();
+    };
+    const timer = window.setTimeout(sendVisitOnce, 18000);
+    const sendVisitAfterPrimaryImage = () => {
+      window.clearTimeout(timer);
+      sendVisitOnce();
+    };
+    window.addEventListener('msavdo:primary-image-ready', sendVisitAfterPrimaryImage, { once: true });
+    window.addEventListener('pagehide', sendVisitOnce, { once: true });
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('msavdo:primary-image-ready', sendVisitAfterPrimaryImage);
+      window.removeEventListener('pagehide', sendVisitOnce);
+    };
   }, []);
 
   const initialCatalogFilters = useRef(true);
@@ -733,7 +790,11 @@ export default function App() {
               </div>
         </div>
       </header>
-      <SettingsModal isOpen={isSettingsOpen} onClose={closeSettings} />
+      {isSettingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal isOpen onClose={closeSettings} />
+        </Suspense>
+      )}
 
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}
@@ -742,10 +803,12 @@ export default function App() {
         
         {/* ЭКРАН 1: ПРАВИЛА СЕРВИСА */}
         {currentView === 'rules' && (
-          <RulesView
-            onBack={() => setCurrentView('catalog')}
-            onOpenCart={() => setIsCartOpen(true)}
-          />
+          <Suspense fallback={<div className="p-6 text-center text-sm text-slate-500">Загрузка…</div>}>
+            <RulesView
+              onBack={() => setCurrentView('catalog')}
+              onOpenCart={() => setIsCartOpen(true)}
+            />
+          </Suspense>
         )}
 
         {/* ЭКРАН 2: АДМИН-ПАНЕЛЬ (ТОЛЬКО ЗДЕСЬ ИМПОРТ И УПРАВЛЕНИЕ) */}
@@ -769,7 +832,10 @@ export default function App() {
             <section aria-label={t('allCategories')} className="space-y-1">
               <button
                 type="button"
-                onClick={() => setIsCategoriesOpen((open) => !open)}
+                onClick={() => {
+                  window.dispatchEvent(new Event('msavdo:primary-image-ready'));
+                  setIsCategoriesOpen((open) => !open);
+                }}
                 aria-expanded={isCategoriesOpen}
                 className="flex h-7 max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-bold text-slate-800 transition-colors hover:border-amber-400"
               >
@@ -914,7 +980,7 @@ export default function App() {
             <section>
               {isLoading ? (
                 <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-6">
-                  {[...Array(6)].map((_, i) => (
+                  {[...Array(2)].map((_, i) => (
                     <div key={i} className="bg-white rounded-2xl p-3 border border-slate-200 animate-pulse space-y-3">
                       <div className="aspect-square bg-slate-200 rounded-xl" />
                       <div className="h-4 bg-slate-200 rounded w-3/4" />
@@ -943,10 +1009,12 @@ export default function App() {
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
-                  {filteredProducts.map((product) => (
+                  {filteredProducts.map((product, index) => (
                     <ProductCard
                       key={product.id}
                       product={product}
+                      isPriority={index < 2}
+                      onPriorityImageReady={() => window.dispatchEvent(new Event('msavdo:primary-image-ready'))}
                       onSelect={(p) => handleOpenProduct(p)}
                     />
                   ))}
@@ -1096,34 +1164,42 @@ export default function App() {
       {/* ======================================================== */}
       
       {/* Карточка товара */}
-      <ProductDetailModal
-        product={selectedProduct}
-        onClose={() => setSelectedProduct(null)}
-        onAddToCart={handleAddToCart}
-        onOrderNow={(item) => {
-          handleAddToCart(item);
-          setSelectedProduct(null);
-          setIsCartOpen(true);
-        }}
-        onSelectRelatedProduct={handleOpenProduct}
-      />
+      {selectedProduct && (
+        <Suspense fallback={null}>
+          <ProductDetailModal
+            product={selectedProduct}
+            onClose={() => setSelectedProduct(null)}
+            onAddToCart={handleAddToCart}
+            onOrderNow={(item) => {
+              handleAddToCart(item);
+              setSelectedProduct(null);
+              setIsCartOpen(true);
+            }}
+            onSelectRelatedProduct={handleOpenProduct}
+          />
+        </Suspense>
+      )}
 
       {/* Корзина */}
-      <CartDrawer
-        isOpen={isCartOpen}
-        onClose={() => setIsCartOpen(false)}
-        items={cart}
-        products={products}
-        onUpdateQuantity={handleUpdateQuantity}
-        onAddVariant={handleAddCartVariant}
-        onRemoveItem={handleRemoveFromCart}
-        onClearCart={handleClearCart}
-        onOpenRules={() => {
-          setIsCartOpen(false);
-          setCurrentView('rules');
-        }}
-        whatsappPhone={whatsappPhone}
-      />
+      {isCartOpen && (
+        <Suspense fallback={null}>
+          <CartDrawer
+            isOpen
+            onClose={() => setIsCartOpen(false)}
+            items={cart}
+            products={products}
+            onUpdateQuantity={handleUpdateQuantity}
+            onAddVariant={handleAddCartVariant}
+            onRemoveItem={handleRemoveFromCart}
+            onClearCart={handleClearCart}
+            onOpenRules={() => {
+              setIsCartOpen(false);
+              setCurrentView('rules');
+            }}
+            whatsappPhone={whatsappPhone}
+          />
+        </Suspense>
+      )}
 
       {/* ======================================================== */}
       {/* 4. МОБИЛЬНАЯ НИЖНЯЯ ПАНЕЛЬ НАВИГАЦИИ (ФИКСИРОВАННАЯ) */}
@@ -1162,6 +1238,7 @@ export default function App() {
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-black text-white border-t border-zinc-800 px-4 py-2 flex items-center justify-around shadow-2xl">
         <button
           onClick={() => {
+            window.dispatchEvent(new Event('msavdo:primary-image-ready'));
             setCurrentView('catalog');
             setSelectedCategoryId(null);
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1174,6 +1251,7 @@ export default function App() {
 
         <button
           onClick={() => {
+            window.dispatchEvent(new Event('msavdo:primary-image-ready'));
             setCurrentView('catalog');
             setBrowsingCategoryId(null);
             setIsCategoryBrowserOpen(true);

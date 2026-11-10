@@ -26,6 +26,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content="https://msavdo.shop/og-banner.jpg" />
     <link rel="canonical" href="https://msavdo.shop/" />
+    <link rel="preconnect" href="https://api.msavdo.shop" crossorigin="use-credentials" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -54,9 +55,29 @@
         visibility: hidden !important;
       }
     </style>
-    <!-- Yandex Autoplacement 20317225 -->
-    <script src="https://yandex.ru/ads/system/context.js" async></script>
-    <script data-page-id="20317225" src="https://yandex.ru/ads/system/ap-loader.js" async></script>
+    <script>
+      (() => {
+        let scheduled = false;
+        const loadAds = () => {
+          if (scheduled) return;
+          scheduled = true;
+          window.setTimeout(() => {
+            const context = document.createElement('script');
+            context.src = 'https://yandex.ru/ads/system/context.js';
+            context.async = true;
+            document.head.appendChild(context);
+
+            const placement = document.createElement('script');
+            placement.src = 'https://yandex.ru/ads/system/ap-loader.js';
+            placement.dataset.pageId = '20317225';
+            placement.async = true;
+            document.head.appendChild(placement);
+          }, 3000);
+        };
+        window.addEventListener('msavdo:primary-image-ready', loadAds, { once: true });
+        window.setTimeout(loadAds, 18000);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

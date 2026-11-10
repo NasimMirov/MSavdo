@@ -261,6 +261,10 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     });
     assert.equal(updateManual.status, 200);
     assert.equal(db.prepare("SELECT original_link FROM products WHERE id = ?").get(manualProduct.product.id).original_link, updatedSourceLink);
+    const catalogWithImagePreload = await fetch(`${base}/api/products?limit=24&offset=0&sort=popular`);
+    assert.equal(catalogWithImagePreload.status, 200);
+    assert.match(catalogWithImagePreload.headers.get('link') || '', /rel=preload; as=image; fetchpriority=high/);
+    assert.match(catalogWithImagePreload.headers.get('link') || '', /product-image/);
     const publicManualProduct = (await (await fetch(`${base}/api/products/${manualProduct.product.id}`)).json()).product;
     const publicImageResponse = await fetch(publicManualProduct.main_image);
     assert.equal(publicImageResponse.status, 200);

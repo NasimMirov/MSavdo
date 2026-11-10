@@ -7,11 +7,15 @@ import { calculateDiscountedPriceTjs } from '../utils/pricing';
 interface ProductCardProps {
   product: Product;
   onSelect: (product: Product) => void;
+  isPriority?: boolean;
+  onPriorityImageReady?: () => void;
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({
   product,
   onSelect,
+  isPriority = false,
+  onPriorityImageReady,
 }) => {
   const { t } = useI18n();
   const [imageLoaded, setImageLoaded] = useState(false);
@@ -76,12 +80,21 @@ export const ProductCard: React.FC<ProductCardProps> = ({
               src={product.main_image}
               alt={product.title}
               referrerPolicy="no-referrer"
-              onLoad={() => setImageLoaded(true)}
-              onError={() => setImageError(true)}
+              onLoad={() => {
+                setImageLoaded(true);
+                if (isPriority) onPriorityImageReady?.();
+              }}
+              onError={() => {
+                setImageError(true);
+                if (isPriority) onPriorityImageReady?.();
+              }}
+              width={640}
+              height={640}
+              fetchPriority={isPriority ? 'high' : 'auto'}
               className={`block w-full h-full object-contain group-hover:scale-105 transition-transform duration-500 ease-out ${
                 imageLoaded ? 'opacity-100' : 'opacity-0'
               }`}
-              loading="lazy"
+              loading={isPriority ? 'eager' : 'lazy'}
             />
           </a>
         ) : (

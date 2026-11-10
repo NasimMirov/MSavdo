@@ -2526,6 +2526,16 @@ app.get('/api/products', (req, res) => {
       });
     }
 
+    const priorityImageLinks = enriched.slice(0, 2).flatMap((product) => {
+      if (!product.main_image) return [];
+      const imageUrl = new URL(product.main_image, publicMediaBaseUrl);
+      if (imageUrl.protocol !== 'https:' && imageUrl.protocol !== 'http:') return [];
+      return [`<${imageUrl.href}>; rel=preload; as=image; fetchpriority=high; referrerpolicy=no-referrer`];
+    });
+    if (priorityImageLinks.length > 0) {
+      res.setHeader('Link', priorityImageLinks.join(', '));
+    }
+
     return res.json({
       products: enriched,
       total,
