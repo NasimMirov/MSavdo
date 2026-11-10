@@ -209,6 +209,12 @@ db.exec(`
     FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS deleted_products (
+    deletion_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL UNIQUE REFERENCES products(id) ON DELETE CASCADE,
+    deleted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS admin_users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
@@ -943,7 +949,7 @@ try {
 
 // Очистка существующих товаров от запрещенных слов и фраз о контроле производства
 try {
-  const existingProds = db.prepare('SELECT id, title, description FROM products').all() as Array<{ id: number; title: string; description: string }>;
+  const existingProds = db.prepare("SELECT id, title, description FROM products WHERE COALESCE(status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string }>;
   const updateProd = db.prepare('UPDATE products SET title = ?, description = ? WHERE id = ?');
   for (const p of existingProds) {
     const cleanT = cleanBannedWordsAndPhrases(p.title || '');
@@ -3474,6 +3480,7 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
              COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
+      WHERE COALESCE(p.status, '') != 'deleted'
       ORDER BY p.id DESC
     `).all() as any[];
 
@@ -3509,7 +3516,13 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
       });
     }
 
-    return res.json({ products: enriched });
+    const deletedProducts = db.prepare(`
+      SELECT p.id, p.title, p.base_sku, d.deleted_at
+      FROM deleted_products d JOIN products p ON p.id = d.product_id
+      WHERE p.status = 'deleted'
+      ORDER BY d.deletion_id DESC LIMIT 10
+    `).all();
+    return res.json({ products: enriched, deleted_products: deletedProducts });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -3863,6 +3876,9 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Для скидки за количество укажите от 2 до 10 000 штук и скидку от 1 до 90%. Чтобы отключить скидку, обнулите оба поля.' });
     }
     const existingStatus = db.prepare('SELECT status FROM products WHERE id = ?').get(id) as { status: string } | undefined;
+    if (existingStatus?.status === 'deleted') {
+      return res.status(409).json({ error: 'Сначала восстановите удалённый товар.' });
+    }
     if (existingStatus?.status === 'draft' && status === 'active') {
       const prices: unknown[] = Array.isArray(variants)
         ? variants.map((variant: any) => variant.price_tjs)
@@ -3927,12 +3943,13 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     ).volumeM3;
 
     // Обновляем карточку товара
-    db.prepare(`
+    const updatedProduct = db.prepare(`
       UPDATE products
       SET title = ?, description = ?, original_link = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, video_urls = ?, youtube_url = ?, video_first = ?,
           specifications = CASE WHEN ? IS NOT NULL THEN ? ELSE specifications END
-      WHERE id = ?
+      WHERE id = ? AND COALESCE(status, '') != 'deleted'
     `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs, id);
+    if (updatedProduct.changes === 0) return res.status(409).json({ error: 'Товар удалён или не найден. Обновите список товаров.' });
 
     // Если передан полный обновленный массив вариантов: синхронизируем матрицу
     if (Array.isArray(variants)) {
@@ -4006,7 +4023,7 @@ app.put('/api/admin/products/:id/discount', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Укажите скидку целым числом от 0 до 90 процентов.' });
   }
   try {
-    const result = db.prepare('UPDATE products SET discount_percent = ? WHERE id = ?')
+    const result = db.prepare("UPDATE products SET discount_percent = ? WHERE id = ? AND COALESCE(status, '') != 'deleted'")
       .run(discountPercent, productId);
     if (!result.changes) return res.status(404).json({ error: 'Товар не найден.' });
     return res.json({ success: true, discount_percent: discountPercent });
@@ -4028,7 +4045,7 @@ app.put('/api/admin/products/:id/category', requireAdmin, (req, res) => {
       return res.status(400).json({ error: 'Выберите действующую подкатегорию каталога' });
     }
 
-    const result = db.prepare('UPDATE products SET category_id = ? WHERE id = ?').run(category.id, productId);
+    const result = db.prepare("UPDATE products SET category_id = ? WHERE id = ? AND COALESCE(status, '') != 'deleted'").run(category.id, productId);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Товар не найден' });
     }
@@ -4051,7 +4068,11 @@ app.put('/api/admin/variants/:id', requireAdmin, (req, res) => {
 
     const cnyNum = parseFloat(price_cny) || 0;
     const weightNum = parseFloat(weight_kg) || 0.5;
-    const currentVariant = db.prepare('SELECT volume_m3 FROM product_variants WHERE id = ?').get(id) as { volume_m3: number } | undefined;
+    const currentVariant = db.prepare(`
+      SELECT v.volume_m3 FROM product_variants v JOIN products p ON p.id = v.product_id
+      WHERE v.id = ? AND COALESCE(p.status, '') != 'deleted'
+    `).get(id) as { volume_m3: number } | undefined;
+    if (!currentVariant) return res.status(404).json({ error: 'Вариант не найден или товар удалён' });
     const parsedVolume = Number(volume_m3);
     const volumeNum = Number.isFinite(parsedVolume) && parsedVolume > 0
       ? parsedVolume
@@ -4072,14 +4093,55 @@ app.put('/api/admin/variants/:id', requireAdmin, (req, res) => {
   }
 });
 
-// 7. УДАЛЕНИЕ ТОВАРА
+// 7. УДАЛЕНИЕ И ВОССТАНОВЛЕНИЕ ТОВАРА
 app.delete('/api/admin/products/:id', requireAdmin, (req, res) => {
   try {
     const id = Number(req.params.id);
-    db.prepare('DELETE FROM products WHERE id = ?').run(id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Некорректный ID товара' });
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = db.prepare("UPDATE products SET status = 'deleted' WHERE id = ? AND COALESCE(status, '') != 'deleted' RETURNING id").get(id);
+      if (!result) {
+        db.exec('ROLLBACK');
+        return res.status(404).json({ error: 'Товар не найден или уже удалён' });
+      }
+      db.prepare('INSERT INTO deleted_products (product_id) VALUES (?)').run(id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
     return res.json({ success: true });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('[Delete Product Error]', error);
+    return res.status(500).json({ error: 'Не удалось удалить товар' });
+  }
+});
+
+app.post('/api/admin/products/:id/restore', requireAdmin, (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Некорректный ID товара' });
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = db.prepare(`
+        UPDATE products SET status = 'draft'
+        WHERE id = ? AND status = 'deleted' AND EXISTS (SELECT 1 FROM deleted_products WHERE product_id = ?)
+      `).run(id, id);
+      if (result.changes === 0) {
+        db.exec('ROLLBACK');
+        return res.status(404).json({ error: 'Удалённый товар не найден' });
+      }
+      db.prepare('DELETE FROM deleted_products WHERE product_id = ?').run(id);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('[Restore Product Error]', error);
+    return res.status(500).json({ error: 'Не удалось восстановить товар' });
   }
 });
 

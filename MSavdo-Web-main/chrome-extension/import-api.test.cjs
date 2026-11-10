@@ -120,6 +120,44 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(importedDraft.status, "draft");
     assert.equal(importedDraft.base_sku, result.product.base_sku);
     assert.equal(importedDraft.variants.length, 600);
+    const adminCookie = { Cookie: `__Host-msavdo_admin=${header}.${payload}.${signature}` };
+    const deleteUrl = `${base}/api/admin/products/${result.product.id}`;
+    assert.equal((await fetch(deleteUrl, { method: "DELETE" })).status, 401);
+    assert.equal((await fetch(deleteUrl, { method: "DELETE", headers: adminCookie })).status, 200);
+    assert.equal((await fetch(deleteUrl, { method: "DELETE", headers: adminCookie })).status, 404);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM product_variants WHERE product_id = ?").get(result.product.id).count, 600);
+    let afterDelete = await (await fetch(`${base}/api/admin/products`, { headers: adminCookie })).json();
+    assert.equal(afterDelete.products.some((product) => product.id === result.product.id), false);
+    assert.equal(afterDelete.deleted_products[0].id, result.product.id);
+    assert.equal((await fetch(`${deleteUrl}/restore`, { method: "POST" })).status, 401);
+    assert.equal((await fetch(`${deleteUrl}/restore`, { method: "POST", headers: adminCookie })).status, 200);
+    assert.equal((await fetch(`${deleteUrl}/restore`, { method: "POST", headers: adminCookie })).status, 404);
+    afterDelete = await (await fetch(`${base}/api/admin/products`, { headers: adminCookie })).json();
+    assert.equal(afterDelete.products.find((product) => product.id === result.product.id).variants.length, 600);
+    assert.equal(afterDelete.products.find((product) => product.id === result.product.id).status, "draft");
+    const insertDeletedTestProduct = db.prepare("INSERT INTO products (title, base_sku, status) VALUES (?, ?, 'draft')");
+    for (let i = 0; i < 11; i++) {
+      const id = Number(insertDeletedTestProduct.run(`Deleted test ${i}`, `TRASH-TEST-${i}`).lastInsertRowid);
+      assert.equal((await fetch(`${base}/api/admin/products/${id}`, { method: "DELETE", headers: adminCookie })).status, 200);
+    }
+    afterDelete = await (await fetch(`${base}/api/admin/products`, { headers: adminCookie })).json();
+    assert.equal(afterDelete.deleted_products.length, 10);
+    assert.equal(afterDelete.deleted_products[0].title, "Deleted test 10");
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM deleted_products").get().count, 11);
+    const activeId = Number(db.prepare("INSERT INTO products (title, base_sku, status) VALUES ('Active recovery test', 'TRASH-ACTIVE', 'active')").run().lastInsertRowid);
+    const activeVariantId = Number(db.prepare("INSERT INTO product_variants (product_id, color, size, price_cny, price_tjs, variant_sku, quantity_discount_min, quantity_discount_percent) VALUES (?, 'Black', 'Standard', 0, 100, 'TRASH-ACTIVE-1', 2, 7)").run(activeId).lastInsertRowid);
+    const activeUrl = `${base}/api/admin/products/${activeId}`;
+    assert.equal((await fetch(`${base}/api/products/${activeId}`)).status, 200);
+    assert.equal((await fetch(activeUrl, { method: "DELETE", headers: adminCookie })).status, 200);
+    assert.equal((await fetch(`${base}/api/products/${activeId}`)).status, 404);
+    const deletedQuote = await fetch(`${base}/api/order-quote`, {
+      method: "POST", headers, body: JSON.stringify({ items: [{ product_id: activeId, variant_id: activeVariantId, quantity: 2 }] }),
+    });
+    assert.notEqual(deletedQuote.status, 200);
+    assert.equal((await fetch(`${activeUrl}/restore`, { method: "POST", headers: adminCookie })).status, 200);
+    assert.equal((await fetch(`${base}/api/products/${activeId}`)).status, 404);
+    const restoredVariant = db.prepare("SELECT id, price_tjs, quantity_discount_min, quantity_discount_percent FROM product_variants WHERE product_id = ?").get(activeId);
+    assert.deepEqual([restoredVariant.id, restoredVariant.price_tjs, restoredVariant.quantity_discount_min, restoredVariant.quantity_discount_percent], [activeVariantId, 100, 2, 7]);
     const sourceTitle = "精密螺旋千分测量仪";
     const html = `<!--${"x".repeat(51000)}-->window.context = ${JSON.stringify({
       offerDetail: {

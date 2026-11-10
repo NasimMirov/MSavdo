@@ -116,6 +116,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Состояния админки
   const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'promotions' | 'discounts' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
+  const [deletedProducts, setDeletedProducts] = useState<Array<{ id: number; title: string; base_sku: string; deleted_at: string }>>([]);
+  const [canRecoverDeletedProducts, setCanRecoverDeletedProducts] = useState(false);
+  const [restoringProductId, setRestoringProductId] = useState<number | null>(null);
   const [adminProductsError, setAdminProductsError] = useState('');
   const productsRequestRef = useRef(0);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -488,6 +491,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (!Array.isArray(prodData.products)) throw new Error('Сервер не вернул список товаров.');
       if (requestId !== productsRequestRef.current) return false;
       setAdminProducts(prodData.products);
+      setDeletedProducts(Array.isArray(prodData.deleted_products) ? prodData.deleted_products : []);
+      setCanRecoverDeletedProducts(Array.isArray(prodData.deleted_products));
       setAdminProductsError('');
       return true;
     } catch (error) {
@@ -1522,18 +1527,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Удаление товара
   const handleDeleteProduct = async (id: number) => {
-    if (!isAuthenticated || !confirm('Удалить этот товар, все его характеристики и модификации из базы?')) return;
+    if (!isAuthenticated) return;
+    if (!canRecoverDeletedProducts) {
+      showNotice('Удаление временно недоступно: сервер ещё не поддерживает восстановление товаров. Обновите данные позже.');
+      return;
+    }
+    if (!confirm('Удалить товар из каталога? Его можно будет восстановить из списка последних удалённых товаров.')) return;
     try {
       const res = await adminFetch(`/api/admin/products/${id}`, {
         method: 'DELETE',
       });
-      if (res.ok) {
-        loadAdminData();
-        onRefreshCatalog();
-        showNotice('Товар удален из каталога');
-      }
+      if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      await loadAdminData();
+      onRefreshCatalog();
+      showNotice('Товар удалён. Его можно восстановить в разделе «Недавно удалённые».');
     } catch (err) {
       console.error('Ошибка удаления:', err);
+      showNotice(err instanceof Error ? err.message : 'Не удалось удалить товар');
+    }
+  };
+
+  const handleRestoreProduct = async (id: number) => {
+    setRestoringProductId(id);
+    try {
+      const response = await adminFetch(`/api/admin/products/${id}/restore`, { method: 'POST' });
+      if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+      await loadAdminData();
+      onRefreshCatalog();
+      showNotice('Товар восстановлен как черновик. Проверьте его и опубликуйте.');
+    } catch (error) {
+      console.error('Ошибка восстановления товара:', error);
+      showNotice(error instanceof Error ? error.message : 'Не удалось восстановить товар');
+    } finally {
+      setRestoringProductId(null);
     }
   };
 
@@ -1882,6 +1908,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-xs font-semibold text-red-700">
               {adminProductsError} Показанный список может быть устаревшим. Нажмите «Обновить данные».
             </div>
+          )}
+          {deletedProducts.length > 0 && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
+              <h2 className="text-sm font-bold text-slate-900">Недавно удалённые товары</h2>
+              <p className="mt-1 text-xs text-slate-500">Последние 10 удалений. Товар восстанавливается как черновик вместе с вариантами и ценами.</p>
+              <ul className="mt-3 divide-y divide-slate-100">
+                {deletedProducts.map((product) => (
+                  <li key={product.id} className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-slate-900">{product.title}</div>
+                      <div className="text-[10px] text-slate-500">{product.base_sku} · {product.deleted_at} UTC</div>
+                    </div>
+                    <button type="button" disabled={restoringProductId !== null}
+                      onClick={() => void handleRestoreProduct(product.id)}
+                      className="shrink-0 rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-700 disabled:opacity-50">
+                      {restoringProductId === product.id ? 'Восстановление…' : 'Восстановить'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
           
           {/* Сводные KPI метрики каталога */}

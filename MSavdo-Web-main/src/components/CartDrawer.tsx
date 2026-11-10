@@ -302,11 +302,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
-        <div className="w-screen max-w-md bg-white border-l border-slate-200 shadow-2xl flex flex-col justify-between">
+      <div className="absolute inset-y-0 right-0 max-w-full flex pl-3 sm:pl-10">
+        <div className="flex h-full w-screen max-w-md flex-col border-l border-slate-200 bg-white shadow-2xl">
           
           {/* Заголовок корзины */}
-          <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+          <div className="shrink-0 p-4 border-b border-slate-200 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ShoppingBasket className="w-5 h-5 text-emerald-700" />
               <h2 className="text-lg font-bold text-slate-900 font-heading">
@@ -323,8 +323,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </button>
           </div>
 
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           {/* Список товаров */}
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="p-4 space-y-4">
             {items.length === 0 ? (
               <div className="py-20 text-center text-slate-400 space-y-3">
                 <ShoppingBasket className="w-12 h-12 mx-auto text-slate-200" />
@@ -348,13 +349,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       src={item.image || 'https://placehold.co/100x100?text=M.Savdo'}
                       alt={item.title}
                       referrerPolicy="no-referrer"
-                      className="w-16 h-18 rounded-xl object-cover border border-slate-200 shrink-0"
+                      className="w-16 h-16 rounded-xl object-contain bg-white border border-slate-200 shrink-0"
                     />
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] font-mono font-bold text-slate-400">
                         {item.variant_sku}
                       </div>
-                      <h4 className="text-xs font-bold text-slate-900 line-clamp-1 leading-snug">
+                      <h4 className="text-xs font-bold text-slate-900 line-clamp-2 leading-snug">
                         {item.title}
                       </h4>
 
@@ -453,7 +454,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
           {/* Нижний блок с подтверждением и кнопкой WhatsApp */}
           {items.length > 0 && (
-            <div className="p-5 border-t border-slate-200 bg-slate-50/80 space-y-4">
+            <div className="cart-summary p-4 border-t border-slate-200 bg-slate-50 space-y-3">
               {offers.length > 0 && <div className="rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900">
                 <strong>{language === 'ru' ? 'Предложения' : language === 'tg' ? 'Пешниҳодҳо' : 'Offers'}</strong>
                 {offers.map((offer) => <div key={offer.id}>{offer.title}</div>)}
@@ -479,16 +480,16 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               </div>
 
               {/* Авторитетный инфо-блок срока доставки */}
-              <div className="p-3 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-center gap-2.5 text-xs text-slate-800 shadow-xs">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2.5 text-xs text-slate-800">
                 <Truck className="w-4 h-4 text-amber-600 shrink-0" />
                 <span>
-                  <strong>🚚 {copy.deliveryTime}</strong>{' '}
+                  <strong>{copy.deliveryTime}</strong>{' '}
                   {hasPreOrderItems ? copy.preOrderTime : copy.stockTime}
                 </span>
               </div>
 
               {/* ОБЯЗАТЕЛЬНЫЙ ЧЕКБОКС: БЕЗ НЕГО ЗАКАЗ ЗАБЛОКИРОВАН */}
-              <div className="p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl space-y-2">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
                 <label className="flex items-start gap-2.5 cursor-pointer">
                   <input
                     type="checkbox"
@@ -543,6 +544,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
           )}
 
+          </div>
         </div>
       </div>
 

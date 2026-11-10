@@ -1,6 +1,6 @@
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, options) => {
-  if (input !== "https://tokenplan.lat/v1/chat/completions") return originalFetch(input, options);
+  if (input !== "https://tokenplan.one/v1/chat/completions") return originalFetch(input, options);
   if (options.headers.Authorization !== "Bearer valid-test-key") {
     return Response.json({ error: "credentials rejected" }, { status: 401 });
   }

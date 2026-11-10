@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Product } from '../types';
-import { Eye, Truck, Clock } from 'lucide-react';
+import { Eye, Truck, Clock, BadgePercent } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { calculateDiscountedPriceTjs } from '../utils/pricing';
 
@@ -17,7 +17,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   isPriority = false,
   onPriorityImageReady,
 }) => {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
   const cardImageUrl = product.main_image
@@ -52,9 +52,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   ).values());
   const quantityDealLabel = quantityDeals.length === 0
     ? ''
-    : quantityDeals.length === 1
-      ? `От ${quantityDeals[0].quantity_discount_min} шт. −${quantityDeals[0].quantity_discount_percent}%`
-      : `Скидка от ${Math.min(...quantityDeals.map((deal) => deal.quantity_discount_min || 2))} шт. на отдельные варианты`;
+    : (() => {
+      const minimum = Math.min(...quantityDeals.map((deal) => deal.quantity_discount_min || 2));
+      const maximum = Math.max(...quantityDeals.map((deal) => deal.quantity_discount_percent || 0));
+      return language === 'ru' ? `Скидки от ${minimum} шт. до ${maximum}%`
+        : language === 'tg' ? `Тахфиф аз ${minimum} дона то ${maximum}%`
+        : `Discounts from ${minimum} pcs up to ${maximum}%`;
+    })();
 
   const isStock = product.delivery_type === 'stock';
   const productSlug = product.title
@@ -156,8 +160,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         </div>
 
         {quantityDealLabel && (
-          <div className="mt-1.5 flex items-center gap-1 rounded-lg border border-emerald-100 bg-emerald-50 px-1.5 py-1 text-[9px] font-bold leading-tight text-emerald-800 sm:text-[10px]">
-            <span aria-hidden="true">▦</span>
+          <div className="mt-1.5 flex items-center gap-1 text-[9px] font-bold leading-tight text-emerald-700 sm:text-[10px]">
+            <BadgePercent className="h-3 w-3 shrink-0" aria-hidden="true" />
             <span>{quantityDealLabel}</span>
           </div>
         )}
