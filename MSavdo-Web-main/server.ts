@@ -10,6 +10,7 @@ import http from 'node:http';
 import https from 'node:https';
 import type { LookupFunction } from 'node:net';
 import { rateLimit } from 'express-rate-limit';
+import sharp from 'sharp';
 import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
@@ -2530,6 +2531,7 @@ app.get('/api/products', (req, res) => {
       if (!product.main_image) return [];
       const imageUrl = new URL(product.main_image, publicMediaBaseUrl);
       if (imageUrl.protocol !== 'https:' && imageUrl.protocol !== 'http:') return [];
+      imageUrl.searchParams.set('width', '640');
       return [`<${imageUrl.href}>; rel=preload; as=image; fetchpriority=high; referrerpolicy=no-referrer`];
     });
     if (priorityImageLinks.length > 0) {
@@ -5718,11 +5720,18 @@ app.get('/product-image/:productId/:token.jpg', async (req, res) => {
     if (!source) return res.status(404).type('text/plain').send('Фото не найдено');
 
     const image = await createWatermarkedImage(source, token);
+    const thumbnailWidth = req.query.width === '640' ? 640 : undefined;
+    const responseImage = thumbnailWidth
+      ? await sharp(image)
+        .resize({ width: thumbnailWidth, height: thumbnailWidth, fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 78, mozjpeg: true })
+        .toBuffer()
+      : image;
     return res
       .type('image/jpeg')
       .set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
       .set('X-Content-Type-Options', 'nosniff')
-      .send(image);
+      .send(responseImage);
   } catch (error) {
     console.error(`[Product Image] Не удалось обработать фото товара ${productId}:`, error);
     return res.status(502).type('text/plain').send('Не удалось обработать фото товара');

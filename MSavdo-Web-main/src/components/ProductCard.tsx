@@ -20,6 +20,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const { t } = useI18n();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
+  const cardImageUrl = product.main_image
+    ? (() => {
+      const imageUrl = new URL(product.main_image, window.location.origin);
+      imageUrl.searchParams.set('width', '640');
+      return imageUrl.href;
+    })()
+    : '';
 
   // Цены по доступным вариантам
   const variants = product.variants || [];
@@ -77,7 +84,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             onClick={(event) => event.stopPropagation()}
           >
             <img
-              src={product.main_image}
+              src={cardImageUrl}
               alt={product.title}
               referrerPolicy="no-referrer"
               onLoad={() => {

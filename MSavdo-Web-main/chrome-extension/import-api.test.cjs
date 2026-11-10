@@ -240,7 +240,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.match(manualProduct.product.base_sku, /^[A-Z0-9]{6}$/);
     assert.match(manualProduct.product.variants[0].variant_sku, /^[A-Z0-9]{6}-[A-Z0-9]{5}$/);
     assert.equal(db.prepare("SELECT original_link FROM products WHERE id = ?").get(manualProduct.product.id).original_link, manualSourceLink);
-    const image = await sharp({ create: { width: 400, height: 300, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    const image = await sharp({ create: { width: 1200, height: 900, channels: 3, background: "#ffffff" } }).png().toBuffer();
     const upload = await fetch(`${base}/api/admin/upload-image`, {
       method: "POST", headers: { ...headers, Cookie: cookie },
       body: JSON.stringify({ image: `data:image/png;base64,${image.toString("base64")}` }),
@@ -264,11 +264,19 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const catalogWithImagePreload = await fetch(`${base}/api/products?limit=24&offset=0&sort=popular`);
     assert.equal(catalogWithImagePreload.status, 200);
     assert.match(catalogWithImagePreload.headers.get('link') || '', /rel=preload; as=image; fetchpriority=high/);
+    assert.match(catalogWithImagePreload.headers.get('link') || '', /width=640/);
     assert.match(catalogWithImagePreload.headers.get('link') || '', /product-image/);
     const publicManualProduct = (await (await fetch(`${base}/api/products/${manualProduct.product.id}`)).json()).product;
     const publicImageResponse = await fetch(publicManualProduct.main_image);
     assert.equal(publicImageResponse.status, 200);
     assert.deepEqual(Buffer.from(await publicImageResponse.arrayBuffer()), uploadedImage);
+    const publicThumbnailResponse = await fetch(`${publicManualProduct.main_image}?width=640`);
+    assert.equal(publicThumbnailResponse.status, 200);
+    const thumbnail = Buffer.from(await publicThumbnailResponse.arrayBuffer());
+    const thumbnailMetadata = await sharp(thumbnail).metadata();
+    assert.equal(thumbnailMetadata.width, 640);
+    assert.equal(thumbnailMetadata.height, 480);
+    assert.ok(thumbnail.length < uploadedImage.length);
     const invalidSourceLink = await fetch(`${base}/api/admin/products/${manualProduct.product.id}`, {
       method: "PUT", headers: { ...headers, Cookie: cookie },
       body: JSON.stringify({

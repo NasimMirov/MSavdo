@@ -26,7 +26,7 @@ import {
   Youtube,
 } from 'lucide-react';
 
-const BRAND_LOGO_URL = '/msavdo-logo.jpg';
+const BRAND_LOGO_URL = '/msavdo-logo.webp';
 const AdminPanel = lazy(() => import('./components/AdminPanel').then((module) => ({ default: module.AdminPanel })));
 const ProductDetailModal = lazy(() => import('./components/ProductDetailModal').then((module) => ({ default: module.ProductDetailModal })));
 const CartDrawer = lazy(() => import('./components/CartDrawer').then((module) => ({ default: module.CartDrawer })));
