@@ -2633,6 +2633,156 @@ app.get('/api/products/:id', (req, res) => {
   }
 });
 
+const RELATED_STOP_WORDS = new Set([
+  'для', 'или', 'при', 'это', 'как', 'что', 'все', 'без', 'под', 'над', 'the', 'and', 'with', 'new', 'for',
+  'товар', 'модель', 'набор', 'новый', 'новая', 'новое', 'качество', 'высокое', 'отличное', 'цвет', 'размер',
+  'женский', 'женская', 'мужской', 'мужская', 'комплект', 'материал', 'доставка', 'купить', 'цена',
+]);
+
+// Группы связанных понятий: товар из одной группы рекомендуется к товару из другой.
+const RELATED_CONCEPT_GROUPS: string[][] = [
+  ['телеф', 'смарт', 'айфон', 'iphone', 'чехол', 'стекл', 'заряд', 'кабел', 'наушн', 'power', 'повер', 'гарни', 'держа', 'селфи'],
+  ['ноутб', 'компь', 'мышь', 'клави', 'монит', 'флешк', 'накоп', 'планш', 'рюкза', 'веб-к', 'usb'],
+  ['куртк', 'пальт', 'шапк', 'шарф', 'перча', 'варе', 'зимн', 'свите', 'худи', 'толст'],
+  ['платье', 'юбка', 'блузк', 'сумк', 'клатч', 'ремен', 'украш', 'серьг', 'браслет', 'колье', 'часы'],
+  ['кроссов', 'ботин', 'обувь', 'носки', 'стелья', 'кед', 'сапог', 'тапоч', 'крем'],
+  ['кухн', 'посуд', 'кастр', 'сковор', 'нож', 'тарел', 'чайн', 'кружк', 'контей', 'блендер', 'миксер'],
+  ['постел', 'одеял', 'подуш', 'матрас', 'простын', 'плед', 'полотен', 'ковер', 'штор'],
+  ['детск', 'игруш', 'малыш', 'ребен', 'коляс', 'пелен', 'бутыл', 'конструк', 'кукл', 'машинк'],
+  ['спорт', 'гантел', 'коврик', 'фитнес', 'йога', 'эспандер', 'велос', 'мяч', 'тренаж', 'турник'],
+  ['авто', 'машин', 'салон', 'видеорег', 'коврик', 'держат', 'чехлы', 'насос', 'компрес'],
+  ['космет', 'крем', 'помад', 'тушь', 'парфюм', 'духи', 'маска', 'шампун', 'фен', 'утюжок', 'расчес'],
+  ['инстру', 'дрель', 'отвертк', 'шуруп', 'молоток', 'пила', 'лампа', 'фонар', 'светод', 'удлин'],
+];
+
+function relatedStem(word: string): string {
+  return word.length > 5 ? word.slice(0, 5) : word;
+}
+
+function relatedTokens(text: string): string[] {
+  const words = (String(text || '').toLocaleLowerCase('ru').match(/[a-zа-яё0-9-]{3,}/gi) || [])
+    .filter((word) => !RELATED_STOP_WORDS.has(word) && !/^\d+$/.test(word));
+  return Array.from(new Set(words.map(relatedStem)));
+}
+
+function relatedConcepts(tokens: string[]): Set<number> {
+  const result = new Set<number>();
+  RELATED_CONCEPT_GROUPS.forEach((group, index) => {
+    if (tokens.some((token) => group.some((key) => token.startsWith(relatedStem(key)) || key.startsWith(token)))) {
+      result.add(index);
+    }
+  });
+  return result;
+}
+
+type RelatedIndex = {
+  builtAt: number;
+  items: Array<{
+    id: number;
+    categoryId: number | null;
+    parentId: number | null;
+    titleTokens: Set<string>;
+    descTokens: Set<string>;
+    concepts: Set<number>;
+    popularity: number;
+  }>;
+  idf: Map<string, number>;
+};
+let relatedIndexCache: RelatedIndex | null = null;
+
+function getRelatedIndex(): RelatedIndex {
+  if (relatedIndexCache && Date.now() - relatedIndexCache.builtAt < 5 * 60 * 1000) return relatedIndexCache;
+  const rows = db.prepare(`
+    SELECT p.id, p.title, p.description, p.category_id, p.views_count, c.parent_id
+    FROM products p
+    LEFT JOIN categories c ON c.id = p.category_id
+    WHERE p.status = 'active'
+  `).all() as Array<{ id: number; title: string; description: string | null; category_id: number | null; views_count: number | null; parent_id: number | null }>;
+  const docFrequency = new Map<string, number>();
+  const items = rows.map((row) => {
+    const titleTokens = new Set(relatedTokens(row.title));
+    const descTokens = new Set(relatedTokens(String(row.description || '').slice(0, 1500)));
+    const all = new Set([...titleTokens, ...descTokens]);
+    all.forEach((token) => docFrequency.set(token, (docFrequency.get(token) || 0) + 1));
+    return {
+      id: row.id,
+      categoryId: row.category_id,
+      parentId: row.parent_id,
+      titleTokens,
+      descTokens,
+      concepts: relatedConcepts([...titleTokens]),
+      popularity: Math.log10(1 + Math.max(0, Number(row.views_count) || 0)),
+    };
+  });
+  const idf = new Map<string, number>();
+  docFrequency.forEach((count, token) => idf.set(token, Math.log(1 + items.length / count)));
+  relatedIndexCache = { builtAt: Date.now(), items, idf };
+  return relatedIndexCache;
+}
+
+// Рейтинг похожести: слова названия и описания (TF-IDF), категория/раздел и связанные понятия из других категорий.
+function rankRelatedProductIds(
+  current: { id: number; title: string; description: string | null; category_id: number | null },
+  limit: number,
+): number[] {
+  try {
+    const index = getRelatedIndex();
+    const self = index.items.find((item) => item.id === current.id);
+    const titleTokens = self?.titleTokens || new Set(relatedTokens(current.title));
+    const descTokens = self?.descTokens || new Set(relatedTokens(String(current.description || '').slice(0, 1500)));
+    const concepts = self?.concepts || relatedConcepts([...titleTokens]);
+    const parentId = self?.parentId ?? null;
+
+    const scored: Array<{ id: number; score: number; sameCategory: boolean }> = [];
+    for (const item of index.items) {
+      if (item.id === current.id) continue;
+      let score = 0;
+      titleTokens.forEach((token) => {
+        const weight = index.idf.get(token) || 1;
+        if (item.titleTokens.has(token)) score += weight * 3;
+        else if (item.descTokens.has(token)) score += weight * 1.2;
+      });
+      descTokens.forEach((token) => {
+        const weight = index.idf.get(token) || 1;
+        if (item.titleTokens.has(token)) score += weight * 1.2;
+        else if (item.descTokens.has(token)) score += weight * 0.4;
+      });
+      item.concepts.forEach((concept) => {
+        if (concepts.has(concept)) score += 2.5;
+      });
+      const sameCategory = current.category_id !== null && item.categoryId === current.category_id;
+      if (sameCategory) score += 4;
+      else if (parentId !== null && item.parentId === parentId) score += 1.5;
+      if (score <= 0) continue;
+      scored.push({ id: item.id, score: score + item.popularity * 0.3, sameCategory });
+    }
+    scored.sort((a, b) => b.score - a.score || b.id - a.id);
+
+    // Не больше половины рекомендаций из одной категории, остальное - связанные товары из других.
+    const maxSame = Math.ceil(limit / 2);
+    const picked: number[] = [];
+    let sameCount = 0;
+    const deferred: number[] = [];
+    for (const entry of scored) {
+      if (picked.length >= limit) break;
+      if (entry.sameCategory && sameCount >= maxSame) {
+        deferred.push(entry.id);
+        continue;
+      }
+      if (entry.sameCategory) sameCount += 1;
+      picked.push(entry.id);
+    }
+    for (const id of deferred) {
+      if (picked.length >= limit) break;
+      picked.push(id);
+    }
+    return picked;
+  } catch (error) {
+    console.error('[Related Ranking Error]', error);
+    return [];
+  }
+}
+
 app.get('/api/products/:id/related', (req, res) => {
   try {
     const productId = Number(req.params.id);
@@ -2641,10 +2791,10 @@ app.get('/api/products/:id/related', (req, res) => {
     }
 
     const currentProduct = db.prepare(`
-      SELECT id, title, category_id
+      SELECT id, title, description, category_id
       FROM products
       WHERE id = ? AND status = 'active'
-    `).get(productId) as { id: number; title: string; category_id: number | null } | undefined;
+    `).get(productId) as { id: number; title: string; description: string | null; category_id: number | null } | undefined;
 
     if (!currentProduct) {
       return res.status(404).json({ error: 'Товар не найден' });
@@ -2705,7 +2855,18 @@ app.get('/api/products/:id/related', (req, res) => {
       }
     };
 
-    if (currentProduct.category_id !== null) {
+    const rankedIds = rankRelatedProductIds(currentProduct, 4);
+    if (rankedIds.length > 0) {
+      const rows = db.prepare(`
+        ${selectFields}
+        AND p.id IN (${rankedIds.map(() => '?').join(',')})
+      `).all(productId, ...rankedIds) as any[];
+      const order = new Map(rankedIds.map((id, index) => [id, index]));
+      rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+      addCandidates(rows);
+    }
+
+    if (relatedProducts.length < 4 && currentProduct.category_id !== null) {
       const candidates = db.prepare(`
         ${selectFields}
         AND p.category_id = ?
