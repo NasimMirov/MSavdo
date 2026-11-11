@@ -15,7 +15,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
   const utils = path.join(temp, "src", "utils");
   fs.mkdirSync(utils, { recursive: true });
   fs.copyFileSync(path.join(project, "server.ts"), path.join(temp, "server.ts"));
-  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "importAiPrompt.ts", "promotions.ts", "tokenPlan.ts", "catalogSnapshotRestore.ts", "catalogBackup.ts", "productWatermark.ts", "demoSeed.ts"]) {
+  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "importAiPrompt.ts", "promotions.ts", "tokenPlan.ts", "catalogSnapshotRestore.ts", "catalogBackup.ts", "productWatermark.ts", "demoSeed.ts", "catalogSearch.ts"]) {
     fs.copyFileSync(path.join(project, "src", "utils", file), path.join(utils, file));
   }
   fs.mkdirSync(path.join(temp, "public"));
@@ -191,6 +191,45 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const cookie = `__Host-msavdo_admin=${header}.${payload}.${signature}`;
     const editUrl = `${base}/api/admin/products/${codeResult.product.id}`;
     const editHeaders = { ...headers, Cookie: cookie };
+    const manualPricingProduct = {
+      title: "Товар для проверки ручной цены", category_id: codeResult.product.category_id,
+      status: "draft", specifications: [], variants: [
+        { color: "Красный", size: "Стандарт", price_cny: 100, price_tjs: 210, weight_kg: 0.5, markup_percent: null },
+        { color: "Синий", size: "Стандарт", price_cny: 200, price_tjs: 465, weight_kg: 1, markup_percent: 45 },
+      ],
+    };
+    const createManual = await fetch(`${base}/api/admin/products`, { method: "POST", headers: editHeaders, body: JSON.stringify(manualPricingProduct) });
+    assert.equal(createManual.status, 201);
+    const manualId = (await createManual.json()).product.id;
+    let manualVariants = db.prepare("SELECT id, color, size, price_cny, price_tjs, weight_kg, markup_percent FROM product_variants WHERE product_id = ? ORDER BY id").all(manualId);
+    assert.deepEqual(manualVariants.map(v => [v.price_cny, v.price_tjs, v.markup_percent]), [[100, 210, null], [200, 465, 45]]);
+    const manualVariantIds = manualVariants.map(v => v.id);
+    const manualUrl = `${base}/api/admin/products/${manualId}`;
+    const changedVariants = manualVariants.map((v, index) => index === 0
+      ? { ...v, price_cny: 120, price_tjs: 249, markup_percent: 30 }
+      : { ...v, price_tjs: 500 });
+    assert.equal((await fetch(manualUrl, { method: "PUT", headers: editHeaders, body: JSON.stringify({ ...manualPricingProduct, variants: changedVariants }) })).status, 200);
+    manualVariants = db.prepare("SELECT id, color, size, price_cny, price_tjs, weight_kg, markup_percent FROM product_variants WHERE product_id = ? ORDER BY id").all(manualId);
+    assert.deepEqual(manualVariants.map(v => [v.price_cny, v.price_tjs, v.markup_percent]), [[120, 249, 30], [200, 500, 45]]);
+    assert.deepEqual(manualVariants.map(v => v.id), manualVariantIds);
+    const legacyVariants = manualVariants.map(({ price_cny, markup_percent, ...rest }) => rest);
+    assert.equal((await fetch(manualUrl, { method: "PUT", headers: editHeaders, body: JSON.stringify({ ...manualPricingProduct, variants: legacyVariants }) })).status, 200);
+    manualVariants = db.prepare("SELECT price_cny, price_tjs, markup_percent FROM product_variants WHERE product_id = ? ORDER BY id").all(manualId);
+    assert.deepEqual(manualVariants.map(v => [v.price_cny, v.price_tjs, v.markup_percent]), [[120, 249, 30], [200, 500, 45]]);
+    assert.equal((await fetch(manualUrl, { method: "PUT", headers: editHeaders, body: JSON.stringify({ ...manualPricingProduct, variants: [{ price_cny: -1 }] }) })).status, 400);
+    assert.equal((await fetch(manualUrl, { method: "PUT", headers: editHeaders, body: JSON.stringify({ ...manualPricingProduct, variants: [{ markup_percent: 1001 }] }) })).status, 400);
+    assert.deepEqual(db.prepare("SELECT price_cny, price_tjs FROM product_variants WHERE product_id = ? ORDER BY id").all(manualId).map(v => [v.price_cny, v.price_tjs]), [[120, 249], [200, 500]]);
+    const occupiedSku = db.prepare("SELECT variant_sku FROM product_variants WHERE product_id = ? LIMIT 1").get(result.product.id).variant_sku;
+    const collision = { ...manualPricingProduct, title: "Не должно сохраниться", variants: [{ ...changedVariants[0], variant_sku: occupiedSku }] };
+    assert.equal((await fetch(manualUrl, { method: "PUT", headers: editHeaders, body: JSON.stringify(collision) })).status, 500);
+    assert.equal(db.prepare("SELECT title FROM products WHERE id = ?").get(manualId).title, manualPricingProduct.title);
+    assert.deepEqual(db.prepare("SELECT id FROM product_variants WHERE product_id = ? ORDER BY id").all(manualId).map(v => v.id), manualVariantIds);
+    const savedManualVariants = db.prepare("SELECT * FROM product_variants WHERE product_id = ? ORDER BY id").all(manualId);
+    assert.equal((await fetch(manualUrl, { method: "PUT", headers: editHeaders, body: JSON.stringify({ ...manualPricingProduct, status: "active", variants: savedManualVariants }) })).status, 200);
+    const manualPublic = await (await fetch(`${base}/api/products/${manualId}`)).json();
+    assert.ok(manualPublic.product.variants.length);
+    assert.ok(manualPublic.product.variants.every(v => !("price_cny" in v) && !("markup_percent" in v)));
+    assert.deepEqual(manualPublic.product.variants.map(v => v.id), manualVariantIds);
     const importedVariant = db.prepare("SELECT id, price_cny, stock FROM product_variants WHERE product_id = ?").get(codeResult.product.id);
     const editableProduct = {
       title: codeResult.product.title,

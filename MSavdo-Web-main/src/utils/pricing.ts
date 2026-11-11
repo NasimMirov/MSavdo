@@ -130,6 +130,27 @@ export function calculatePriceTjs(priceCny: number, weightKg: number, volumeM3 =
   return Math.round((cny * 1.45) + calculateShippingCostTjs(weightKg, volumeM3));
 }
 
+export function calculateManualVariantPrice(
+  priceCny: number,
+  weightKg: number,
+  volumeM3: number,
+  markupPercent: number | null,
+): { priceTjs: number; markupPercent: number; shippingTjs: number; usesVolume: boolean } | null {
+  if (!Number.isFinite(priceCny) || priceCny <= 0 ||
+      !Number.isFinite(weightKg) || weightKg <= 0 ||
+      !Number.isFinite(volumeM3) || volumeM3 < 0 ||
+      (markupPercent !== null && (!Number.isFinite(markupPercent) || markupPercent < 0 || markupPercent > 1000))) {
+    return null;
+  }
+  const costTjs = priceCny * 1.5;
+  const markup = markupPercent ?? (costTjs < 200 ? 30 : costTjs < 2000 ? 20 : 10);
+  const shippingTjs = calculateShippingCostTjs(weightKg, volumeM3);
+  const priceTjs = Math.round(costTjs * (1 + markup / 100) + shippingTjs);
+  return Number.isSafeInteger(priceTjs) && priceTjs > 0
+    ? { priceTjs, markupPercent: markup, shippingTjs, usesVolume: volumeM3 > 0 }
+    : null;
+}
+
 export function calculateDiscountedPriceTjs(priceTjs: number, discountPercent: number): number {
   if (!Number.isSafeInteger(priceTjs) || priceTjs <= 0 ||
       !Number.isSafeInteger(discountPercent) || discountPercent <= 0 || discountPercent > 90) {

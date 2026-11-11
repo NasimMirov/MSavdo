@@ -235,6 +235,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
     setIsSubmitting(true);
     let orderNumber = '';
     let confirmedQuote: Quote = validQuote;
+    let definiteFailure = false;
 
     try {
       const res = await apiFetch('/api/orders', {
@@ -263,19 +264,31 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         }),
       });
       if (!res.ok) {
-        const data = await res.json();
+        definiteFailure = res.status >= 400 && res.status < 500 && res.status !== 408;
+        if (!definiteFailure) throw new Error(`HTTP ${res.status}`);
+        let data;
+        try {
+          data = await res.json();
+        } catch (error) {
+          console.error('[Order Checkout] Invalid error response:', error);
+          throw new Error(copy.orderFailed);
+        }
         if (res.status === 409 && data?.quote) setQuote(data.quote);
-        throw new Error(data?.error || `HTTP ${res.status}`);
+        throw new Error(typeof data?.error === 'string' && data.error ? data.error : copy.orderFailed);
       }
       const data = await res.json();
       if (typeof data?.order_number !== 'string' || !data.order_number) {
         throw new Error('Сервер не вернул номер заказа');
       }
+      if (!data.quote || !Array.isArray(data.quote.items) || !Array.isArray(data.quote.applied)
+        || !Number.isSafeInteger(data.quote.total)) {
+        throw new Error('Сервер не вернул подтверждённый расчёт заказа');
+      }
       orderNumber = data.order_number;
       confirmedQuote = data.quote;
     } catch (error) {
       console.error('[Order Checkout Error]', error);
-      setSubmitError(error instanceof TypeError ? copy.orderUnknown : error instanceof Error ? error.message : copy.orderFailed);
+      setSubmitError(definiteFailure && error instanceof Error ? error.message : copy.orderUnknown);
       return;
     } finally {
       submittingRef.current = false;

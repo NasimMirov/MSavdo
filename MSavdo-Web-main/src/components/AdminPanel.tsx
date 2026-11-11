@@ -48,6 +48,7 @@ import { ProductDiscountsAdmin } from './ProductDiscountsAdmin';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors, normalizeProductColor, removeProductColor } from '../utils/productDescription';
+import { calculateManualVariantPrice, extractShippingMetrics } from '../utils/pricing';
 
 interface TelegramLoginResult {
   id_token?: string;
@@ -853,6 +854,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       size: v.size || 'Стандарт',
       price_tjs: v.price_tjs || 0,
       price_cny: v.price_cny || 0,
+      markup_percent: v.markup_percent ?? '',
       stock: v.stock !== undefined ? v.stock : 10,
       quantity_discount_min: v.quantity_discount_min || 0,
       quantity_discount_percent: v.quantity_discount_percent || 0,
@@ -1203,6 +1205,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       size: 'Стандарт',
       price_tjs: 120,
       price_cny: 0,
+      markup_percent: '',
       stock: 15,
       quantity_discount_min: 0,
       quantity_discount_percent: 0,
@@ -1225,8 +1228,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleUpdateVariantField = (index: number, field: string, val: any) => {
     if (!editingProduct) return;
     const curVars = [...(editingProduct.variants || [])];
-    curVars[index] = { ...curVars[index], [field]: val };
+    const variant = { ...curVars[index], [field]: val };
+    if (field === 'price_cny' || field === 'weight_kg' || field === 'markup_percent') {
+      const calculation = getVariantPriceCalculation(variant);
+      if (calculation) variant.price_tjs = calculation.priceTjs;
+    }
+    curVars[index] = variant;
     setEditingProduct({ ...editingProduct, variants: curVars });
+  };
+
+  const getVariantPriceCalculation = (variant: { price_cny?: number | string; weight_kg?: number | string; volume_m3?: number; markup_percent?: number | string | null }) => {
+    const specifications = Array.isArray(editingProduct?.specifications) ? editingProduct.specifications : [];
+    const volume = Number(variant.volume_m3) > 0
+      ? Number(variant.volume_m3)
+      : extractShippingMetrics(specifications).volumeM3;
+    const markup = variant.markup_percent === '' || variant.markup_percent == null ? null : Number(variant.markup_percent);
+    return calculateManualVariantPrice(Number(variant.price_cny), Number(variant.weight_kg), volume, markup);
+  };
+
+  const handleRecalculateVariant = (index: number) => {
+    const calculation = getVariantPriceCalculation(editingProduct.variants[index]);
+    if (calculation) handleUpdateVariantField(index, 'price_tjs', calculation.priceTjs);
   };
 
   // Загрузка фото варианта из файла
@@ -1405,6 +1427,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         specifications: (editingProduct.specifications || []).filter((s: any) => s.name.trim() && s.value.trim()),
         variants: (editingProduct.variants || []).map((variant: any) => ({
           ...variant,
+          price_cny: variant.price_cny === '' ? 0 : Number(variant.price_cny),
+          weight_kg: Number(variant.weight_kg),
+          markup_percent: variant.markup_percent === '' || variant.markup_percent == null ? null : Number(variant.markup_percent),
           price_tjs: variant.price_tjs === '' ? 0 : Number(variant.price_tjs),
           quantity_discount_min: variant.quantity_discount_min === '' ? 0 : Number(variant.quantity_discount_min) || 0,
           quantity_discount_percent: variant.quantity_discount_percent === '' ? 0 : Number(variant.quantity_discount_percent) || 0,
@@ -4051,7 +4076,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div className="flex items-center justify-between">
                   <div>
                     <label className="font-bold text-slate-800 text-xs">Матрица вариантов SKU:</label>
-                    <p className="text-[10px] text-slate-400">Розничная цена и скидка отдельно для каждого варианта. Укажите оба значения: от 2 до 10 000 шт. и скидку 1–90%; чтобы отключить — оставьте оба поля пустыми.</p>
+                    <p className="text-[10px] text-slate-500">Введите цену в юанях и вес для мгновенного расчёта. Розничную цену можно изменить вручную. Скидка за количество: от 2 до 10 000 шт. и 1–90%, либо оба поля пустые.</p>
                   </div>
                   <button
                     type="button"
@@ -4063,13 +4088,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </button>
                 </div>
 
-                <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                <div className="space-y-2.5 max-h-[32rem] overflow-y-auto pr-1">
                   {editingProduct.variants?.length === 0 && (
                     <p className="rounded-xl border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
                       Варианты удалены. Добавьте вариант, если он нужен товару.
                     </p>
                   )}
-                  {editingProduct.variants?.map((v: any, vIdx: number) => (
+                  {editingProduct.variants?.map((v: any, vIdx: number) => {
+                    const calculation = getVariantPriceCalculation(v);
+                    return (
                     <div key={v.id ?? `new-variant-${vIdx}`} className="p-2 bg-slate-50 border border-slate-200 rounded-xl grid grid-cols-2 sm:grid-cols-12 gap-1.5 items-center text-[11px]">
                       <div className="sm:col-span-3">
                         <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Цвет:</span>
@@ -4134,10 +4161,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <input
                           type="number"
                           required
-                          min="0.01"
-                          step="0.01"
+                          min="0.001"
+                          step="any"
                           value={v.weight_kg ?? 0.5}
-                          onChange={(e) => handleUpdateVariantField(vIdx, 'weight_kg', Number(e.target.value))}
+                          onChange={(e) => handleUpdateVariantField(vIdx, 'weight_kg', e.target.value)}
+                          aria-label={`Вес варианта ${vIdx + 1}, кг`}
                           className="w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono focus:border-amber-400 outline-none"
                         />
                       </div>
@@ -4150,6 +4178,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
+                      </div>
+                      <div className="col-span-2 sm:col-span-12 rounded-lg border border-emerald-200 bg-emerald-50 p-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          <label className="font-bold text-slate-700">Цена закупки, CNY
+                            <input type="number" min="0" step="any" value={v.price_cny ?? ''}
+                              onChange={(e) => handleUpdateVariantField(vIdx, 'price_cny', e.target.value)}
+                              aria-label={`Цена закупки варианта ${vIdx + 1}, CNY`}
+                              className="mt-1 w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono" />
+                          </label>
+                          <label className="font-bold text-slate-700">Наценка, % (пусто — авто)
+                            <input type="number" min="0" max="1000" step="any" value={v.markup_percent ?? ''}
+                              onChange={(e) => handleUpdateVariantField(vIdx, 'markup_percent', e.target.value)}
+                              aria-label={`Наценка варианта ${vIdx + 1}, %`}
+                              placeholder="Авто"
+                              className="mt-1 w-full p-2 bg-white border border-slate-300 rounded-xl text-xs font-mono" />
+                          </label>
+                          <div className="col-span-2 text-slate-700 self-end" aria-live="polite">
+                            {calculation ? (
+                              <>
+                                <span>Расчёт: {calculation.priceTjs} TJS · наценка {calculation.markupPercent}% · доставка {calculation.shippingTjs} TJS ({calculation.usesVolume ? `по объёму ${Number(v.volume_m3) > 0 ? Number(v.volume_m3) : extractShippingMetrics(editingProduct.specifications || []).volumeM3} м³` : 'по весу'}).</span>{' '}
+                                <button type="button" onClick={() => handleRecalculateVariant(vIdx)}
+                                  className="font-bold text-emerald-800 underline">Применить расчёт</button>
+                              </>
+                            ) : 'Для расчёта укажите цену закупки больше нуля и вес. Текущая цена продажи сохраняется.'}
+                          </div>
+                        </div>
+                        <p className="mt-1 text-slate-600">Курс 1,5; наценка только на товар. Авто: до 200 TJS — 30%, до 2000 — 20%, от 2000 — 10%. Доставка: 30 TJS/кг или 2000 TJS/м³ при наличии габаритов.</p>
                       </div>
                       <div className="sm:col-span-3">
                         <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Артикул варианта:</span>
@@ -4238,7 +4293,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

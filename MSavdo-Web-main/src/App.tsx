@@ -984,6 +984,19 @@ export default function App() {
                   >
                     {t('showCatalog')}
                   </button>
+                  {searchQuery.trim() && (
+                    <div>
+                      <a
+                        href={`https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(`${t('searchHelpMessage')} ${searchQuery.trim().slice(0, 120)}`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-800"
+                      >
+                        <MessageCircle className="h-4 w-4" />
+                        {t('searchHelpAction')}
+                      </a>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-1 sm:grid-cols-2 sm:gap-2 md:grid-cols-3 xl:grid-cols-4">
@@ -1295,13 +1308,16 @@ export default function App() {
               className="w-7 h-7 rounded-lg object-cover border border-amber-400"
             />
             <div>
-              <span className="font-black text-white">MSavdo</span> · Сервис выкупа фабричных товаров
+              <span className="font-black text-white">MSavdo</span> · Маркази Савдо · Сервис выкупа фабричных товаров
               <span className="text-zinc-600 block sm:inline sm:ml-2">Instagram: <strong className="text-amber-400">@MSavdo.tj</strong></span>
             </div>
           </div>
 
           <div className="flex flex-col items-center gap-4 sm:items-end">
             <div className="flex items-center gap-5">
+            <a href="/catalog/1" className="hover:text-amber-400 transition-colors">
+              Каталог товаров
+            </a>
             <button 
               onClick={() => setCurrentView('rules')} 
               className="hover:text-amber-400 transition-colors"

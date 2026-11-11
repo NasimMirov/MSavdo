@@ -19,10 +19,27 @@ function copyTextFallback(text: string): void {
   textarea.style.position = 'fixed';
   textarea.style.opacity = '0';
   document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand('copy');
-  textarea.remove();
+  let copied: boolean;
+  try {
+    textarea.select();
+    copied = document.execCommand('copy');
+  } finally {
+    textarea.remove();
+  }
   if (!copied) throw new Error('Не удалось скопировать ссылку на товар');
+}
+
+export async function copyProductLink(product: Product): Promise<void> {
+  const url = getProductUrl(product);
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(url);
+      return;
+    } catch (error) {
+      console.warn('[Product Share] Clipboard API unavailable, trying fallback:', error);
+    }
+  }
+  copyTextFallback(url);
 }
 
 export async function shareProduct(product: Product): Promise<ShareResult> {
@@ -37,16 +54,6 @@ export async function shareProduct(product: Product): Promise<ShareResult> {
     }
   }
 
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(url);
-      return 'copied';
-    } catch {
-      copyTextFallback(url);
-      return 'copied';
-    }
-  }
-
-  copyTextFallback(url);
+  await copyProductLink(product);
   return 'copied';
 }

@@ -1,6 +1,7 @@
 {
   "rewrites": [
     { "source": "/product/:path*", "destination": "https://api.msavdo.shop/product/:path*" },
+    { "source": "/catalog/:path*", "destination": "https://api.msavdo.shop/catalog/:path*" },
     { "source": "/robots.txt", "destination": "https://api.msavdo.shop/robots.txt" },
     { "source": "/sitemap.xml", "destination": "https://api.msavdo.shop/sitemap.xml" },
     { "source": "/sitemap-products-:page.xml", "destination": "https://api.msavdo.shop/sitemap-products-:page.xml" }

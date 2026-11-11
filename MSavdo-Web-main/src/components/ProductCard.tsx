@@ -85,7 +85,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             href={productUrl}
             aria-label={product.title}
             className="absolute inset-0 flex items-center justify-center"
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+              event.preventDefault();
+              onSelect(product);
+            }}
           >
             <img
               src={cardImageUrl}
@@ -148,7 +153,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             <a
               href={productUrl}
               className="text-inherit no-underline"
-              onClick={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                event.preventDefault();
+                onSelect(product);
+              }}
             >
               {product.title}
             </a>

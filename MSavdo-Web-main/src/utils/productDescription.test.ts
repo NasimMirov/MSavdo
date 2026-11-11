@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractProductColors, removeProductColor } from './productDescription.ts';
+import { ensureOrderDeliveryNotice, extractProductColors, removeOrderDeliveryNotice, removeProductColor } from './productDescription.ts';
+
+test('normalizes old and current delivery notices without duplicating them', () => {
+  for (const notice of ['Доставка 18-30 дней!', 'Доставка 18–20 дней!', 'Доставка до 30 дней!', 'Доставка 12–35 дней!']) {
+    const description = `${notice}\n\nОписание товара`;
+    assert.equal(ensureOrderDeliveryNotice(description), 'Доставка 12–35 дней!\n\nОписание товара');
+    assert.equal(removeOrderDeliveryNotice(description), 'Описание товара');
+  }
+  assert.equal(ensureOrderDeliveryNotice(''), 'Доставка 12–35 дней!');
+  assert.equal(removeOrderDeliveryNotice('Другие условия доставки'), 'Другие условия доставки');
+});
 
 test('removing a product color removes it from all color sources and preserves other values', () => {
   const specifications = [

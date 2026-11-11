@@ -15,7 +15,7 @@ import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculateDiscountedPriceTjs, calculatePriceTjs, calculateQuantityDiscountedPriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
-import { cleanProductDescription, ensureOrderDeliveryNotice } from './src/utils/productDescription.js';
+import { cleanProductDescription, ensureOrderDeliveryNotice, removeOrderDeliveryNotice } from './src/utils/productDescription.js';
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { importVariantInstructions } from './src/utils/importAiPrompt.js';
 import { calculatePromotions } from './src/utils/promotions.js';
@@ -25,6 +25,7 @@ import { restoreCatalogSnapshot } from './src/utils/catalogSnapshotRestore.js';
 import { createCatalogBackup } from './src/utils/catalogBackup.js';
 import { isWatermarkedUpload, productImageToken, renderProductWatermark, saveWatermarkedUpload } from './src/utils/productWatermark.js';
 import { shouldSeedDemoProducts } from './src/utils/demoSeed.js';
+import { catalogSearchCondition, catalogSearchTerms, escapeSearchLike } from './src/utils/catalogSearch.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -414,6 +415,9 @@ if (!variantColumns.some((column) => column.name === 'quantity_discount_min')) {
 }
 if (!variantColumns.some((column) => column.name === 'quantity_discount_percent')) {
   db.exec('ALTER TABLE product_variants ADD COLUMN quantity_discount_percent INTEGER NOT NULL DEFAULT 0;');
+}
+if (!variantColumns.some((column) => column.name === 'markup_percent')) {
+  db.exec('ALTER TABLE product_variants ADD COLUMN markup_percent REAL;');
 }
 const productColumns = db.prepare('PRAGMA table_info(products)').all() as Array<{ name: string }>;
 if (!productColumns.some((column) => column.name === 'discount_percent')) {
@@ -949,11 +953,14 @@ try {
 
 // Очистка существующих товаров от запрещенных слов и фраз о контроле производства
 try {
-  const existingProds = db.prepare("SELECT id, title, description FROM products WHERE COALESCE(status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string }>;
+  const existingProds = db.prepare("SELECT id, title, description, delivery_type FROM products WHERE COALESCE(status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string; delivery_type: string | null }>;
   const updateProd = db.prepare('UPDATE products SET title = ?, description = ? WHERE id = ?');
   for (const p of existingProds) {
     const cleanT = cleanBannedWordsAndPhrases(p.title || '');
-    const cleanD = ensureOrderDeliveryNotice(cleanBannedWordsAndPhrases(p.description || ''));
+    const description = cleanBannedWordsAndPhrases(p.description || '');
+    const cleanD = p.delivery_type === 'stock'
+      ? cleanProductDescription(removeOrderDeliveryNotice(description))
+      : ensureOrderDeliveryNotice(description);
     if (cleanT !== p.title || cleanD !== p.description) {
       updateProd.run(cleanT, cleanD, p.id);
     }
@@ -1077,6 +1084,15 @@ function hasValidOptionalRetailPrice(value: unknown): boolean {
   if (value === undefined || value === null || value === '') return true;
   const price = Number(value);
   return Number.isSafeInteger(price) && price >= 0;
+}
+
+function hasValidVariantPricing(variant: { price_cny?: unknown; markup_percent?: unknown }): boolean {
+  const cny = variant.price_cny;
+  const markup = variant.markup_percent;
+  return (cny === undefined || cny === null || cny === '' ||
+      (Number.isFinite(Number(cny)) && Number(cny) >= 0)) &&
+    (markup === undefined || markup === null || markup === '' ||
+      (Number.isFinite(Number(markup)) && Number(markup) >= 0 && Number(markup) <= 1000));
 }
 
 function resolveRetailPriceTjs(value: unknown, priceCny: number, weightKg: number, volumeM3 = 0): number {
@@ -2001,12 +2017,6 @@ function normalizeSearchQuery(value: unknown): string {
   return query;
 }
 
-function getSearchCaseVariants(query: string): string[] {
-  const lower = query.toLocaleLowerCase('ru');
-  const capitalized = lower.charAt(0).toLocaleUpperCase('ru') + lower.slice(1);
-  return [...new Set([query, lower, capitalized])];
-}
-
 app.post('/api/searches', searchRateLimiter, (req, res) => {
   const query = normalizeSearchQuery(req.body?.query);
   if (!query) return res.status(204).end();
@@ -2043,25 +2053,23 @@ app.get('/api/search/suggestions', (req, res) => {
     if (!query) return res.json({ suggestions: [], popular: popularQueries });
 
     const normalizedQuery = query.toLocaleLowerCase('ru');
-    const pattern = `${normalizedQuery}%`;
+    const pattern = `${escapeSearchLike(normalizedQuery)}%`;
     const matchingQueries = db.prepare(`
       SELECT query_text, searches_count
       FROM site_search_queries
-      WHERE normalized_query LIKE ? AND public_enabled = 1 AND (is_manual = 1 OR searches_count >= 3)
+      WHERE normalized_query LIKE ? ESCAPE '\\' AND public_enabled = 1 AND (is_manual = 1 OR searches_count >= 3)
       ORDER BY searches_count DESC, last_searched_at DESC, normalized_query ASC
       LIMIT 6
     `).all(pattern) as Array<{ query_text: string; searches_count: number }>;
-    const variants = getSearchCaseVariants(query);
-    const titleConditions = variants.map(() => 'title LIKE ?').join(' OR ');
-    const titlePatterns = variants.map((variant) => `${variant}%`);
+    const titleSearch = catalogSearchTerms(query).map((term) => catalogSearchCondition(term, ['title']));
     const matchingProducts = db.prepare(`
       SELECT title
       FROM products
-      WHERE status = 'active' AND (${titleConditions})
+      WHERE status = 'active' AND ${titleSearch.map((part) => part.condition).join(' AND ')}
       GROUP BY title
       ORDER BY MAX(views_count) DESC, MAX(id) DESC
       LIMIT 6
-    `).all(...titlePatterns) as Array<{ title: string }>;
+    `).all(...titleSearch.flatMap((part) => part.patterns)) as Array<{ title: string }>;
     const suggestions = [...new Set([
       ...matchingQueries.map((item) => item.query_text),
       ...matchingProducts.map((item) => item.title),
@@ -2409,20 +2417,19 @@ app.get('/api/products', (req, res) => {
     let where = "p.status = 'active'";
     const params: Array<string | number> = [];
     if (search) {
-      const variants = getSearchCaseVariants(search);
-      const termPatterns = variants.map((variant) => `%${variant}%`);
-      where += ` AND (
-        ${variants.map(() => 'p.title LIKE ?').join(' OR ')}
-        OR p.base_sku LIKE ?
-        OR ${variants.map(() => 'p.description LIKE ?').join(' OR ')}
-        OR ${variants.map(() => 'p.specifications LIKE ?').join(' OR ')}
-      )`;
-      params.push(
-        ...termPatterns,
-        `%${search}%`,
-        ...termPatterns,
-        ...termPatterns,
-      );
+      for (const term of catalogSearchTerms(search)) {
+        const part = catalogSearchCondition(term, ['p.title', 'p.base_sku', 'p.description', 'p.specifications']);
+        const category = catalogSearchCondition(term, ['search_category.name', 'parent_category.name']);
+        const variant = catalogSearchCondition(term, ['search_variant.color', 'search_variant.size', 'search_variant.variant_sku']);
+        where += ` AND (${part.condition}
+          OR EXISTS (SELECT 1 FROM categories search_category
+            LEFT JOIN categories parent_category ON parent_category.id = search_category.parent_id
+            WHERE search_category.id = p.category_id AND ${category.condition})
+          OR EXISTS (SELECT 1 FROM product_variants search_variant
+            WHERE search_variant.product_id = p.id AND ${variant.condition}))`;
+        params.push(...part.patterns);
+        params.push(...category.patterns, ...variant.patterns);
+      }
     }
     if (categoryId !== null) {
       where += ' AND (p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))';
@@ -3159,12 +3166,8 @@ app.post('/api/orders', (req, res) => {
       return res.status(400).json({ error: 'Введите корректный номер телефона' });
     }
 
-    // Генерация человекочитаемого уникального номера заказа
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const currentYear = new Date().getFullYear();
-    const orderNumber = `MS-${currentYear}-${randomSuffix}`;
-
     let orderId = 0;
+    let orderNumber = '';
     let quote: ReturnType<typeof buildOrderQuote>;
     db.exec('BEGIN IMMEDIATE;');
     try {
@@ -3183,6 +3186,18 @@ app.post('/api/orders', (req, res) => {
         db.exec('ROLLBACK;');
         return res.status(400).json({ error: 'Промокод недействителен или условия акции не выполнены.', quote });
       }
+      const prefix = `MS-${new Date().getFullYear()}-`;
+      const nextSuffix = (db.prepare(`
+        SELECT MAX(CAST(substr(order_number, ?) AS INTEGER)) AS max_suffix
+        FROM orders
+        WHERE order_number >= ? AND order_number < ?
+          AND substr(order_number, ?) GLOB '[0-9]*'
+          AND substr(order_number, ?) NOT GLOB '*[^0-9]*'
+      `).get(prefix.length + 1, prefix, `${prefix}:`, prefix.length + 1, prefix.length + 1) as { max_suffix: number | null }).max_suffix;
+      if (nextSuffix !== null && (!Number.isSafeInteger(nextSuffix) || nextSuffix >= Number.MAX_SAFE_INTEGER)) {
+        throw new Error('Не удалось создать номер заказа: превышен допустимый диапазон');
+      }
+      orderNumber = `${prefix}${Math.max(1000, (nextSuffix ?? 999) + 1)}`;
       const itemsJson = JSON.stringify(quote.items);
       const result = db.prepare(`
         INSERT INTO orders (
@@ -3666,6 +3681,9 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
       return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
     }
+    if (Array.isArray(variants) && variants.some((variant: any) => !variant || !hasValidVariantPricing(variant))) {
+      return res.status(400).json({ error: 'Цена в юанях должна быть неотрицательной, а наценка — от 0 до 1000%.' });
+    }
     if (Array.isArray(variants) && variants.some((variant: any) => {
       const minimum = variant?.quantity_discount_min === undefined || variant.quantity_discount_min === ''
         ? 0
@@ -3699,7 +3717,9 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       aiCategory,
       Array.isArray(specifications) ? specifications : [],
     );
-    cleanDesc = ensureOrderDeliveryNotice(cleanDesc);
+    cleanDesc = cleanDelivery === 'stock'
+      ? cleanProductDescription(removeOrderDeliveryNotice(cleanDesc))
+      : ensureOrderDeliveryNotice(cleanDesc);
 
     // Нормализация спецификаций/характеристик
     let cleanSpecs = '';
@@ -3740,9 +3760,9 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     const insertVar = db.prepare(`
       INSERT INTO product_variants (
         product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3,
-        variant_sku, image_url, quantity_discount_min, quantity_discount_percent
+        variant_sku, image_url, quantity_discount_min, quantity_discount_percent, markup_percent
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const createdVars: any[] = [];
@@ -3769,7 +3789,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
 
         insertVar.run(
           productId, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg,
-          quantityDiscountMin, quantityDiscountPercent,
+          quantityDiscountMin, quantityDiscountPercent, v.markup_percent === '' || v.markup_percent == null ? null : Number(v.markup_percent),
         );
         createdVars.push({
           color: vColor,
@@ -3791,7 +3811,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       const defaultSku = generateVariantSku(baseSku, 'Основной', 'Стандарт');
       insertVar.run(
         productId, 'Основной', 'Стандарт', defaultPriceCny, defaultPriceTjs, 15, defaultWeightKg,
-        productVolumeM3, defaultSku, mImage, 0, 0,
+        productVolumeM3, defaultSku, mImage, 0, 0, null,
       );
       createdVars.push({
         color: 'Основной',
@@ -3862,6 +3882,9 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     if (Array.isArray(variants) && variants.some((variant: any) => !hasValidOptionalRetailPrice(variant?.price_tjs))) {
       return res.status(400).json({ error: 'Розничная цена должна быть целым неотрицательным числом' });
     }
+    if (Array.isArray(variants) && variants.some((variant: any) => !variant || !hasValidVariantPricing(variant))) {
+      return res.status(400).json({ error: 'Цена в юанях должна быть неотрицательной, а наценка — от 0 до 1000%.' });
+    }
     if (Array.isArray(variants) && variants.some((variant: any) => {
       const minimum = variant?.quantity_discount_min === undefined || variant.quantity_discount_min === ''
         ? 0
@@ -3907,7 +3930,9 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       aiCategory,
       Array.isArray(specifications) ? specifications : [],
     );
-    cleanDesc = ensureOrderDeliveryNotice(cleanDesc);
+    cleanDesc = cleanDelivery === 'stock'
+      ? cleanProductDescription(removeOrderDeliveryNotice(cleanDesc))
+      : ensureOrderDeliveryNotice(cleanDesc);
 
     // Нормализация спецификаций
     let cleanSpecs: string | null = null;
@@ -3942,6 +3967,8 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       parseSpecifications(cleanSpecs ?? existingProd?.specifications),
     ).volumeM3;
 
+    db.exec('BEGIN IMMEDIATE;');
+    try {
     // Обновляем карточку товара
     const updatedProduct = db.prepare(`
       UPDATE products
@@ -3949,25 +3976,29 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
           specifications = CASE WHEN ? IS NOT NULL THEN ? ELSE specifications END
       WHERE id = ? AND COALESCE(status, '') != 'deleted'
     `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs, id);
-    if (updatedProduct.changes === 0) return res.status(409).json({ error: 'Товар удалён или не найден. Обновите список товаров.' });
+    if (updatedProduct.changes === 0) {
+      db.exec('ROLLBACK;');
+      return res.status(409).json({ error: 'Товар удалён или не найден. Обновите список товаров.' });
+    }
 
     // Если передан полный обновленный массив вариантов: синхронизируем матрицу
     if (Array.isArray(variants)) {
       const existingVariantData = new Map(
-        (db.prepare('SELECT id, price_cny, stock FROM product_variants WHERE product_id = ?').all(id) as Array<{
+        (db.prepare('SELECT id, price_cny, stock, markup_percent FROM product_variants WHERE product_id = ?').all(id) as Array<{
           id: number;
           price_cny: number;
           stock: number;
+          markup_percent: number | null;
         }>).map((variant) => [variant.id, variant]),
       );
       db.prepare('DELETE FROM product_variants WHERE product_id = ?').run(id);
 
       const insertVar = db.prepare(`
         INSERT INTO product_variants (
-          product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3,
-          variant_sku, image_url, quantity_discount_min, quantity_discount_percent
+          id, product_id, color, size, price_cny, price_tjs, stock, weight_kg, volume_m3,
+          variant_sku, image_url, quantity_discount_min, quantity_discount_percent, markup_percent
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       for (const v of variants) {
@@ -3978,7 +4009,9 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
         const vWeight = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 0.5;
         const parsedVolume = Number(v.volume_m3);
         const vVolume = Number.isFinite(parsedVolume) && parsedVolume > 0 ? parsedVolume : volumeFromSpecs;
-        const vCny = existing?.price_cny || 0;
+        const vCny = v.price_cny === undefined || v.price_cny === null ? (existing?.price_cny ?? 0) : Number(v.price_cny || 0);
+        const vMarkup = v.markup_percent === undefined ? (existing?.markup_percent ?? null)
+          : v.markup_percent === null || v.markup_percent === '' ? null : Number(v.markup_percent);
         const vTjs = resolveRetailPriceTjs(v.price_tjs, vCny, vWeight, vVolume);
         const vStock = existing?.stock ?? 10;
         const quantityDiscountMin = Number(v.quantity_discount_min) || 0;
@@ -3987,8 +4020,8 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
         const vImg = typeof v.image_url === 'string' ? persistInlineImage(v.image_url, req) : mImage;
 
         insertVar.run(
-          id, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg,
-          quantityDiscountMin, quantityDiscountPercent,
+          existing?.id ?? null, id, vColor, vSize, vCny, vTjs, vStock, vWeight, vVolume, vSku, vImg,
+          quantityDiscountMin, quantityDiscountPercent, vMarkup,
         );
       }
     } else if (default_weight_kg !== undefined && default_weight_kg !== null) {
@@ -4001,6 +4034,11 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
         const newTjs = calculateVariantPriceTjs(v.price_cny, weightNum, volumeFromSpecs || v.volume_m3);
         updateVar.run(weightNum, volumeFromSpecs || v.volume_m3, newTjs, v.id);
       }
+    }
+    db.exec('COMMIT;');
+    } catch (error) {
+      db.exec('ROLLBACK;');
+      throw error;
     }
 
     return res.json({
@@ -4453,7 +4491,9 @@ app.post('/api/add-product', (req, res, next) => {
     if (preserve_reviewed_data !== true || !manual_description) {
       finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
     }
-    finalDesc = ensureOrderDeliveryNotice(finalDesc);
+    finalDesc = finalDeliveryType === 'stock'
+      ? cleanProductDescription(removeOrderDeliveryNotice(finalDesc))
+      : ensureOrderDeliveryNotice(finalDesc);
     const categoryId = resolveCategoryId(finalCategory);
 
     // Генерируем уникальный артикул базового товара
@@ -4725,7 +4765,9 @@ app.post('/api/parse-product-html', async (req, res) => {
       analysis.category_name,
       searchableSpecs,
     );
-    finalDesc = ensureOrderDeliveryNotice(finalDesc);
+    finalDesc = delivery_type === 'stock'
+      ? cleanProductDescription(removeOrderDeliveryNotice(finalDesc))
+      : ensureOrderDeliveryNotice(finalDesc);
 
     const finalProduct = {
       title: finalTitle,
@@ -5663,7 +5705,7 @@ app.get('/somon-feed.xml', (_req, res) => {
     }
 
     const products = db.prepare(`
-      SELECT p.id, p.title, p.description, p.category_id, p.main_image, p.images,
+      SELECT p.id, p.title, p.description, p.delivery_type, p.category_id, p.main_image, p.images,
              p.specifications,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
              GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images
@@ -5676,6 +5718,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       id: number;
       title: string;
       description: string | null;
+      delivery_type: string | null;
       category_id: number | null;
       main_image: string | null;
       images: string | null;
@@ -5728,7 +5771,10 @@ app.get('/somon-feed.xml', (_req, res) => {
 
       const title = cleanSomonTitle(product.title);
       if (!title) continue;
-      const description = ensureOrderDeliveryNotice(String(product.description || product.title))
+      const sourceDescription = String(product.description || product.title);
+      const description = (product.delivery_type === 'stock'
+        ? removeOrderDeliveryNotice(sourceDescription)
+        : ensureOrderDeliveryNotice(sourceDescription))
         .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
         .replace(/<[^>]*>/g, ' ')
         .replace(/\s+/g, ' ')
@@ -5778,7 +5824,7 @@ app.get('/somon-feed.xml', (_req, res) => {
 });
 
 function cleanSearchText(value: string | null): string {
-  return String(value || '')
+  return removeOrderDeliveryNotice(String(value || ''))
     .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
     .replace(/<[^>]*>/g, ' ')
     .replace(/\s+/g, ' ')
@@ -5787,14 +5833,7 @@ function cleanSearchText(value: string | null): string {
 
 function makeSearchTitle(title: string): string {
   const cleanTitle = cleanSearchText(title) || 'Товар';
-  const prefix = 'Купить ';
-  const suffix = ' в Таджикистане | M.Savdo';
-  const maxLength = 70;
-  const titleLimit = maxLength - prefix.length - suffix.length;
-  const compactTitle = Array.from(cleanTitle).length > titleLimit
-    ? `${Array.from(cleanTitle).slice(0, titleLimit - 1).join('').trimEnd()}…`
-    : cleanTitle;
-  return `${prefix}${compactTitle}${suffix}`;
+  return `${cleanTitle} — купить в Таджикистане | M.Savdo`;
 }
 
 function makeSearchDescription(
@@ -5811,15 +5850,14 @@ function makeSearchDescription(
   const priceLabel = minPrice > 0
     ? `Цена ${minPrice}${maxPrice > minPrice ? `–${maxPrice}` : ''} сомони.`
     : 'Цену уточняйте онлайн.';
-  const deliveryLabel = 'Доставка из Китая в Таджикистан — 18–30 дней.';
-  const availabilityLabel = deliveryType === 'stock'
-    ? 'Также в наличии в Душанбе.'
-    : 'Закажите онлайн.';
+  const deliveryLabel = deliveryType === 'stock'
+    ? 'В наличии в Душанбе.'
+    : 'Ориентировочная доставка из Китая в Таджикистан — 12–35 дней.';
   const details = cleanSearchText(description);
   const detailsLabel = details && details.toLocaleLowerCase('ru') !== cleanTitle.toLocaleLowerCase('ru')
     ? ` ${Array.from(details).slice(0, 70).join('').trim()}`
     : '';
-  return `Купить ${cleanTitle}${categoryLabel} в Таджикистане на M.Savdo. ${priceLabel} Недорого, хорошее качество. ${deliveryLabel} ${availabilityLabel}${detailsLabel}`
+  return `Купить ${cleanTitle}${categoryLabel} в Таджикистане на M.Savdo. ${priceLabel} ${deliveryLabel}${detailsLabel}`
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 320);
@@ -5859,7 +5897,7 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
 
     const offset = (page - 1) * SEO_SITEMAP_PAGE_SIZE;
     const products = db.prepare(`
-      SELECT id, title, created_at, main_image, images
+      SELECT id, title, main_image, images
       FROM products
       WHERE status = 'active'
       ORDER BY id DESC
@@ -5867,7 +5905,6 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
     `).all(SEO_SITEMAP_PAGE_SIZE, offset) as Array<{
       id: number;
       title: string;
-      created_at: string | null;
       main_image: string | null;
       images: string | null;
     }>;
@@ -5891,10 +5928,6 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
     }
 
     const productEntries = products.map((product) => {
-      const timestamp = product.created_at ? Date.parse(product.created_at) : NaN;
-      const lastModified = Number.isFinite(timestamp)
-        ? `<lastmod>${new Date(timestamp).toISOString().slice(0, 10)}</lastmod>`
-        : '';
       const imageEntries = getPublicProductImageUrls(
         product.id,
         product.main_image,
@@ -5904,16 +5937,53 @@ app.get('/sitemap-products-:page.xml', (req, res) => {
       )
         .map((image) => `<image:image><image:loc>${escapeXml(image)}</image:loc></image:image>`)
         .join('');
-      return `<url><loc>${escapeXml(getPublicProductUrl(product.id, product.title))}</loc>${lastModified}${imageEntries}</url>`;
+      return `<url><loc>${escapeXml(getPublicProductUrl(product.id, product.title))}</loc>${imageEntries}</url>`;
     }).join('');
     const homeEntry = page === 1 ? `<url><loc>${escapeXml(`${seoSiteUrl}/`)}</loc></url>` : '';
+    const catalogEntry = `<url><loc>${escapeXml(`${seoSiteUrl}/catalog/${page}`)}</loc></url>`;
 
     return res.type('application/xml')
       .set('Cache-Control', 'public, max-age=900')
-      .send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">${homeEntry}${productEntries}</urlset>`);
+      .send(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">${homeEntry}${catalogEntry}${productEntries}</urlset>`);
   } catch (error) {
     console.error('[SEO Sitemap] Не удалось сформировать раздел карты сайта:', error);
     return res.status(500).type('text/plain').send('Не удалось сформировать карту сайта');
+  }
+});
+
+app.get('/catalog/:page', (req, res) => {
+  try {
+    const page = Number(req.params.page);
+    if (!/^[1-9]\d*$/.test(req.params.page) || !Number.isSafeInteger(page)) {
+      return res.status(404).type('text/plain').send('Страница каталога не найдена');
+    }
+    const total = (db.prepare("SELECT COUNT(*) AS count FROM products WHERE status = 'active'").get() as { count: number }).count;
+    const pageCount = Math.max(1, Math.ceil(total / SEO_SITEMAP_PAGE_SIZE));
+    if (page > pageCount) return res.status(404).type('text/plain').send('Страница каталога не найдена');
+    const products = db.prepare(`
+      SELECT id, title FROM products WHERE status = 'active'
+      ORDER BY id DESC LIMIT ? OFFSET ?
+    `).all(SEO_SITEMAP_PAGE_SIZE, (page - 1) * SEO_SITEMAP_PAGE_SIZE) as Array<{ id: number; title: string }>;
+    const productLinks = products.map((product) =>
+      `<li><a href="${escapeHtml(getPublicProductUrl(product.id, product.title))}">${escapeHtml(product.title)}</a></li>`
+    ).join('');
+    const previous = page > 1 ? `<a href="/catalog/${page - 1}">Предыдущая страница</a>` : '';
+    const next = page < pageCount ? `<a href="/catalog/${page + 1}">Следующая страница</a>` : '';
+    const canonicalUrl = `${seoSiteUrl}/catalog/${page}`;
+    return res.type('html').set('Cache-Control', 'public, max-age=900').send(`<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Каталог товаров M.Savdo — страница ${page}</title>
+<meta name="description" content="Каталог товаров M.Savdo (Маркази Савдо) с доставкой в Таджикистан. Страница ${page}.">
+<link rel="canonical" href="${escapeHtml(canonicalUrl)}">
+<style>body{font:16px/1.6 Arial,sans-serif;max-width:900px;margin:auto;padding:20px;color:#172033}li{margin:12px 0}nav a{margin-right:20px}</style>
+</head><body><header><a href="/">M.Savdo — Маркази Савдо</a></header><main>
+<h1>Каталог товаров M.Savdo</h1><p>Страница ${page} из ${pageCount}.</p>
+${productLinks ? `<ul>${productLinks}</ul>` : '<p>Товары пока не опубликованы.</p>'}
+<nav aria-label="Страницы каталога">${previous}${next}</nav>
+<p><a href="/">Открыть витрину и поиск товаров</a></p></main></body></html>`);
+  } catch (error) {
+    console.error('[SEO Catalog] Не удалось сформировать страницу каталога:', error);
+    return res.status(500).type('text/plain').send('Не удалось загрузить каталог');
   }
 });
 
@@ -5987,16 +6057,11 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 
     const product = db.prepare(`
       SELECT p.id, p.title, p.description, p.base_sku, p.status, p.delivery_type,
-             p.main_image, p.images, p.specifications, p.created_at, p.discount_percent,
-             c.name AS category_name,
-             MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS min_price_tjs,
-             MAX(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS max_price_tjs,
-             COUNT(CASE WHEN v.price_tjs > 0 THEN 1 END) AS offer_count
+             p.main_image, p.images, p.specifications, p.discount_percent,
+             c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
-      LEFT JOIN product_variants v ON v.product_id = p.id
       WHERE p.id = ? AND p.status = 'active'
-      GROUP BY p.id
     `).get(productId) as {
       id: number;
       title: string;
@@ -6007,12 +6072,8 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       main_image: string | null;
       images: string | null;
       specifications: string | null;
-      created_at: string | null;
       discount_percent: number;
       category_name: string | null;
-      min_price_tjs: number | null;
-      max_price_tjs: number | null;
-      offer_count: number;
     } | undefined;
 
     if (!product) {
@@ -6027,25 +6088,13 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     }
 
     const discountPercent = Number(product.discount_percent) || 0;
-    const originalMinPrice = Number(product.min_price_tjs) || 0;
-    const originalMaxPrice = Number(product.max_price_tjs) || originalMinPrice;
-    const minPrice = calculateDiscountedPriceTjs(originalMinPrice, discountPercent);
-    const maxPrice = calculateDiscountedPriceTjs(originalMaxPrice, discountPercent);
-    const description = makeSearchDescription(
-      product.description,
-      product.title,
-      product.category_name,
-      minPrice,
-      maxPrice,
-      product.delivery_type,
-    );
-    const searchTitle = makeSearchTitle(product.title);
     const variants = db.prepare(`
-      SELECT color, size, price_tjs, stock, variant_sku, image_url
+      SELECT id, color, size, price_tjs, stock, variant_sku, image_url
       FROM product_variants
       WHERE product_id = ?
       ORDER BY id ASC
     `).all(productId) as Array<{
+      id: number;
       color: string | null;
       size: string | null;
       price_tjs: number;
@@ -6059,7 +6108,22 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       product.images,
       variants.map((variant) => variant.image_url),
     );
-    const discountedVariants = applyProductDiscount(variants, discountPercent);
+    const discountedVariants = applyProductDiscount(variants.filter((variant) =>
+      Number.isSafeInteger(variant.id) && variant.id > 0 &&
+      Number.isSafeInteger(variant.price_tjs) && variant.price_tjs > 0
+    ), discountPercent);
+    const prices = discountedVariants.map((variant) => variant.price_tjs);
+    const minPrice = prices.length ? Math.min(...prices) : 0;
+    const maxPrice = prices.length ? Math.max(...prices) : 0;
+    const description = makeSearchDescription(
+      product.description,
+      product.title,
+      product.category_name,
+      minPrice,
+      maxPrice,
+      product.delivery_type,
+    );
+    const searchTitle = makeSearchTitle(product.title);
     let specifications: Array<{ name: string; value: string }> = [];
     if (product.specifications) {
       try {
@@ -6075,9 +6139,6 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       }
     }
     const price = minPrice;
-    const availability = product.delivery_type === 'stock'
-      ? 'https://schema.org/InStock'
-      : 'https://schema.org/PreOrder';
     const structuredData = {
       '@context': 'https://schema.org',
       '@type': 'Product',
@@ -6087,35 +6148,12 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       url: canonicalUrl,
       ...(imageList.length ? { image: imageList } : {}),
       ...(product.category_name ? { category: product.category_name } : {}),
-      ...(discountedVariants.length ? {
-        hasVariant: discountedVariants.map((variant) => ({
-          '@type': 'Product',
-          name: [product.title, variant.color, variant.size].filter(Boolean).join(' '),
-          sku: variant.variant_sku,
-          ...(variant.color ? { color: variant.color } : {}),
-          ...(variant.size ? { size: variant.size } : {}),
-          ...(variant.image_url ? {
-            image: getWatermarkedImageUrl(productId, variant.image_url) || undefined,
-          } : {}),
-          ...(variant.price_tjs > 0 ? {
-            offers: {
-              '@type': 'Offer',
-              priceCurrency: 'TJS',
-              price: variant.price_tjs,
-              availability,
-              url: canonicalUrl,
-            },
-          } : {}),
-        })),
-      } : {}),
       ...(price > 0 ? {
         offers: {
-          '@type': 'AggregateOffer',
+          '@type': 'Offer',
           priceCurrency: 'TJS',
-          lowPrice: price,
-          highPrice: maxPrice || price,
-          offerCount: Math.max(1, product.offer_count || 0),
-          availability,
+          price,
+          ...(product.delivery_type === 'stock' ? { availability: 'https://schema.org/InStock' } : {}),
           url: canonicalUrl,
           seller: {
             '@type': 'Organization',
@@ -6152,13 +6190,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       .join('');
     const galleryHtml = imageList.map((image) => `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`).join('');
     const safeStructuredData = JSON.stringify([structuredData, breadcrumbData]).replace(/</g, '\\u003c');
-    const isSearchCrawler = /googlebot|bingbot|yandex(bot)?|baiduspider|duckduckbot|slurp|facebookexternalhit|twitterbot/i
-      .test(req.get('user-agent') || '');
-    const appRedirect = isSearchCrawler
-      ? ''
-      : `<script>window.location.replace('/?product=${product.id}')</script>`;
-
-    res.set('Cache-Control', 'public, max-age=300').set('Vary', 'User-Agent');
+    res.set('Cache-Control', 'public, max-age=300');
     return res.type('html').send(`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(searchTitle)}</title>
@@ -6173,10 +6205,12 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 <article class="product"><div class="gallery">${galleryHtml || '<p>Фото товара скоро появится</p>'}</div>
 <section class="details"><p>${escapeHtml(product.category_name || 'Каталог M.Savdo')}</p><h1>${escapeHtml(product.title)}</h1>
 <p class="price">${escapeHtml(priceLabel)}</p><p>${escapeHtml(description)}</p>
+${cleanSearchText(product.description) ? `<h2>Описание</h2><p>${escapeHtml(cleanSearchText(product.description))}</p>` : ''}
 ${specsHtml ? `<h2>Характеристики</h2><ul class="specs">${specsHtml}</ul>` : ''}
 ${variantsHtml ? `<h2>Варианты</h2><ul class="specs">${variantsHtml}</ul>` : ''}
-<p>Артикул: ${escapeHtml(product.base_sku)}</p><a class="button" href="${escapeHtml(whatsappUrl)}" target="_blank" rel="noopener noreferrer">Уточнить и заказать в WhatsApp</a>
-<a class="button secondary" href="/">Открыть каталог M.Savdo</a></section></article></main>${appRedirect}</body></html>`);
+<p>Артикул: ${escapeHtml(product.base_sku)}</p><a class="button secondary" href="/?product=${product.id}">Выбрать вариант и заказать на сайте</a>
+<a class="button" href="${escapeHtml(whatsappUrl)}" target="_blank" rel="noopener noreferrer">Уточнить и заказать в WhatsApp</a>
+<p><a href="/catalog/1">Каталог товаров M.Savdo</a></p></section></article></main></body></html>`);
   } catch (error) {
     console.error('[SEO Product Page] Не удалось сформировать страницу товара:', error);
     return res.status(500).type('text/plain').send('Не удалось загрузить страницу товара');

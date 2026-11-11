@@ -7,6 +7,7 @@ test("Vercel forwards product and sitemap routes without intercepting the storef
   const expected = new Map([
     ["/product/38/%D1%82%D0%BE%D0%B2%D0%B0%D1%80", "https://api.msavdo.shop/product/:path*"],
     ["/product/38", "https://api.msavdo.shop/product/:path*"],
+    ["/catalog/1", "https://api.msavdo.shop/catalog/:path*"],
     ["/robots.txt", "https://api.msavdo.shop/robots.txt"],
     ["/sitemap.xml", "https://api.msavdo.shop/sitemap.xml"],
     ["/sitemap-products-1.xml", "https://api.msavdo.shop/sitemap-products-:page.xml"],

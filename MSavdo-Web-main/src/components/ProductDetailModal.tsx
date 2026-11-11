@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, ProductVariant, CartItem } from '../types';
-import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play } from 'lucide-react';
+import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play, ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { ProductShareButton } from './ProductShareButton';
@@ -282,7 +282,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
       window.removeEventListener('keydown', closeOnEscape);
       window.removeEventListener('popstate', closeOnBack);
     };
-  }, [isPhotoZoomed]);
+  }, [isPhotoZoomed, currentMedia, currentImage, allGalleryImages, mediaSlides]);
 
   if (!product) return null;
 
@@ -412,7 +412,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     />
                   );
                 })()
-              ) : (
+              ) : currentImage ? (
                 <>
                   <img
                     src={currentMedia?.src || currentImage}
@@ -429,16 +429,34 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     className="relative h-full w-full cursor-zoom-in object-contain"
                   />
                 </>
+              ) : (
+                <div className="flex h-full items-center justify-center text-sm text-slate-500">{t('noPhoto')}</div>
               )}
-              {currentMedia?.type !== 'video' && (
+              {currentMedia?.type !== 'video' && currentImage && (
                 <button
                   type="button"
                   onClick={openPhotoZoom}
                   aria-label={t('zoomPhoto')}
-                  className="absolute right-2 top-2 rounded-full bg-slate-950/70 p-2 text-white shadow-md transition hover:bg-slate-950"
+                  className={`absolute ${productVideos.length ? 'left-2' : 'right-2'} top-2 rounded-full bg-slate-950/70 p-2 text-white shadow-md transition hover:bg-slate-950`}
                 >
                   <ZoomIn className="h-4 w-4" />
                 </button>
+              )}
+
+              {mediaSlides.length > 1 && (
+                <>
+                  <button type="button" onClick={() => moveMedia(-1)} aria-label={t('previousMedia')}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-slate-950/70 p-2 text-white shadow-md hover:bg-slate-950">
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                  <button type="button" onClick={() => moveMedia(1)} aria-label={t('nextMedia')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-slate-950/70 p-2 text-white shadow-md hover:bg-slate-950">
+                    <ChevronRight className="h-5 w-5" />
+                  </button>
+                  <span className="absolute bottom-2 right-2 rounded-md bg-slate-950/70 px-2 py-1 text-xs font-semibold text-white" aria-live="polite">
+                    {selectedMediaIndex + 1} / {mediaSlides.length}
+                  </span>
+                </>
               )}
 
               {productVideos.length > 0 && (
@@ -481,8 +499,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                       key={`${slide.type}-${slide.src}`}
                       onClick={() => {
                         setSelectedMediaIndex(idx);
-                        closePhotoZoom();
                       }}
+                      aria-pressed={isSelected}
                       aria-label={slide.type === 'video'
                         ? `${t('videoReview')} ${productVideos.indexOf(slide.src) + 1}`
                         : `${t('photo')} ${idx + 1}`}
@@ -908,6 +926,21 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
           onClick={(event) => event.stopPropagation()}
           className="max-h-full max-w-full object-contain"
         />
+        {allGalleryImages.length > 1 && (
+          <>
+            <button type="button" onClick={() => moveZoomedPhoto(-1)} aria-label={t('previousPhoto')}
+              className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-white/20 p-2 text-white hover:bg-white/30">
+              <ChevronLeft className="h-6 w-6" />
+            </button>
+            <button type="button" onClick={() => moveZoomedPhoto(1)} aria-label={t('nextPhoto')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-white/20 p-2 text-white hover:bg-white/30">
+              <ChevronRight className="h-6 w-6" />
+            </button>
+            <span className="absolute bottom-4 rounded-full bg-white/20 px-3 py-1 text-sm text-white" aria-live="polite">
+              {Math.max(allGalleryImages.indexOf(currentMedia?.src || currentImage), 0) + 1} / {allGalleryImages.length}
+            </span>
+          </>
+        )}
       </div>
     )}
     </>

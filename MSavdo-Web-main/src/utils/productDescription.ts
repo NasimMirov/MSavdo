@@ -1,4 +1,4 @@
-export const ORDER_DELIVERY_NOTICE = 'Доставка 18-30 дней!';
+export const ORDER_DELIVERY_NOTICE = 'Доставка 12–35 дней!';
 export const COLOR_IMAGE_SPEC_PREFIX = 'Фото цвета: ';
 const PRODUCT_COLOR_SPEC_PATTERN = /^(?:доступные\s+цвета|цвет(?:а)?|цвет\s+товара|color(?:\s+classification)?|colou?r(?:\s+classification)?|颜色(?:分类)?|顏色)$/i;
 const PRODUCT_COLOR_LIST_SEPARATOR = /[,，、;；|\n/]+/;
@@ -123,11 +123,14 @@ export function cleanProductDescription(description: string): string {
   return lines.join('\n');
 }
 
-export function ensureOrderDeliveryNotice(description: string): string {
-  const body = description
-    .replace(/^\s*(?:Доставка\s+(?:(?:18\s*[-–—]\s*(?:20|30))|до\s*30)\s+дней!?\s*)+/i, '')
-    .trim();
+export function removeOrderDeliveryNotice(description: string): string {
+  return description.replace(
+    /^\s*(?:Доставка\s+(?:(?:18\s*[-–—]\s*(?:20|30))|(?:12\s*[-–—]\s*35)|до\s*30)\s+дней!?\s*)+/i,
+    '',
+  ).trim();
+}
 
-  const cleanBody = cleanProductDescription(body);
+export function ensureOrderDeliveryNotice(description: string): string {
+  const cleanBody = cleanProductDescription(removeOrderDeliveryNotice(description));
   return cleanBody ? `${ORDER_DELIVERY_NOTICE}\n\n${cleanBody}` : ORDER_DELIVERY_NOTICE;
 }
