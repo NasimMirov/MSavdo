@@ -72,7 +72,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   return (
     <article 
       onClick={() => onSelect(product)}
-      className="group cursor-pointer bg-white rounded-2xl sm:rounded-3xl border border-slate-200/90 overflow-hidden hover:shadow-xl hover:border-amber-400/80 transition-all duration-300 flex flex-col justify-between"
+      className="group flex min-w-0 cursor-pointer flex-col overflow-hidden rounded-sm border border-slate-200 bg-white transition-colors hover:border-amber-400"
     >
       {/* Изображение */}
       <div className="relative aspect-square bg-slate-100 overflow-hidden flex items-center justify-center">
@@ -116,12 +116,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
         {/* Срок доставки */}
         {isStock ? (
-          <div className="absolute top-2 right-2 max-w-[72%] whitespace-nowrap bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-0.5">
+          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] items-center gap-0.5 rounded-sm bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold leading-tight text-emerald-800">
             <Truck className="w-2.5 h-2.5 shrink-0" />
             <span className="min-w-0 leading-tight">{t('inStockOneDay')}</span>
           </div>
         ) : (
-          <div className="absolute top-2 right-2 max-w-[72%] whitespace-nowrap bg-[#f4c542]/95 text-slate-900 text-[8px] font-bold px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-0.5">
+          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] items-center gap-0.5 rounded-sm bg-[#f4c542] px-1.5 py-0.5 text-[9px] font-bold leading-tight text-black">
             <Clock className="w-2.5 h-2.5 shrink-0" />
             <span className="min-w-0 leading-tight">{t('delivery18to30')}</span>
           </div>
@@ -142,13 +142,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       </div>
 
       {/* Информация о товаре */}
-      <div className="flex flex-col px-2 pb-1.5 pt-2 sm:px-3 sm:pb-2 sm:pt-3">
+      <div className="flex flex-1 flex-col gap-0.5 px-2 py-1.5">
         <div>
-          <div className="mb-0.5 text-[8px] font-bold uppercase tracking-[0.1em] text-slate-500 sm:mb-1 sm:text-[9px]">
-            <span className="line-clamp-1">{product.category_name || 'Каталог'}</span>
-          </div>
-
-          <h3 className="text-[12px] font-bold leading-[1.2] text-slate-900 line-clamp-2 transition-colors group-hover:text-amber-700 font-heading sm:text-sm">
+          <h3 className="line-clamp-2 text-[12px] font-semibold leading-[1.15] text-slate-900 transition-colors group-hover:text-amber-700 sm:text-sm">
             <a
               href={productUrl}
               className="text-inherit no-underline"
@@ -160,28 +156,27 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         </div>
 
         {quantityDealLabel && (
-          <div className="mt-1.5 flex items-center gap-1 text-[9px] font-bold leading-tight text-emerald-700 sm:text-[10px]">
+          <div className="flex items-center gap-1 text-[10px] font-semibold leading-tight text-emerald-700 sm:text-xs">
             <BadgePercent className="h-3 w-3 shrink-0" aria-hidden="true" />
             <span>{quantityDealLabel}</span>
           </div>
         )}
 
-        <div className="mt-1.5 flex items-center justify-between gap-1.5 px-0.5 py-0.5 sm:mt-2 sm:px-1 sm:py-1">
+        <div className="mt-auto flex flex-wrap items-end justify-between gap-x-1 gap-y-0.5 pt-0.5">
           <div className="min-w-0">
-            <div className="text-[7px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[8px]">{t('inSomoni')}</div>
             {hasDiscount && (
-              <div className="mb-1 whitespace-nowrap text-[10px] font-semibold leading-none text-slate-500 line-through">
+              <div className="mb-1 text-[10px] font-semibold leading-none text-slate-500 line-through">
                 {minOriginalPrice.toLocaleString('ru-RU')} с.
               </div>
             )}
-            <div className={`mt-0.5 whitespace-nowrap text-[17px] font-extrabold leading-none tracking-tight sm:text-xl ${hasDiscount ? 'product-sale-price' : 'text-slate-950 price-text'}`}>
-              {maxPrice > minPrice && <span className="mr-0.5 text-[10px] font-bold text-slate-500 sm:text-xs">от</span>}
+            <div className={`text-[16px] font-extrabold leading-none tracking-tight sm:text-lg ${hasDiscount ? 'product-sale-price' : 'text-slate-950 price-text'}`}>
+              {maxPrice > minPrice && <span className="mr-0.5 text-[10px] font-bold text-slate-500 sm:text-xs">{t('priceFrom')}</span>}
               {minPrice.toLocaleString('ru-RU')}
               <span className="ml-1 text-[9px] font-bold text-slate-600 sm:text-[10px]">с.</span>
             </div>
           </div>
-          <span className="shrink-0 text-[7px] font-semibold text-slate-500 sm:text-[8px]">
-            {isStock ? 'В наличии' : 'Под заказ'}
+          <span className={`text-[9px] font-semibold leading-tight sm:text-[10px] ${isStock ? 'text-emerald-700' : 'text-slate-500'}`}>
+            {isStock ? t('inStock') : t('onOrder')}
           </span>
         </div>
       </div>

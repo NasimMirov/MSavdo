@@ -526,11 +526,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
             <div className="hidden sm:grid grid-cols-2 gap-3 text-xs text-slate-500 pt-1">
               <div className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100">
                 <Truck className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Фиксированная бережная доставка</span>
+                <span>{product.delivery_type === 'stock' ? t('inStock') : t('delivery18to30')}</span>
               </div>
               <div className="flex items-center gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Гарантия возврата на карту</span>
+                <span>{t('refundAccordingToRules')}</span>
               </div>
             </div>
           </div>
@@ -542,8 +542,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               <div className="flex items-center justify-between text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1 sm:mb-2">
                 <div className="flex items-center gap-2 truncate">
                   <span>{product.category_name || t('catalog')}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{t('originalCollection')}</span>
                 </div>
               </div>
 
@@ -662,7 +660,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     <span className="font-bold text-slate-900">
                       {t('selectedSize')} <span className="font-medium text-emerald-800">{selectedSize}</span>
                     </span>
-                    <span className="text-slate-400 text-[11px]">Таблица размеров</span>
                   </div>
 
                   <div className="flex flex-wrap gap-1 sm:gap-1.5">

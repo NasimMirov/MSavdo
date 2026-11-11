@@ -86,6 +86,7 @@ export default function App() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [categoriesTree, setCategoriesTree] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<'initial' | 'more' | null>(null);
   const [whatsappPhone, setWhatsappPhone] = useState('992444431');
   const [showWhatsAppHelp, setShowWhatsAppHelp] = useState(false);
   const [dismissedWhatsAppHelp, setDismissedWhatsAppHelp] = useState(() => {
@@ -305,7 +306,9 @@ export default function App() {
 
       const data = await safeFetchJson(`/api/products?${params.toString()}`);
       if (requestId !== catalogRequestId.current) return;
-      const page = Array.isArray(data?.products) ? data.products as Product[] : [];
+      if (!Array.isArray(data?.products)) throw new Error('Сервер не вернул список товаров');
+      const page = data.products as Product[];
+      setCatalogError(null);
       if (!page.slice(0, 2).some((product) => product.main_image)) {
         window.dispatchEvent(new Event('msavdo:primary-image-ready'));
       }
@@ -324,6 +327,7 @@ export default function App() {
     } catch (error) {
       if (requestId === catalogRequestId.current) {
         console.error('[Catalog Loading Error]', error);
+        setCatalogError(append ? 'more' : 'initial');
         addToast('error', t('catalogLoadError'), t('catalogLoadRetry'));
       }
     } finally {
@@ -459,6 +463,9 @@ export default function App() {
       initialCatalogFilters.current = false;
       return;
     }
+    catalogRequestId.current += 1;
+    setCatalogError(null);
+    setIsLoading(true);
     const timer = window.setTimeout(() => { void fetchProducts(); }, searchQuery ? 250 : 0);
     return () => window.clearTimeout(timer);
   }, [searchQuery, selectedCategoryId, deliveryFilter, sortBy]);
@@ -598,46 +605,6 @@ export default function App() {
   const handleClearCart = () => {
     setCart([]);
   };
-
-  // Фильтрация и умная сортировка товаров (Требование 7)
-  const filteredProducts = useMemo(() => {
-    const list = products.filter((p) => {
-      if (deliveryFilter === 'stock' && p.delivery_type !== 'stock') return false;
-      if (deliveryFilter === 'order' && p.delivery_type === 'stock') return false;
-
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const titleMatch = p.title.toLowerCase().includes(q);
-        const skuMatch = p.base_sku.toLowerCase().includes(q);
-        const descMatch = (p.description || '').toLowerCase().includes(q);
-        if (!titleMatch && !skuMatch && !descMatch) return false;
-      }
-
-      if (selectedCategoryId !== null) {
-        if (p.category_id === selectedCategoryId) return true;
-        const rootCat = categoriesTree.find((c) => c.id === selectedCategoryId);
-        if (rootCat && rootCat.subcategories) {
-          const subIds = rootCat.subcategories.map((s) => s.id);
-          if (p.category_id && subIds.includes(p.category_id)) return true;
-        }
-        return false;
-      }
-
-      return true;
-    });
-
-    // Сортировка как в популярных маркетплейсах
-    const sorted = [...list];
-    if (sortBy === 'price_asc') {
-      sorted.sort((a, b) => (a.min_price_tjs || 0) - (b.min_price_tjs || 0));
-    } else if (sortBy === 'price_desc') {
-      sorted.sort((a, b) => (b.min_price_tjs || 0) - (a.min_price_tjs || 0));
-    } else if (sortBy === 'newest') {
-      sorted.sort((a, b) => b.id - a.id);
-    }
-
-    return sorted;
-  }, [products, searchQuery, selectedCategoryId, deliveryFilter, categoriesTree, sortBy]);
 
   const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -979,16 +946,25 @@ export default function App() {
             {/* СЕТКА ТОВАРОВ: 2 КОЛОНКИ НА СМАРТФОНАХ (ЧЕТКО И КРАСИВО) */}
             <section>
               {isLoading ? (
-                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-6">
+                <div className="grid grid-cols-2 gap-1 sm:grid-cols-2 sm:gap-2 md:grid-cols-3 xl:grid-cols-4">
                   {[...Array(2)].map((_, i) => (
-                    <div key={i} className="bg-white rounded-2xl p-3 border border-slate-200 animate-pulse space-y-3">
-                      <div className="aspect-square bg-slate-200 rounded-xl" />
-                      <div className="h-4 bg-slate-200 rounded w-3/4" />
-                      <div className="h-3 bg-slate-100 rounded w-1/2" />
+                    <div key={i} className="overflow-hidden rounded-sm border border-slate-200 bg-white animate-pulse">
+                      <div className="aspect-square bg-slate-200" />
+                      <div className="space-y-2 p-2">
+                        <div className="h-4 bg-slate-200 rounded w-3/4" />
+                        <div className="h-3 bg-slate-100 rounded w-1/2" />
+                      </div>
                     </div>
                   ))}
                 </div>
-              ) : filteredProducts.length === 0 ? (
+              ) : catalogError === 'initial' ? (
+                <div role="alert" className="mx-auto my-6 max-w-lg space-y-3 rounded-xl border border-slate-200 bg-white p-6 text-center">
+                  <h3 className="text-sm font-bold text-slate-900">{t('catalogLoadError')}</h3>
+                  <p className="text-xs text-slate-500">{t('catalogLoadRetry')}</p>
+                  <button type="button" onClick={() => void fetchProducts()}
+                    className="min-h-10 rounded-lg bg-amber-400 px-4 text-xs font-bold text-black">{t('retry')}</button>
+                </div>
+              ) : products.length === 0 ? (
                 <div className="bg-white border border-slate-200 rounded-3xl p-8 sm:p-12 text-center space-y-3 shadow-xs max-w-lg mx-auto my-6">
                   <Package className="w-10 h-10 text-amber-500 mx-auto" />
                   <h3 className="text-sm sm:text-base font-bold text-slate-900">
@@ -1008,8 +984,8 @@ export default function App() {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
-                  {filteredProducts.map((product, index) => (
+                <div className="grid grid-cols-2 gap-1 sm:grid-cols-2 sm:gap-2 md:grid-cols-3 xl:grid-cols-4">
+                  {products.map((product, index) => (
                     <ProductCard
                       key={product.id}
                       product={product}
@@ -1022,6 +998,9 @@ export default function App() {
               )}
             </section>
 
+            {catalogError === 'more' && (
+              <p role="alert" className="text-center text-xs text-red-700">{t('catalogLoadError')} {t('catalogLoadRetry')}</p>
+            )}
             {hasMoreProducts && (
               <button
                 type="button"
@@ -1036,7 +1015,7 @@ export default function App() {
             {selectedCategoryId !== null && recommendedProducts.length > 0 && (
               <section className="space-y-3 border-t border-slate-200 pt-4">
                 <h2 className="text-sm font-bold text-slate-900">{t('relatedBranchProducts')}</h2>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 sm:gap-6">
+                <div className="grid grid-cols-2 gap-1 sm:grid-cols-3 sm:gap-2 md:grid-cols-4">
                   {recommendedProducts
                     .filter((product) => !products.some((current) => current.id === product.id))
                     .map((product) => (

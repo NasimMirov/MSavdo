@@ -50,6 +50,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const [quote, setQuote] = useState<Quote | null>(null);
   const [quotedKey, setQuotedKey] = useState('');
   const [quoteError, setQuoteError] = useState('');
+  const [quoteRetry, setQuoteRetry] = useState(0);
   const [offers, setOffers] = useState<Array<{ id: number; title: string }>>([]);
   const [offersError, setOffersError] = useState('');
   const cartKey = JSON.stringify(items.map((item) => ({ product_id: item.product_id, variant_id: item.variant_id, quantity: item.quantity })));
@@ -72,7 +73,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       }
     }, 250);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [cartKey, promoCode, isOpen]);
+  }, [cartKey, promoCode, isOpen, quoteRetry]);
   useEffect(() => {
     if (!isOpen) return;
     const controller = new AbortController();
@@ -345,12 +346,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   const currentOriginalPrice = quoteItem?.original_price_tjs ?? item.original_price_tjs ?? item.price_tjs;
                   return (
                   <div key={item.id} className="py-4 flex items-start gap-3">
-                    <img
-                      src={item.image || 'https://placehold.co/100x100?text=M.Savdo'}
-                      alt={item.title}
-                      referrerPolicy="no-referrer"
-                      className="w-16 h-16 rounded-xl object-contain bg-white border border-slate-200 shrink-0"
-                    />
+                    {item.image ? (
+                      <img src={item.image} alt={item.title} referrerPolicy="no-referrer"
+                        className="w-16 h-16 rounded-xl object-contain bg-white border border-slate-200 shrink-0" />
+                    ) : (
+                      <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-center text-[10px] text-slate-500">{t('noPhoto')}</div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="text-[10px] font-mono font-bold text-slate-400">
                         {item.variant_sku}
@@ -414,8 +415,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                         <div className="flex items-center border border-slate-200 rounded-lg bg-slate-50">
                           <button
                             onClick={() => onUpdateQuantity(item.id, -1)}
-                            className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-l transition-colors"
-                            title="Уменьшить"
+                            className="flex h-10 w-10 items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-l transition-colors"
+                            aria-label={t('decreaseQuantity')}
                           >
                             <Minus className="w-3 h-3" />
                           </button>
@@ -424,8 +425,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           </span>
                           <button
                             onClick={() => onUpdateQuantity(item.id, 1)}
-                            className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-r transition-colors"
-                            title="Увеличить"
+                            className="flex h-10 w-10 items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-r transition-colors"
+                            aria-label={t('increaseQuantity')}
                           >
                             <Plus className="w-3 h-3" />
                           </button>
@@ -437,8 +438,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           </span>
                           <button
                             onClick={() => onRemoveItem(item.id)}
-                            className="text-slate-400 hover:text-red-600 transition-colors p-1"
-                            title="Удалить"
+                            className="flex h-10 w-10 items-center justify-center text-slate-400 hover:text-red-600 transition-colors"
+                            aria-label={t('removeCartItem')}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -464,7 +465,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 {language === 'ru' ? 'Промокод' : language === 'tg' ? 'Рамзи тахфиф' : 'Promo code'}
                 <input className="mt-1 w-full rounded-lg border p-2 text-sm" maxLength={40} value={promoCode} onChange={(event) => setPromoCode(event.target.value)} />
               </label>
-              {quoteError && <p role="alert" className="text-xs text-red-700">{quoteError}</p>}
+              {quoteError && <div role="alert" className="flex flex-wrap items-center gap-2 text-xs text-red-700">
+                <span>{quoteError}</span>
+                <button type="button" onClick={() => setQuoteRetry((value) => value + 1)}
+                  className="min-h-10 rounded-lg border border-red-300 px-3 font-semibold">{t('retry')}</button>
+              </div>}
               {validQuote && promoCode.trim() && !validQuote.code_applied && <p role="alert" className="text-xs text-red-700">{language === 'ru' ? 'Промокод недействителен или условия не выполнены.' : language === 'tg' ? 'Рамз нодуруст аст ё шартҳо иҷро нашудаанд.' : 'The code is invalid or its conditions are not met.'}</p>}
               {validQuote && validQuote.original_subtotal > validQuote.total && (
                 <div className="flex justify-between text-xs text-slate-600">
