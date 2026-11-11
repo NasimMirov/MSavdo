@@ -4,13 +4,14 @@ import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, P
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { ProductShareButton } from './ProductShareButton';
-import { cleanProductDescription, extractProductColors, extractProductColorImages } from '../utils/productDescription';
+import { cleanProductDescription, extractProductColorImages } from '../utils/productDescription';
 import { calculateQuantityDiscountedPriceTjs } from '../utils/pricing';
+import { orderableVariants, resolveVariant } from '../utils/productVariants';
 
 interface ProductDetailModalProps {
   product: Product | null;
   onClose: () => void;
-  onAddToCart: (item: CartItem) => void;
+  onAddToCart: (item: CartItem) => boolean;
   onOrderNow: (item: CartItem) => void;
   onSelectRelatedProduct: (product: Product) => void;
 }
@@ -23,7 +24,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onSelectRelatedProduct,
 }) => {
   const { t } = useI18n();
-  const variants = product?.variants || [];
+  const variants = useMemo(() => orderableVariants(product?.variants || []), [product?.variants]);
   const productSpecs = useMemo(() => {
     if (!product?.specifications) return [];
     if (Array.isArray(product.specifications)) return product.specifications;
@@ -44,10 +45,6 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     return [];
   }, [product?.specifications]);
 
-  const specificationColors = useMemo(
-    () => extractProductColors(productSpecs, product?.description),
-    [productSpecs, product?.description],
-  );
   const colorImageMappings = useMemo(
     () => extractProductColorImages(productSpecs),
     [productSpecs],
@@ -57,46 +54,38 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const availableColors = useMemo(() => {
     const map = new Map<string, { name: string; img?: string }>();
     variants.forEach((v) => {
-      if (v.color && !/^(?:стандарт|standard|основной цвет)$/i.test(v.color.trim()) && !map.has(v.color)) {
+      if (!map.has(v.color)) {
         map.set(v.color, { name: v.color, img: v.image_url });
       }
     });
-    specificationColors.forEach((name) => {
-      if (!map.has(name)) map.set(name, { name });
-    });
     colorImageMappings.forEach(({ color, imageUrl }) => {
       const existing = Array.from(map.keys()).find((name) => name.toLocaleLowerCase('ru') === color.toLocaleLowerCase('ru'));
-      map.set(existing || color, { name: existing || color, img: imageUrl });
+      if (existing) map.set(existing, { name: existing, img: imageUrl });
     });
     return Array.from(map.values());
-  }, [variants, specificationColors, colorImageMappings]);
+  }, [variants, colorImageMappings]);
 
   // Выбранный цвет
   const [selectedColor, setSelectedColor] = useState<string>(
-    availableColors[0]?.name || variants[0]?.color || 'Стандарт'
+    variants[0]?.color ?? 'Стандарт'
   );
 
   // Доступные размеры для выбранного цвета
   const availableSizesForColor = useMemo(() => {
     const list: string[] = [];
     variants.forEach((v) => {
-      if (v.color === selectedColor && v.size && !list.includes(v.size)) {
+      if (v.color === selectedColor && !list.includes(v.size)) {
         list.push(v.size);
       }
     });
-    // Если для цвета нет специфических, берем все уникальные
-    if (list.length === 0) {
-      variants.forEach((v) => {
-        if (v.size && !list.includes(v.size)) list.push(v.size);
-      });
-    }
     return list;
   }, [variants, selectedColor]);
 
   // Выбранный размер
   const [selectedSize, setSelectedSize] = useState<string>(
-    availableSizesForColor[0] || 'One Size'
+    availableSizesForColor[0] ?? ''
   );
+  const [selectedVariantId, setSelectedVariantId] = useState<number | undefined>();
 
   const [relatedProducts, setRelatedProducts] = useState<Product[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
@@ -152,14 +141,16 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   }, [selectedColor, availableSizesForColor, selectedSize]);
 
   // Поиск активного варианта по комбинации (Цвет + Размер)
-  const activeVariant: ProductVariant | undefined = useMemo(() => {
-    return (
-      variants.find((v) => v.color === selectedColor && v.size === selectedSize) ||
-      variants.find((v) => v.color === selectedColor) ||
-      variants.find((v) => v.size === selectedSize) ||
-      variants[0]
-    );
-  }, [variants, selectedColor, selectedSize]);
+  const defaultVariant = useMemo(
+    () => resolveVariant(variants, selectedColor, selectedSize),
+    [variants, selectedColor, selectedSize],
+  );
+  const matchingVariants = useMemo(
+    () => variants.filter((variant) => variant.color === defaultVariant?.color && variant.size === defaultVariant?.size),
+    [variants, defaultVariant],
+  );
+  const activeVariant: ProductVariant | undefined = matchingVariants.find((variant) => variant.id === selectedVariantId) || defaultVariant;
+  const effectiveSize = activeVariant?.size ?? selectedSize;
 
   const regularPriceTjs = activeVariant ? activeVariant.price_tjs : (product?.min_price_tjs || 0);
   const currentPriceTjs = calculateQuantityDiscountedPriceTjs(
@@ -184,14 +175,14 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     if (product?.main_image && !list.includes(product.main_image)) {
       list.unshift(product.main_image);
     }
-    variants.forEach((v) => {
+    (product?.variants || []).forEach((v) => {
       if (v.image_url && !list.includes(v.image_url)) list.push(v.image_url);
     });
-    availableColors.forEach((color) => {
-      if (color.img && !list.includes(color.img)) list.push(color.img);
+    colorImageMappings.forEach(({ imageUrl }) => {
+      if (imageUrl && !list.includes(imageUrl)) list.push(imageUrl);
     });
     return list;
-  }, [product, variants, availableColors]);
+  }, [product, colorImageMappings]);
 
   const mediaSlides = useMemo(
     () => {
@@ -256,7 +247,8 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
   useEffect(() => {
     if (!product) return;
-    setSelectedColor(availableColors[0]?.name || variants[0]?.color || 'Стандарт');
+    setSelectedColor(variants[0]?.color ?? 'Стандарт');
+    setSelectedVariantId(undefined);
     setSelectedMediaIndex(0);
     setAdded(false);
     setSelectedQuantity(1);
@@ -298,15 +290,15 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     if (!activeVariant) return null;
 
     return {
-      id: `${product.id}_${activeVariant.variant_sku}_${selectedColor}_${selectedSize}`,
+      id: `${product.id}-${activeVariant.id}`,
       product_id: product.id,
       variant_id: activeVariant.id,
       base_sku: product.base_sku,
       variant_sku: activeVariant.variant_sku,
       title: product.title,
-      color: selectedColor || activeVariant.color || 'Стандарт',
-      size: selectedSize || activeVariant.size || 'One Size',
-      price_tjs: currentPriceTjs,
+      color: activeVariant.color || 'Стандарт',
+      size: activeVariant.size || 'One Size',
+      price_tjs: regularPriceTjs,
       original_price_tjs: currentOriginalPriceTjs,
       quantity_discount_min: activeVariant.quantity_discount_min || 0,
       quantity_discount_percent: activeVariant.quantity_discount_percent || 0,
@@ -314,6 +306,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
       quantity: selectedQuantity,
       stock: activeVariant.stock,
       delivery_type: product.delivery_type || 'order',
+      variants,
     };
   };
 
@@ -325,7 +318,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
     }
     const cartItem = createCartItem();
     if (!cartItem) return;
-    onAddToCart(cartItem);
+    if (!onAddToCart(cartItem)) return;
     setAdded(true);
     setIsQuantityPickerOpen(false);
     setSelectedQuantity(1);
@@ -586,7 +579,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 </div>
               </div>
 
-              {(activeVariant?.quantity_discount_min || 0) >= 2 && (activeVariant?.quantity_discount_percent || 0) > 0 && (
+              {activeVariant && (activeVariant.quantity_discount_min || 0) >= 2 && (activeVariant.quantity_discount_percent || 0) > 0 && (
                 <div className={`mt-2 rounded-xl border px-3 py-2 text-xs ${
                   hasQuantityDiscount
                     ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -611,11 +604,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               )}
 
               {/* 1. КОНФИГУРАТОР ЦВЕТА (Круглые иконки / плашки) */}
-              {availableColors.length > 0 && availableColors[0].name !== 'Стандарт' && (
+              {availableColors.length > 0 && (availableColors.length > 1 || (availableColors[0].name && !/^(?:стандарт|standard|основной цвет)$/i.test(availableColors[0].name.trim()))) && (
                 <div className="mt-2.5 space-y-1 sm:mt-4 sm:space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-slate-900">
-                      {t('selectedColor')} <span className="font-medium text-emerald-800">{selectedColor}</span>
+                      {t('selectedColor')} <span className="font-medium text-emerald-800">{selectedColor || t('standardOption')}</span>
                     </span>
                     <span className="text-slate-400 text-[11px]">Цветов: {availableColors.length}</span>
                   </div>
@@ -627,8 +620,9 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                         <button
                           key={col.name}
                           type="button"
-                          onClick={() => setSelectedColor(col.name)}
-                          className={`group relative flex items-center gap-1 px-1.5 py-1 sm:gap-1.5 sm:px-2 sm:py-1.5 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-semibold transition-all duration-150 ${
+                          onClick={() => { setSelectedColor(col.name); setSelectedVariantId(undefined); }}
+                          aria-pressed={isSelected}
+                          className={`group relative flex min-h-10 items-center gap-1 px-1.5 py-1 sm:gap-1.5 sm:px-2 sm:py-1.5 rounded-md sm:rounded-lg text-[10px] sm:text-xs font-semibold transition-all duration-150 ${
                             isSelected
                               ? 'bg-slate-900 text-white ring-1 ring-emerald-600 shadow-sm'
                               : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
@@ -644,7 +638,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                           ) : (
                             <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-md bg-gradient-to-tr from-slate-700 to-slate-400 border border-white/50" />
                           )}
-                          <span>{col.name}</span>
+                          <span>{col.name || t('standardOption')}</span>
                           {isSelected && <Check className="w-3.5 h-3.5 ml-0.5" />}
                         </button>
                       );
@@ -654,33 +648,50 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               )}
 
               {/* 2. КОНФИГУРАТОР РАЗМЕРА (Плитки) */}
-              {availableSizesForColor.length > 0 && availableSizesForColor[0] !== 'One Size' && (
+              {availableSizesForColor.length > 0 && (availableSizesForColor.length > 1 || (availableSizesForColor[0] && availableSizesForColor[0] !== 'One Size')) && (
                 <div className="mt-2.5 space-y-1 sm:mt-4 sm:space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="font-bold text-slate-900">
-                      {t('selectedSize')} <span className="font-medium text-emerald-800">{selectedSize}</span>
+                      {t('selectedSize')} <span className="font-medium text-emerald-800">{effectiveSize || t('standardOption')}</span>
                     </span>
                   </div>
 
                   <div className="flex flex-wrap gap-1 sm:gap-1.5">
                     {availableSizesForColor.map((size) => {
-                      const isSelected = selectedSize === size;
+                      const isSelected = effectiveSize === size;
                       return (
                         <button
                           key={size}
                           type="button"
-                          onClick={() => setSelectedSize(size)}
-                          className={`min-w-8 h-7 sm:min-w-10 sm:h-9 px-1.5 sm:px-2.5 flex items-center justify-center rounded-md sm:rounded-lg text-[10px] sm:text-xs font-bold font-mono transition-all duration-150 ${
+                          onClick={() => { setSelectedSize(size); setSelectedVariantId(undefined); }}
+                          aria-pressed={isSelected}
+                          className={`min-w-10 min-h-10 px-1.5 sm:px-2.5 flex items-center justify-center rounded-md sm:rounded-lg text-[10px] sm:text-xs font-bold font-mono transition-all duration-150 ${
                             isSelected
                               ? 'bg-emerald-600 text-white shadow-md ring-1 ring-emerald-600 ring-offset-1'
                               : 'bg-slate-50 border border-slate-200 text-slate-700 hover:bg-slate-100 hover:border-slate-300'
                           }`}
                         >
-                          {size}
+                          {size || t('standardOption')}
                         </button>
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {matchingVariants.length > 1 && (
+                <div className="mt-2.5 space-y-1">
+                  <label htmlFor="product-variant" className="text-xs font-bold text-slate-900">{t('chooseVariant')}</label>
+                  <select
+                    id="product-variant"
+                    value={activeVariant?.id}
+                    onChange={(event) => setSelectedVariantId(Number(event.target.value))}
+                    className="min-h-10 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-800"
+                  >
+                    {matchingVariants.map((variant) => (
+                      <option key={variant.id} value={variant.id}>{variant.variant_sku} · {variant.price_tjs} TJS</option>
+                    ))}
+                  </select>
                 </div>
               )}
 
@@ -702,10 +713,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
             {/* Кнопка добавления в корзину */}
             <div className="sticky bottom-0 z-10 -mx-3 space-y-2 border-t border-slate-200/80 bg-white/95 px-3 pb-1.5 pt-2 backdrop-blur sm:static sm:mx-0 sm:space-y-2.5 sm:bg-transparent sm:p-0">
+            {!activeVariant && <p role="status" className="text-xs font-semibold text-amber-800">{t('variantUnavailable')}</p>}
             <div className="flex items-center gap-1.5">
               <button
                 onClick={handleOrderNow}
-              className="min-h-11 min-w-0 flex-1 truncate rounded-xl bg-[#f4c542] px-2 py-2.5 text-xs font-bold tracking-wide text-slate-950 shadow-sm transition hover:bg-[#eabd32] active:scale-[0.98] sm:px-4 sm:py-3 sm:text-sm"
+                disabled={!activeVariant}
+              className="min-h-11 min-w-0 flex-1 truncate rounded-xl bg-[#f4c542] px-2 py-2.5 text-xs font-bold tracking-wide text-slate-950 shadow-sm transition hover:bg-[#eabd32] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 sm:px-4 sm:py-3 sm:text-sm"
               >
                 {t('orderNow')} · {currentPriceTjs} TJS
               </button>
@@ -740,10 +753,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               <button
                 type="button"
                 onClick={handleAddToCart}
+                disabled={!activeVariant}
                 aria-label={isQuantityPickerOpen ? `${t('addToCart')}: ${selectedQuantity}` : t('addToCart')}
                 title={isQuantityPickerOpen ? `${t('addToCart')}: ${selectedQuantity}` : t('addToCart')}
                 aria-expanded={isQuantityPickerOpen}
-                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-800 transition hover:bg-slate-50 sm:h-12 sm:w-12"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-800 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:h-12 sm:w-12"
               >
                 {added
                   ? <Check className="h-5 w-5" />

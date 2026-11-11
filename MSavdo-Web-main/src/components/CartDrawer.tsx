@@ -1,15 +1,17 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CartItem, Product } from '../types';
 import { X, Trash2, Plus, Minus, Send, ShoppingBasket, ShieldAlert, Clock, Truck } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 import type { PromotionResult } from '../utils/promotions';
+import { MAX_CART_QUANTITY } from '../utils/cart';
+import { orderableVariants } from '../utils/productVariants';
 
 type Quote = PromotionResult & {
   fingerprint: string;
   original_subtotal: number;
   product_discount: number;
-  items: Array<{ variant_id: number; title: string; color: string; size: string; quantity: number; price_tjs: number; original_price_tjs: number; quantity_discount_min: number; quantity_discount_percent: number; delivery_type: string }>;
+  items: Array<{ variant_id: number; variant_sku: string; title: string; color: string; size: string; quantity: number; price_tjs: number; original_price_tjs: number; quantity_discount_min: number; quantity_discount_percent: number; delivery_type: string }>;
 };
 
 interface CartDrawerProps {
@@ -21,6 +23,9 @@ interface CartDrawerProps {
   onAddVariant: (itemId: string, variant: NonNullable<Product['variants']>[number]) => void;
   onRemoveItem: (id: string) => void;
   onClearCart: () => void;
+  cartStorageError: boolean;
+  removedItem: CartItem | null;
+  onRestoreItem: () => void;
   onOpenRules: () => void;
   whatsappPhone?: string;
 }
@@ -34,6 +39,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onAddVariant,
   onRemoveItem,
   onClearCart,
+  cartStorageError,
+  removedItem,
+  onRestoreItem,
   onOpenRules,
   whatsappPhone = '992444431',
 }) => {
@@ -44,6 +52,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const [phoneError, setPhoneError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [promoCode, setPromoCode] = useState('');
@@ -53,6 +62,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   const [quoteRetry, setQuoteRetry] = useState(0);
   const [offers, setOffers] = useState<Array<{ id: number; title: string }>>([]);
   const [offersError, setOffersError] = useState('');
+  const [confirmClear, setConfirmClear] = useState(false);
   const cartKey = JSON.stringify(items.map((item) => ({ product_id: item.product_id, variant_id: item.variant_id, quantity: item.quantity })));
   useEffect(() => {
     if (!isOpen || !items.length) { setQuote(null); return; }
@@ -106,6 +116,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       phoneRequired: 'Укажите номер телефона.',
       phoneInvalid: 'Введите корректный номер: от 7 до 15 цифр.',
       orderFailed: 'Не удалось сохранить заказ. Попробуйте ещё раз.',
+      orderUnknown: 'Связь прервалась. Заказ мог сохраниться: перед повтором уточните у менеджера, чтобы не создать дубликат.',
       cancel: 'Отмена',
       confirm: 'ПОДТВЕРДИТЬ И ПЕРЕЙТИ В WHATSAPP',
       submitting: 'Регистрация…',
@@ -139,6 +150,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       phoneRequired: 'Рақами телефонро ворид кунед.',
       phoneInvalid: 'Рақами дурустро ворид кунед: аз 7 то 15 рақам.',
       orderFailed: 'Фармоиш сабт нашуд. Дубора кӯшиш кунед.',
+      orderUnknown: 'Алоқа қатъ шуд. Фармоиш метавонад сабт шуда бошад: пеш аз такрор аз мудир пурсед, то фармоиш такрор нашавад.',
       cancel: 'Бекор кардан',
       confirm: 'ТАСДИҚ ВА ГУЗАШТАН БА WHATSAPP',
       submitting: 'Сабт шуда истодааст…',
@@ -172,6 +184,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       phoneRequired: 'Enter your phone number.',
       phoneInvalid: 'Enter a valid number with 7–15 digits.',
       orderFailed: 'Could not save your order. Please try again.',
+      orderUnknown: 'The connection was lost and the order may have been saved. Check with the manager before retrying to avoid a duplicate.',
       cancel: 'Cancel',
       confirm: 'CONFIRM AND CONTINUE TO WHATSAPP',
       submitting: 'Saving…',
@@ -207,6 +220,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   };
 
   const executeCheckout = async () => {
+    if (submittingRef.current) return;
     if (!validQuote) { setSubmitError('Дождитесь расчёта заказа.'); return; }
     if (!customerPhone.trim()) {
       setPhoneError(copy.phoneRequired);
@@ -217,6 +231,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       return;
     }
     setSubmitError('');
+    submittingRef.current = true;
     setIsSubmitting(true);
     let orderNumber = '';
     let confirmedQuote: Quote = validQuote;
@@ -260,9 +275,10 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
       confirmedQuote = data.quote;
     } catch (error) {
       console.error('[Order Checkout Error]', error);
-      setSubmitError(error instanceof Error ? error.message : copy.orderFailed);
+      setSubmitError(error instanceof TypeError ? copy.orderUnknown : error instanceof Error ? error.message : copy.orderFailed);
       return;
     } finally {
+      submittingRef.current = false;
       setIsSubmitting(false);
     }
     setShowPreOrderModal(false);
@@ -277,7 +293,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           && value !== 'Standard'
           && value !== 'One Size',
       );
-      return `${index + 1}. ${item.title}${options.length ? ` (${options.join(' / ')})` : ''} × ${item.quantity} — ${lineTotal} TJS`;
+      return `${index + 1}. ${item.title}${options.length ? ` (${options.join(' / ')})` : ''}${item.variant_sku ? ` [${item.variant_sku}]` : ''} × ${item.quantity} — ${lineTotal} TJS`;
     }).join('\n\n');
 
     const customerDetails = [
@@ -317,6 +333,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
             <button
               onClick={onClose}
+              disabled={isSubmitting}
               className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg transition-colors"
               aria-label={t('close')}
             >
@@ -325,6 +342,13 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          {cartStorageError && <p role="alert" className="m-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-900">{t('cartStorageError')}</p>}
+          {removedItem && (
+            <div role="status" className="mx-4 mt-4 flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+              <span className="min-w-0">{t('cartItemRemoved')} <strong className="break-words">{removedItem.title}</strong></span>
+              <button type="button" onClick={onRestoreItem} className="min-h-10 shrink-0 rounded-lg border border-emerald-700 px-3 font-bold text-emerald-700">{t('undo')}</button>
+            </div>
+          )}
           {/* Список товаров */}
           <div className="p-4 space-y-4">
             {items.length === 0 ? (
@@ -338,12 +362,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             ) : (
               <div className="divide-y divide-slate-100">
                 {items.map((item) => {
-                  const productVariants = products.find((product) => product.id === item.product_id)?.variants
+                  const productVariants = orderableVariants(products.find((product) => product.id === item.product_id)?.variants
                     || item.variants
-                    || [];
+                    || []);
                   const quoteItem = validQuote?.items.find((quoted) => quoted.variant_id === item.variant_id);
                   const currentPrice = quoteItem?.price_tjs ?? item.price_tjs;
                   const currentOriginalPrice = quoteItem?.original_price_tjs ?? item.original_price_tjs ?? item.price_tjs;
+                  const displayColor = quoteItem?.color ?? item.color;
+                  const displaySize = quoteItem?.size ?? item.size;
+                  const variantChanged = Boolean(quoteItem && (quoteItem.color !== item.color || quoteItem.size !== item.size));
                   return (
                   <div key={item.id} className="py-4 flex items-start gap-3">
                     {item.image ? (
@@ -383,16 +410,17 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
                       {/* Параметры варианта: Цвет и Размер */}
                       <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-1 font-medium">
-                        {item.color && item.color !== 'Стандарт' && (
-                          <span className="text-slate-700">{t('color')} <strong>{item.color}</strong></span>
+                        {displayColor && displayColor !== 'Стандарт' && (
+                          <span className="text-slate-700">{t('color')} <strong>{displayColor}</strong></span>
                         )}
-                        {item.color && item.color !== 'Стандарт' && item.size && item.size !== 'One Size' && (
+                        {displayColor && displayColor !== 'Стандарт' && displaySize && displaySize !== 'One Size' && (
                           <span className="text-slate-300">·</span>
                         )}
-                        {item.size && item.size !== 'One Size' && (
-                          <span className="text-slate-700">{t('size')} <strong>{item.size}</strong></span>
+                        {displaySize && displaySize !== 'One Size' && (
+                          <span className="text-slate-700">{t('size')} <strong>{displaySize}</strong></span>
                         )}
                       </div>
+                      {variantChanged && <p role="status" className="mt-1 text-[11px] font-semibold text-amber-700">{t('cartVariantUpdated')}</p>}
 
                       <div className="mt-1.5 flex items-baseline gap-2 font-mono">
                         {currentOriginalPrice > currentPrice && (
@@ -425,7 +453,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           </span>
                           <button
                             onClick={() => onUpdateQuantity(item.id, 1)}
-                            className="flex h-10 w-10 items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-r transition-colors"
+                            disabled={item.quantity >= MAX_CART_QUANTITY}
+                            className="flex h-10 w-10 items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-r transition-colors disabled:opacity-40"
                             aria-label={t('increaseQuantity')}
                           >
                             <Plus className="w-3 h-3" />
@@ -540,12 +569,22 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               <div className="flex justify-between items-center text-[10px] text-slate-400">
                 <span>Менеджер: +{whatsappPhone}</span>
                 <button
-                  onClick={onClearCart}
-                  className="hover:text-red-600 transition-colors"
+                  type="button"
+                  onClick={() => setConfirmClear(true)}
+                  className="min-h-10 px-2 hover:text-red-600 transition-colors"
                 >
                   {copy.clearCart}
                 </button>
               </div>
+              {confirmClear && (
+                <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-900">
+                  <p className="font-semibold">{t('confirmClearCart')}</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => { onClearCart(); setConfirmClear(false); }} className="min-h-10 rounded-lg bg-red-700 px-3 font-bold text-white">{copy.clearCart}</button>
+                    <button type="button" onClick={() => setConfirmClear(false)} className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 font-semibold text-slate-800">{copy.cancel}</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -579,7 +618,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
             </div>
 
             {validQuote && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-left text-xs text-slate-800">
-              {validQuote.items.map((item, index) => <div key={index}>{item.title} × {item.quantity} — {item.price_tjs * item.quantity} TJS</div>)}
+              {validQuote.items.map((item, index) => <div key={index}>{item.title} ({[item.color, item.size, item.variant_sku].filter(Boolean).join(' / ')}) × {item.quantity} — {item.price_tjs * item.quantity} TJS</div>)}
               {validQuote.applied.map((offer) => <div key={offer.id}>{offer.title}: −{offer.amount} TJS</div>)}
               <strong>{copy.total}: {validQuote.total} TJS</strong>
             </div>}
@@ -631,7 +670,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
               <button
                 type="button"
                 onClick={() => setShowPreOrderModal(false)}
-                className="w-full sm:w-1/3 py-3.5 px-4 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+                disabled={isSubmitting}
+                className="w-full sm:w-1/3 py-3.5 px-4 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors disabled:opacity-50"
               >
                 {copy.cancel}
               </button>

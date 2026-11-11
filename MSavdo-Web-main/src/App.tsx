@@ -9,6 +9,7 @@ import { ProductCard } from './components/ProductCard';
 import { ToastContainer, ToastItem } from './components/Toast';
 import { apiFetch } from './api';
 import { useI18n } from './i18n';
+import { addCartItem, mergeCartItems, MAX_CART_QUANTITY } from './utils/cart';
 import { 
   Search, 
   ShoppingBasket,
@@ -102,6 +103,7 @@ export default function App() {
     suggestions: string[];
     popular: Array<{ query_text: string; searches_count: number }>;
   }>({ suggestions: [], popular: [] });
+  const [removedCartItem, setRemovedCartItem] = useState<CartItem | null>(null);
 
   // Фильтры, живой поиск и сортировка (Требование 7)
   const [searchQuery, setSearchQuery] = useState('');
@@ -218,22 +220,32 @@ export default function App() {
   }, [isProductModalOpen]);
 
   // Корзина на клиенте
-  const [cart, setCart] = useState<CartItem[]>(() => {
+  const [initialCart] = useState<{ items: CartItem[]; restoreError: boolean }>(() => {
     try {
       const saved = localStorage.getItem('msavdo_cart_v2');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
+      const parsed = saved ? JSON.parse(saved) : [];
+      if (!Array.isArray(parsed) || !parsed.every((item) => item && typeof item === 'object'
+        && typeof item.id === 'string' && Number.isSafeInteger(item.product_id)
+        && Number.isSafeInteger(item.quantity) && item.quantity > 0)) throw new Error('Invalid saved cart');
+      return { items: mergeCartItems(parsed), restoreError: false };
+    } catch (error) {
+      console.error('[Cart] Could not restore saved cart:', error);
+      return { items: [], restoreError: true };
     }
   });
+  const [cart, setCart] = useState<CartItem[]>(initialCart.items);
+  const [cartStorageError, setCartStorageError] = useState(initialCart.restoreError);
 
   useEffect(() => {
+    if (initialCart.restoreError) return;
     try {
       localStorage.setItem('msavdo_cart_v2', JSON.stringify(cart));
-    } catch {
-      // Игнорируем ошибку квоты
+      setCartStorageError(false);
+    } catch (error) {
+      console.error('[Cart] Could not save cart:', error);
+      setCartStorageError(true);
     }
-  }, [cart]);
+  }, [cart, initialCart.restoreError]);
 
   // Гарантированное удаление старых плавающих виджетов Co-Pilot
   useEffect(() => {
@@ -338,34 +350,8 @@ export default function App() {
     }
   };
 
-  // Загрузка каталога с глобальным перехватом ошибок и авто-повтором
-  const fetchCatalog = async (retryCount = 0, loadSecondaryData = true) => {
-    try {
-      await fetchProducts();
-
-      if (loadSecondaryData) {
-        await loadSecondaryCatalogData();
-      }
-    } catch (err: any) {
-      console.warn(`[M.Savdo] Попытка ${retryCount + 1}/3 загрузки каталога:`, err?.message);
-      if (retryCount < 2) {
-        setTimeout(() => fetchCatalog(retryCount + 1, loadSecondaryData), 1500);
-        return;
-      }
-      if (products.length === 0) {
-        addToast(
-          'error',
-          'Сбой синхронизации каталога',
-          'Каталог обновляется. Пожалуйста, обновите страницу через несколько секунд.'
-        );
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    void fetchCatalog(0, false);
+    void fetchProducts();
 
     // Проверка URL параметра для скрытого служебного входа (?admin=true)
     const params = new URLSearchParams(window.location.search);
@@ -474,6 +460,7 @@ export default function App() {
     if (!isSearchFocused) return;
     const controller = new AbortController();
     const query = searchQuery.trim();
+    setSearchHints({ suggestions: [], popular: [] });
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams();
       if (query) params.set('q', query);
@@ -481,6 +468,7 @@ export default function App() {
         .then(async (response) => {
           if (!response.ok) throw new Error(`Search suggestions request failed: ${response.status}`);
           const data = await response.json();
+          if (controller.signal.aborted) return;
           setSearchHints({
             suggestions: Array.isArray(data?.suggestions) ? data.suggestions : [],
             popular: Array.isArray(data?.popular) ? data.popular : [],
@@ -537,21 +525,19 @@ export default function App() {
   }, [selectedCategoryId]);
 
   // Добавление в корзину конкретного варианта
-  const handleAddToCart = (item: CartItem) => {
+  const handleAddToCart = (item: CartItem): boolean => {
     const itemWithVariants = {
       ...item,
       variants: products.find((product) => product.id === item.product_id)?.variants || item.variants || [],
     };
-    setCart((prev) => {
-      const existing = prev.find((i) => i.id === itemWithVariants.id);
-      if (existing) {
-        return prev.map((i) =>
-          i.id === itemWithVariants.id ? { ...i, quantity: i.quantity + itemWithVariants.quantity } : i
-        );
-      }
-      return [...prev, itemWithVariants];
-    });
+    const updated = addCartItem(cart, itemWithVariants);
+    if (!updated) {
+      addToast('error', t('cartLimit'));
+      return false;
+    }
+    setCart(updated);
     addToast('success', 'Товар добавлен в корзину', `${itemWithVariants.title} · ${itemWithVariants.quantity} шт. (${itemWithVariants.color}, ${itemWithVariants.size})`);
+    return true;
   };
 
   const handleUpdateQuantity = (id: string, delta: number) => {
@@ -560,6 +546,7 @@ export default function App() {
         .map((item) => {
           if (item.id === id) {
             const newQty = item.quantity + delta;
+            if (delta > 0 && newQty > MAX_CART_QUANTITY) return item;
             return newQty > 0 ? { ...item, quantity: newQty } : null;
           }
           return item;
@@ -572,38 +559,52 @@ export default function App() {
     itemId: string,
     variant: NonNullable<Product['variants']>[number],
   ) => {
-    setCart((current) => {
-      const selectedItem = current.find((item) => item.id === itemId);
-      if (!selectedItem) return current;
-      const nextId = `${selectedItem.product_id}-${variant.variant_sku}`;
-      const nextItem: CartItem = {
-        ...selectedItem,
-        id: nextId,
-        variant_id: variant.id,
-        variant_sku: variant.variant_sku,
-        color: variant.color,
-        size: variant.size,
-        price_tjs: variant.price_tjs,
-        stock: variant.stock,
-        image: variant.image_url || selectedItem.image,
-        quantity: 1,
-      };
-      const duplicate = current.find((item) => item.id === nextId && item.id !== itemId);
-      if (duplicate) {
-        return current.map((item) => item.id === nextId
-          ? { ...item, quantity: item.quantity + 1 }
-          : item);
-      }
-      return [...current, nextItem];
-    });
+    const selectedItem = cart.find((item) => item.id === itemId);
+    if (!selectedItem) return;
+    const nextItem: CartItem = {
+      ...selectedItem,
+      id: `${selectedItem.product_id}-${variant.id}`,
+      variant_id: variant.id,
+      variant_sku: variant.variant_sku,
+      color: variant.color,
+      size: variant.size,
+      price_tjs: variant.price_tjs,
+      original_price_tjs: variant.original_price_tjs,
+      quantity_discount_min: variant.quantity_discount_min,
+      quantity_discount_percent: variant.quantity_discount_percent,
+      stock: variant.stock,
+      image: variant.image_url || selectedItem.image,
+      quantity: 1,
+    };
+    const updated = addCartItem(cart, nextItem);
+    if (!updated) {
+      addToast('error', t('cartLimit'));
+      return;
+    }
+    setCart(updated);
   };
 
   const handleRemoveFromCart = (id: string) => {
+    const removed = cart.find((item) => item.id === id);
+    if (!removed) return;
+    setRemovedCartItem(removed);
     setCart((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleRestoreCartItem = () => {
+    if (!removedCartItem) return;
+    const updated = addCartItem(cart, removedCartItem);
+    if (!updated) {
+      addToast('error', t('cartLimit'));
+      return;
+    }
+    setCart(updated);
+    setRemovedCartItem(null);
   };
 
   const handleClearCart = () => {
     setCart([]);
+    setRemovedCartItem(null);
   };
 
   const totalCartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -696,7 +697,7 @@ export default function App() {
                   <X className="w-4 h-4" />
                 </button>
               )}
-              {isSearchFocused && (
+              {isSearchFocused && (searchHints.suggestions.length > 0 || searchHints.popular.length > 0) && (
                 <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-[60vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
                   {searchHints.suggestions.length > 0 && (
                     <div className="mb-1">
@@ -783,7 +784,7 @@ export default function App() {
           <Suspense fallback={<div className="p-6 text-center text-sm text-slate-500">Загрузка панели администратора…</div>}>
             <AdminPanel
               onBack={() => setCurrentView('catalog')}
-              onRefreshCatalog={fetchCatalog}
+              onRefreshCatalog={() => { void fetchProducts(); void loadSecondaryCatalogData(); }}
             />
           </Suspense>
         )}
@@ -977,6 +978,7 @@ export default function App() {
                     onClick={() => {
                       setSelectedCategoryId(null);
                       setSearchQuery('');
+                      setDeliveryFilter('all');
                     }}
                     className="mt-2 px-4 py-2 bg-black text-amber-400 rounded-xl text-xs font-bold hover:bg-zinc-800 transition-colors"
                   >
@@ -1146,13 +1148,15 @@ export default function App() {
       {selectedProduct && (
         <Suspense fallback={null}>
           <ProductDetailModal
+            key={selectedProduct.id}
             product={selectedProduct}
             onClose={() => setSelectedProduct(null)}
             onAddToCart={handleAddToCart}
             onOrderNow={(item) => {
-              handleAddToCart(item);
-              setSelectedProduct(null);
-              setIsCartOpen(true);
+              if (handleAddToCart(item)) {
+                setSelectedProduct(null);
+                setIsCartOpen(true);
+              }
             }}
             onSelectRelatedProduct={handleOpenProduct}
           />
@@ -1171,6 +1175,9 @@ export default function App() {
             onAddVariant={handleAddCartVariant}
             onRemoveItem={handleRemoveFromCart}
             onClearCart={handleClearCart}
+            cartStorageError={cartStorageError}
+            removedItem={removedCartItem}
+            onRestoreItem={handleRestoreCartItem}
             onOpenRules={() => {
               setIsCartOpen(false);
               setCurrentView('rules');
