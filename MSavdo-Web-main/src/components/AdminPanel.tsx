@@ -48,7 +48,7 @@ import { ProductDiscountsAdmin } from './ProductDiscountsAdmin';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors, normalizeProductColor, removeProductColor } from '../utils/productDescription';
-import { calculateManualVariantPrice, extractShippingMetrics } from '../utils/pricing';
+import { calculateManualVariantPrice } from '../utils/pricing';
 
 interface TelegramLoginResult {
   id_token?: string;
@@ -1237,13 +1237,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditingProduct({ ...editingProduct, variants: curVars });
   };
 
-  const getVariantPriceCalculation = (variant: { price_cny?: number | string; weight_kg?: number | string; volume_m3?: number; markup_percent?: number | string | null }) => {
-    const specifications = Array.isArray(editingProduct?.specifications) ? editingProduct.specifications : [];
-    const volume = Number(variant.volume_m3) > 0
-      ? Number(variant.volume_m3)
-      : extractShippingMetrics(specifications).volumeM3;
+  const getVariantPriceCalculation = (variant: { price_cny?: number | string; weight_kg?: number | string; markup_percent?: number | string | null }) => {
     const markup = variant.markup_percent === '' || variant.markup_percent == null ? null : Number(variant.markup_percent);
-    return calculateManualVariantPrice(Number(variant.price_cny), Number(variant.weight_kg), volume, markup);
+    return calculateManualVariantPrice(Number(variant.price_cny), Number(variant.weight_kg), markup);
   };
 
   const handleRecalculateVariant = (index: number) => {
@@ -4197,14 +4193,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           <div className="col-span-2 text-slate-700 self-end" aria-live="polite">
                             {calculation ? (
                               <>
-                                <span>Расчёт: {calculation.priceTjs} TJS · наценка {calculation.markupPercent}% · доставка {calculation.shippingTjs} TJS ({calculation.usesVolume ? `по объёму ${Number(v.volume_m3) > 0 ? Number(v.volume_m3) : extractShippingMetrics(editingProduct.specifications || []).volumeM3} м³` : 'по весу'}).</span>{' '}
+                                <span>Расчёт: {calculation.priceTjs} TJS · наценка {calculation.markupPercent}% · доставка {calculation.shippingTjs} TJS (по весу).</span>{' '}
                                 <button type="button" onClick={() => handleRecalculateVariant(vIdx)}
                                   className="font-bold text-emerald-800 underline">Применить расчёт</button>
                               </>
                             ) : 'Для расчёта укажите цену закупки больше нуля и вес. Текущая цена продажи сохраняется.'}
                           </div>
                         </div>
-                        <p className="mt-1 text-slate-600">Курс 1,5; наценка только на товар. Авто: до 200 TJS — 30%, до 2000 — 20%, от 2000 — 10%. Доставка: 30 TJS/кг или 2000 TJS/м³ при наличии габаритов.</p>
+                        <p className="mt-1 text-slate-600">Курс 1,5; наценка только на товар. Авто: до 200 TJS — 30%, до 2000 — 20%, от 2000 — 10%. Доставка: вес варианта × 30 TJS/кг, независимо от габаритов.</p>
                       </div>
                       <div className="sm:col-span-3">
                         <span className="block text-[10px] font-bold text-slate-500 mb-0.5">Артикул варианта:</span>
