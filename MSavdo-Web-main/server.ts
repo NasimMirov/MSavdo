@@ -6142,9 +6142,13 @@ app.get('/product/:id/:slug?', (req, res, next) => {
         }).filter((item) => item.name && item.value);
       }
     }
-    const knownBrand = specifications.find((spec) =>
+    const brandCandidate = specifications.find((spec) =>
       /^(?:бренд|торговая марка|brand|品牌|商标)$/iu.test(spec.name.trim()),
     )?.value.trim();
+    const knownBrand = brandCandidate &&
+      !/^(?:нейтральный|нейтральная|без бренда|неизвестно|generic|unbranded|no brand|unknown|none|n\/?a|无品牌|无牌)$/iu.test(brandCandidate)
+      ? brandCandidate
+      : '';
     const price = minPrice;
     const shippingDetails = {
       '@type': 'OfferShippingDetails',

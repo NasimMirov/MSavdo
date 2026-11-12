@@ -68,6 +68,8 @@ test('catalog and sitemap discover active products and product pages are identic
   const productId = Number(newProduct.lastInsertRowid);
   db.prepare('UPDATE products SET specifications = ? WHERE id = ?')
     .run(JSON.stringify([{ name: 'Бренд', value: 'Test Brand' }]), productId);
+  db.prepare('UPDATE products SET specifications = ? WHERE id = ?')
+    .run(JSON.stringify([{ name: 'Бренд', value: 'нейтральный' }]), noOfferId);
   const longNameId = Number(insert.run(`${'Длинное название '.repeat(20)}`, 'Длинное описание', 'seo-test-long-name', 'active').lastInsertRowid);
   const categoryId = Number(db.prepare('INSERT INTO categories (name) VALUES (?)').run('Оптика для теста').lastInsertRowid);
   db.prepare('UPDATE products SET category_id = ? WHERE id = ?').run(categoryId, productId);
@@ -126,6 +128,7 @@ test('catalog and sitemap discover active products and product pages are identic
   const noOfferData = readStructuredData(noOfferHtml);
   assert.equal(noOfferData[0]['@type'], 'Product');
   assert.equal(noOfferData[0].offers, undefined);
+  assert.equal(noOfferData[0].brand, undefined);
   assert.match(noOfferHtml, /Уточните цену/);
   const longNameHtml = await (await fetch(`${base}/product/${longNameId}/длинное-название`)).text();
   const longNameData = readStructuredData(longNameHtml);
