@@ -5484,6 +5484,10 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
+function limitStructuredText(value: string, maxLength: number): string {
+  return Array.from(value).slice(0, maxLength).join('').trim();
+}
+
 function makeProductSlug(title: string): string {
   return title
     .normalize('NFC')
@@ -6138,13 +6142,66 @@ app.get('/product/:id/:slug?', (req, res, next) => {
         }).filter((item) => item.name && item.value);
       }
     }
+    const knownBrand = specifications.find((spec) =>
+      /^(?:бренд|торговая марка|brand|品牌|商标)$/iu.test(spec.name.trim()),
+    )?.value.trim();
     const price = minPrice;
+    const shippingDetails = {
+      '@type': 'OfferShippingDetails',
+      shippingDestination: {
+        '@type': 'DefinedRegion',
+        addressCountry: 'TJ',
+      },
+      shippingRate: {
+        '@type': 'MonetaryAmount',
+        value: 0,
+        currency: 'TJS',
+      },
+      deliveryTime: {
+        '@type': 'ShippingDeliveryTime',
+        ...(product.delivery_type === 'stock'
+          ? {
+            handlingTime: {
+              '@type': 'QuantitativeValue',
+              minValue: 0,
+              maxValue: 1,
+              unitCode: 'DAY',
+            },
+            transitTime: {
+              '@type': 'QuantitativeValue',
+              minValue: 0,
+              maxValue: 0,
+              unitCode: 'DAY',
+            },
+          }
+          : {
+            handlingTime: {
+              '@type': 'QuantitativeValue',
+              minValue: 0,
+              maxValue: 1,
+              unitCode: 'DAY',
+            },
+            transitTime: {
+              '@type': 'QuantitativeValue',
+              minValue: 12,
+              maxValue: 35,
+              unitCode: 'DAY',
+            },
+          }),
+      },
+    };
+    const returnPolicy = {
+      '@type': 'MerchantReturnPolicy',
+      applicableCountry: 'TJ',
+      returnPolicyCategory: 'https://schema.org/MerchantReturnNotPermitted',
+    };
     const structuredData = {
       '@context': 'https://schema.org',
       '@type': 'Product',
-      name: product.title,
-      description,
+      name: limitStructuredText(cleanSearchText(product.title) || 'Товар', 150),
+      description: limitStructuredText(description, 5000),
       sku: product.base_sku,
+      ...(knownBrand ? { brand: { '@type': 'Brand', name: limitStructuredText(knownBrand, 100) } } : {}),
       url: canonicalUrl,
       ...(imageList.length ? { image: imageList } : {}),
       ...(product.category_name ? { category: product.category_name } : {}),
@@ -6153,6 +6210,8 @@ app.get('/product/:id/:slug?', (req, res, next) => {
           '@type': 'Offer',
           priceCurrency: 'TJS',
           price,
+          shippingDetails,
+          hasMerchantReturnPolicy: returnPolicy,
           ...(product.delivery_type === 'stock' ? { availability: 'https://schema.org/InStock' } : {}),
           url: canonicalUrl,
           seller: {
@@ -6189,7 +6248,8 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       .filter(Boolean)
       .join('');
     const galleryHtml = imageList.map((image) => `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`).join('');
-    const safeStructuredData = JSON.stringify([structuredData, breadcrumbData]).replace(/</g, '\\u003c');
+    const safeProductData = JSON.stringify(structuredData).replace(/</g, '\\u003c');
+    const safeBreadcrumbData = JSON.stringify(breadcrumbData).replace(/</g, '\\u003c');
     res.set('Cache-Control', 'public, max-age=300');
     return res.type('html').send(`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -6199,7 +6259,8 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 <meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonicalUrl)}">
 <meta property="og:image" content="${escapeHtml(productImage)}"><meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${escapeHtml(searchTitle)}"><meta name="twitter:description" content="${escapeHtml(description)}">
-<script type="application/ld+json">${safeStructuredData}</script>
+<script type="application/ld+json">${safeProductData}</script>
+<script type="application/ld+json">${safeBreadcrumbData}</script>
 <style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.6 Arial,sans-serif}.wrap{max-width:980px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-weight:800;color:#111;text-decoration:none}.product{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:24px;padding:24px;border-radius:20px;background:#fff;box-shadow:0 6px 30px #0f172a12}.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start}.gallery img{width:100%;aspect-ratio:1;object-fit:contain;background:#f1f5f9;border-radius:12px}.details h1{line-height:1.25}.price{font-size:24px;font-weight:800}.button{display:inline-block;margin:10px 8px 0 0;padding:11px 16px;border-radius:10px;background:#059669;color:white;text-decoration:none;font-weight:700}.button.secondary{background:#111827}.specs{padding-left:20px}@media(max-width:680px){.product{grid-template-columns:1fr;padding:16px}.gallery{grid-template-columns:1fr 1fr}.wrap{padding:12px}}</style></head>
 <body><main class="wrap"><nav class="top"><a class="brand" href="/">M.Savdo</a><a href="/">Каталог товаров</a></nav>
 <article class="product"><div class="gallery">${galleryHtml || '<p>Фото товара скоро появится</p>'}</div>

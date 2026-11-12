@@ -8,6 +8,12 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { DatabaseSync } = require('node:sqlite');
 
+function readStructuredData(html) {
+  const scripts = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
+  assert.ok(scripts.length >= 2, 'expected separate Product and BreadcrumbList JSON-LD objects');
+  return scripts.map((match) => JSON.parse(match[1]));
+}
+
 test('catalog and sitemap discover active products and product pages are identical for visitors and crawlers', { timeout: 60000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'msavdo-seo-test-'));
   let server;
@@ -60,6 +66,9 @@ test('catalog and sitemap discover active products and product pages are identic
   }
   const newProduct = insert.run('Умные очки Bluetooth Wi-Fi 16 ГБ', 'Доставка 18-30 дней!\n\nОписание очков', 'seo-test-glasses', 'active');
   const productId = Number(newProduct.lastInsertRowid);
+  db.prepare('UPDATE products SET specifications = ? WHERE id = ?')
+    .run(JSON.stringify([{ name: 'Бренд', value: 'Test Brand' }]), productId);
+  const longNameId = Number(insert.run(`${'Длинное название '.repeat(20)}`, 'Длинное описание', 'seo-test-long-name', 'active').lastInsertRowid);
   const categoryId = Number(db.prepare('INSERT INTO categories (name) VALUES (?)').run('Оптика для теста').lastInsertRowid);
   db.prepare('UPDATE products SET category_id = ? WHERE id = ?').run(categoryId, productId);
   db.prepare('UPDATE products SET discount_percent = 10 WHERE id = ?').run(productId);
@@ -114,9 +123,14 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.equal((await fetch(`${base}/catalog/01`)).status, 404);
   assert.equal((await fetch(`${base}/product/${draftId}/draft`)).status, 404);
   const noOfferHtml = await (await fetch(`${base}/product/${noOfferId}/товар-1`)).text();
-  const noOfferData = JSON.parse(noOfferHtml.match(/<script type="application\/ld\+json">([^<]+)<\/script>/)[1]);
-  assert.equal(noOfferData.find((item) => item['@type'] === 'Product').offers, undefined);
+  const noOfferData = readStructuredData(noOfferHtml);
+  assert.equal(noOfferData[0]['@type'], 'Product');
+  assert.equal(noOfferData[0].offers, undefined);
   assert.match(noOfferHtml, /Уточните цену/);
+  const longNameHtml = await (await fetch(`${base}/product/${longNameId}/длинное-название`)).text();
+  const longNameData = readStructuredData(longNameHtml);
+  assert.equal(Array.from(longNameData[0].name).length, 150);
+  assert.equal(longNameData[0].description.length > 0, true);
 
   const url = `${base}/product/${productId}/${encodeURIComponent('умные-очки-bluetooth-wi-fi-16-гб')}`;
   const visitor = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -132,12 +146,24 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.doesNotMatch(html, /window\.location\.replace/);
   assert.match(html, /360–450 сомони/);
   assert.doesNotMatch(html, /Недоступный/);
-  const structuredData = JSON.parse(html.match(/<script type="application\/ld\+json">([^<]+)<\/script>/)[1]);
-  const productData = structuredData.find((item) => item['@type'] === 'Product');
+  const structuredData = readStructuredData(html);
+  const productData = structuredData[0];
+  assert.equal(productData['@type'], 'Product');
+  assert.equal(structuredData[1]['@type'], 'BreadcrumbList');
+  assert.ok(productData.name.length > 0 && Array.from(productData.name).length <= 150);
+  assert.ok(productData.description.length > 0);
+  assert.equal(productData.brand['@type'], 'Brand');
+  assert.equal(productData.brand.name, 'Test Brand');
   assert.equal(productData.offers['@type'], 'Offer');
   assert.equal(productData.offers.price, 360);
   assert.equal(productData.offers.priceCurrency, 'TJS');
   assert.equal(productData.offers.availability, undefined);
+  assert.equal(productData.offers.shippingDetails['@type'], 'OfferShippingDetails');
+  assert.equal(productData.offers.shippingDetails.shippingDestination.addressCountry, 'TJ');
+  assert.equal(productData.offers.shippingDetails.shippingRate.value, 0);
+  assert.equal(productData.offers.shippingDetails.deliveryTime.transitTime.minValue, 12);
+  assert.equal(productData.offers.shippingDetails.deliveryTime.transitTime.maxValue, 35);
+  assert.equal(productData.offers.hasMerchantReturnPolicy.returnPolicyCategory, 'https://schema.org/MerchantReturnNotPermitted');
   const quote = await fetch(`${base}/api/order-quote`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -188,8 +214,11 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.equal(oldUrl.status, 301);
   assert.match(decodeURI(oldUrl.headers.get('location')), /новые-умные-очки/);
   const updatedHtml = await (await fetch(oldUrl.headers.get('location'))).text();
-  const updatedStructured = JSON.parse(updatedHtml.match(/<script type="application\/ld\+json">([^<]+)<\/script>/)[1]);
-  assert.equal(updatedStructured.find((item) => item['@type'] === 'Product').offers.availability, 'https://schema.org/InStock');
+  const updatedStructured = readStructuredData(updatedHtml);
+  const updatedProductData = updatedStructured[0];
+  assert.equal(updatedProductData.offers.availability, 'https://schema.org/InStock');
+  assert.equal(updatedProductData.offers.shippingDetails.deliveryTime.handlingTime.maxValue, 1);
+  assert.equal(updatedProductData.offers.shippingDetails.deliveryTime.transitTime.maxValue, 0);
   assert.match(updatedHtml, /В наличии в Душанбе/);
   assert.doesNotMatch(updatedHtml, /12–35 дней/);
 
