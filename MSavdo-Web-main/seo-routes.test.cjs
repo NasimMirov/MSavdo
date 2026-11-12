@@ -14,6 +14,16 @@ function readStructuredData(html) {
   return scripts.map((match) => JSON.parse(match[1]));
 }
 
+test('Vercel permanently redirects the www hostname to the canonical domain', () => {
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'vercel.json'), 'utf8'));
+  assert.ok(config.redirects.some((redirect) =>
+    redirect.permanent === true &&
+    redirect.source === '/:path*' &&
+    redirect.destination === 'https://msavdo.shop/:path*' &&
+    redirect.has?.some((condition) => condition.type === 'host' && condition.value === 'www.msavdo.shop')
+  ));
+});
+
 test('catalog and sitemap discover active products and product pages are identical for visitors and crawlers', { timeout: 60000 }, async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'msavdo-seo-test-'));
   let server;
@@ -71,6 +81,7 @@ test('catalog and sitemap discover active products and product pages are identic
   db.prepare('UPDATE products SET specifications = ? WHERE id = ?')
     .run(JSON.stringify([{ name: 'Бренд', value: 'нейтральный' }]), noOfferId);
   const longNameId = Number(insert.run(`${'Длинное название '.repeat(20)}`, 'Длинное описание', 'seo-test-long-name', 'active').lastInsertRowid);
+  const longColorId = Number(insert.run('Товар с длинным названием '.repeat(8), 'Описание товара', 'seo-test-long-color', 'active').lastInsertRowid);
   const categoryId = Number(db.prepare('INSERT INTO categories (name) VALUES (?)').run('Оптика для теста').lastInsertRowid);
   db.prepare('UPDATE products SET category_id = ? WHERE id = ?').run(categoryId, productId);
   db.prepare('UPDATE products SET discount_percent = 10 WHERE id = ?').run(productId);
@@ -81,6 +92,10 @@ test('catalog and sitemap discover active products and product pages are identic
   const variantId = Number(insertVariant.run(productId, 'Чёрный', 400, 'seo-test-black').lastInsertRowid);
   insertVariant.run(productId, 'Синий', 500, 'seo-test-blue');
   insertVariant.run(productId, 'Недоступный', 0.5, 'seo-test-invalid');
+  insertVariant.run(longNameId, 'Чёрный', 600, 'seo-test-long-title-black');
+  insertVariant.run(longNameId, 'Синий', 650, 'seo-test-long-title-blue');
+  insertVariant.run(longColorId, `Описание модели ${'особенность '.repeat(12)}`, 700, 'seo-test-long-option-1');
+  insertVariant.run(longColorId, `Описание модели ${'характеристика '.repeat(10)}`, 800, 'seo-test-long-option-2');
   const draftId = Number(insert.run('Черновик', 'Не публиковать', 'seo-test-draft', 'draft').lastInsertRowid);
   db.close();
 
@@ -99,6 +114,11 @@ test('catalog and sitemap discover active products and product pages are identic
   const filtered = await (await fetch(`${base}/api/products?${new URLSearchParams({ search: 'очки умные', delivery_type: 'stock' })}`)).json();
   assert.equal(filtered.total, 0);
   assert.equal(filtered.delivery_counts.order, 1);
+  const catalogResponse = await fetch(`${base}/api/products?limit=24&offset=0&sort=popular`);
+  assert.match(catalogResponse.headers.get('cache-control') || '', /private, max-age=30, stale-while-revalidate=120/);
+  const catalog = await catalogResponse.json();
+  assert.equal(catalog.total, catalog.delivery_counts.all);
+  assert.equal(catalog.delivery_counts.order + catalog.delivery_counts.stock, catalog.delivery_counts.all);
   const categoryFiltered = await (await fetch(`${base}/api/products?${new URLSearchParams({ search: 'wifi черный', category_id: String(categoryId) })}`)).json();
   assert.equal(categoryFiltered.total, 1);
   assert.equal(categoryFiltered.products[0].id, productId);
@@ -132,8 +152,17 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.match(noOfferHtml, /Уточните цену/);
   const longNameHtml = await (await fetch(`${base}/product/${longNameId}/длинное-название`)).text();
   const longNameData = readStructuredData(longNameHtml);
+  assert.equal(longNameData[0]['@type'], 'ProductGroup');
   assert.equal(Array.from(longNameData[0].name).length, 150);
   assert.equal(longNameData[0].description.length > 0, true);
+  assert.ok(longNameData[0].hasVariant.every((variant) => Array.from(variant.name).length <= 150));
+  const longColorHtml = await (await fetch(`${base}/product/${longColorId}/длинное-название`)).text();
+  const longColorData = readStructuredData(longColorHtml)[0];
+  assert.equal(longColorData['@type'], 'Product');
+  assert.equal(Array.from(longColorData.name).length, 150);
+  assert.equal(longColorData.color, undefined);
+  assert.equal(longColorData.hasVariant, undefined);
+  assert.doesNotMatch(JSON.stringify(longColorData), /Описание модели особенность/u);
 
   const url = `${base}/product/${productId}/${encodeURIComponent('умные-очки-bluetooth-wi-fi-16-гб')}`;
   const visitor = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -151,22 +180,30 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.doesNotMatch(html, /Недоступный/);
   const structuredData = readStructuredData(html);
   const productData = structuredData[0];
-  assert.equal(productData['@type'], 'Product');
+  assert.equal(productData['@type'], 'ProductGroup');
   assert.equal(structuredData[1]['@type'], 'BreadcrumbList');
   assert.ok(productData.name.length > 0 && Array.from(productData.name).length <= 150);
   assert.ok(productData.description.length > 0);
   assert.equal(productData.brand['@type'], 'Brand');
   assert.equal(productData.brand.name, 'Test Brand');
-  assert.equal(productData.offers['@type'], 'Offer');
-  assert.equal(productData.offers.price, 360);
-  assert.equal(productData.offers.priceCurrency, 'TJS');
-  assert.equal(productData.offers.availability, undefined);
-  assert.equal(productData.offers.shippingDetails['@type'], 'OfferShippingDetails');
-  assert.equal(productData.offers.shippingDetails.shippingDestination.addressCountry, 'TJ');
-  assert.equal(productData.offers.shippingDetails.shippingRate.value, 0);
-  assert.equal(productData.offers.shippingDetails.deliveryTime.transitTime.minValue, 12);
-  assert.equal(productData.offers.shippingDetails.deliveryTime.transitTime.maxValue, 35);
-  assert.equal(productData.offers.hasMerchantReturnPolicy.returnPolicyCategory, 'https://schema.org/MerchantReturnNotPermitted');
+  assert.equal(productData.productGroupID, 'seo-test-glasses');
+  assert.deepEqual(productData.variesBy, ['https://schema.org/color']);
+  assert.equal(productData.hasVariant.length, 2);
+  for (const variant of productData.hasVariant) {
+    assert.ok(Array.from(variant.name).length <= 150);
+    assert.ok(variant.color.length <= 60);
+    assert.equal(variant.offers['@type'], 'Offer');
+    assert.equal(variant.offers.priceCurrency, 'TJS');
+    assert.equal(variant.offers.availability, undefined);
+    assert.equal(variant.offers.shippingDetails['@type'], 'OfferShippingDetails');
+    assert.equal(variant.offers.shippingDetails.shippingDestination.addressCountry, 'TJ');
+    assert.equal(variant.offers.shippingDetails.shippingRate.value, 0);
+    assert.equal(variant.offers.shippingDetails.deliveryTime.transitTime.minValue, 12);
+    assert.equal(variant.offers.shippingDetails.deliveryTime.transitTime.maxValue, 35);
+    assert.equal(variant.offers.hasMerchantReturnPolicy.returnPolicyCategory, 'https://schema.org/MerchantReturnNotPermitted');
+  }
+  assert.deepEqual(productData.hasVariant.map((variant) => variant.offers.price), [360, 450]);
+  assert.match(html, /Умные очки Bluetooth Wi-Fi 16 ГБ — купить/);
   const quote = await fetch(`${base}/api/order-quote`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -174,7 +211,8 @@ test('catalog and sitemap discover active products and product pages are identic
   });
   assert.equal(quote.status, 200);
   const quoteData = await quote.json();
-  assert.equal(quoteData.items[0].price_tjs, productData.offers.price);
+  assert.equal(quoteData.items[0].price_tjs,
+    productData.hasVariant.find((variant) => variant.sku === 'seo-test-black').offers.price);
 
   const orderDb = new DatabaseSync(path.join(directory, 'msavdo.db'));
   const year = new Date().getFullYear();
@@ -219,9 +257,10 @@ test('catalog and sitemap discover active products and product pages are identic
   const updatedHtml = await (await fetch(oldUrl.headers.get('location'))).text();
   const updatedStructured = readStructuredData(updatedHtml);
   const updatedProductData = updatedStructured[0];
-  assert.equal(updatedProductData.offers.availability, 'https://schema.org/InStock');
-  assert.equal(updatedProductData.offers.shippingDetails.deliveryTime.handlingTime.maxValue, 1);
-  assert.equal(updatedProductData.offers.shippingDetails.deliveryTime.transitTime.maxValue, 0);
+  assert.equal(updatedProductData['@type'], 'ProductGroup');
+  assert.equal(updatedProductData.hasVariant[0].offers.availability, 'https://schema.org/InStock');
+  assert.equal(updatedProductData.hasVariant[0].offers.shippingDetails.deliveryTime.handlingTime.maxValue, 1);
+  assert.equal(updatedProductData.hasVariant[0].offers.shippingDetails.deliveryTime.transitTime.maxValue, 0);
   assert.match(updatedHtml, /В наличии в Душанбе/);
   assert.doesNotMatch(updatedHtml, /12–35 дней/);
 

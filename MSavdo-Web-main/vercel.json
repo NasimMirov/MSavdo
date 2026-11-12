@@ -1,4 +1,12 @@
 {
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "www.msavdo.shop" }],
+      "destination": "https://msavdo.shop/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     { "source": "/product/:path*", "destination": "https://api.msavdo.shop/product/:path*" },
     { "source": "/catalog/:path*", "destination": "https://api.msavdo.shop/catalog/:path*" },

@@ -10,6 +10,7 @@ import { ToastContainer, ToastItem } from './components/Toast';
 import { apiFetch } from './api';
 import { useI18n } from './i18n';
 import { addCartItem, mergeCartItems, MAX_CART_QUANTITY } from './utils/cart';
+import { readInitialCatalogCache, writeInitialCatalogCache } from './utils/catalogCache';
 import { 
   Search, 
   ShoppingBasket,
@@ -78,15 +79,17 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  const [initialCatalogCache] = useState(() => readInitialCatalogCache<Product>());
+
   // Данные каталога из API
-  const [products, setProducts] = useState<Product[]>([]);
+  const [products, setProducts] = useState<Product[]>(() => initialCatalogCache?.products ?? []);
   const [publicOffers, setPublicOffers] = useState<Array<{ id: number; title: string }>>([]);
   const [recommendedProducts, setRecommendedProducts] = useState<Product[]>([]);
-  const [totalProductCount, setTotalProductCount] = useState(0);
-  const [hasMoreProducts, setHasMoreProducts] = useState(false);
+  const [totalProductCount, setTotalProductCount] = useState(() => initialCatalogCache?.total ?? 0);
+  const [hasMoreProducts, setHasMoreProducts] = useState(() => initialCatalogCache?.has_more ?? false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [categoriesTree, setCategoriesTree] = useState<Category[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !initialCatalogCache);
   const [catalogError, setCatalogError] = useState<'initial' | 'more' | null>(null);
   const [whatsappPhone, setWhatsappPhone] = useState('992444431');
   const [showWhatsAppHelp, setShowWhatsAppHelp] = useState(false);
@@ -113,7 +116,9 @@ export default function App() {
   const [expandedCategoryId, setExpandedCategoryId] = useState<number | null>(null);
   const [isCategoryBrowserOpen, setIsCategoryBrowserOpen] = useState(false);
   const [isCategoriesOpen, setIsCategoriesOpen] = useState(false);
-  const [deliveryCounts, setDeliveryCounts] = useState<{ all: number; order: number; stock: number } | null>(null);
+  const [deliveryCounts, setDeliveryCounts] = useState<{ all: number; order: number; stock: number } | null>(
+    () => initialCatalogCache?.delivery_counts ?? null,
+  );
   const [browsingCategoryId, setBrowsingCategoryId] = useState<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastTrackedSearch = useRef('');
@@ -305,7 +310,7 @@ export default function App() {
   const fetchProducts = async (append = false) => {
     const requestId = ++catalogRequestId.current;
     if (append) setIsLoadingMore(true);
-    else setIsLoading(true);
+    else if (products.length === 0) setIsLoading(true);
     try {
       const params = new URLSearchParams({
         limit: '24',
@@ -321,6 +326,20 @@ export default function App() {
       if (!Array.isArray(data?.products)) throw new Error('Сервер не вернул список товаров');
       const page = data.products as Product[];
       setCatalogError(null);
+      if (
+        !append &&
+        !searchQuery.trim() &&
+        selectedCategoryId === null &&
+        deliveryFilter === 'all' &&
+        sortBy === 'popular'
+      ) {
+        writeInitialCatalogCache({
+          products: page,
+          total: Number(data?.total) || 0,
+          has_more: Boolean(data?.has_more),
+          delivery_counts: data.delivery_counts,
+        });
+      }
       if (!page.slice(0, 2).some((product) => product.main_image)) {
         window.dispatchEvent(new Event('msavdo:primary-image-ready'));
       }
@@ -339,7 +358,7 @@ export default function App() {
     } catch (error) {
       if (requestId === catalogRequestId.current) {
         console.error('[Catalog Loading Error]', error);
-        setCatalogError(append ? 'more' : 'initial');
+        setCatalogError(append ? 'more' : products.length > 0 ? null : 'initial');
         addToast('error', t('catalogLoadError'), t('catalogLoadRetry'));
       }
     } finally {
