@@ -5499,47 +5499,6 @@ function limitStructuredText(value: string, maxLength: number): string {
   return Array.from(value).slice(0, maxLength).join('').trim();
 }
 
-const STRUCTURED_COLOR_WORDS = new Set([
-  'black', 'white', 'blue', 'red', 'green', 'yellow', 'orange', 'purple', 'pink', 'brown', 'gray', 'grey',
-  'silver', 'gold', 'bronze', 'beige', 'ivory', 'cream', 'navy', 'teal', 'cyan', 'magenta', 'violet',
-  'burgundy', 'maroon', 'khaki', 'indigo', 'turquoise', 'olive', 'graphite', 'champagne', 'multicolor',
-  'dark', 'light', 'bright', 'pale', 'matte', 'metallic', 'rose',
-  'черный', 'черная', 'черное', 'черные', 'чёрный', 'чёрная', 'чёрное', 'чёрные',
-  'белый', 'белая', 'белое', 'белые', 'синий', 'синяя', 'синее', 'синие',
-  'голубой', 'голубая', 'голубое', 'голубые', 'красный', 'красная', 'красное', 'красные',
-  'зеленый', 'зеленая', 'зеленое', 'зеленые', 'желтый', 'желтая', 'желтое', 'желтые',
-  'оранжевый', 'оранжевая', 'фиолетовый', 'фиолетовая', 'розовый', 'розовая',
-  'коричневый', 'коричневая', 'серый', 'серая', 'серое', 'серые', 'серебристый', 'золотой',
-  'бронзовый', 'бежевый', 'беж', 'кремовый', 'слоновый', 'бордовый', 'малиновый',
-  'бирюзовый', 'оливковый', 'хаки', 'индиго', 'графитовый', 'шампань', 'многоцветный',
-  'темный', 'темная', 'темное', 'темные', 'тёмный', 'тёмная', 'тёмное', 'тёмные',
-  'светлый', 'светлая', 'светлое', 'светлые', 'матовый', 'матовая', 'металлик',
-  '黑色', '白色', '蓝色', '红色', '绿色', '黄色', '粉色', '灰色', '金色', '银色',
-]);
-const STRUCTURED_COLOR_MODIFIERS = new Set(['dark', 'light', 'bright', 'pale', 'matte', 'metallic', 'темный', 'темная', 'темное', 'темные', 'тёмный', 'тёмная', 'тёмное', 'тёмные', 'светлый', 'светлая', 'светлое', 'светлые', 'матовый', 'матовая']);
-
-function getStructuredColor(value: unknown): string {
-  const color = cleanSearchText(String(value || '')).replace(/ё/giu, 'е');
-  if (!color || Array.from(color).length > 60) return '';
-  const words = color.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  if (words.length === 0 || words.length > 5) return '';
-  return words.every((word) => STRUCTURED_COLOR_WORDS.has(word) || STRUCTURED_COLOR_MODIFIERS.has(word))
-    ? limitStructuredText(color, 60)
-    : '';
-}
-
-function getStructuredSize(value: unknown): string {
-  const size = cleanSearchText(String(value || ''));
-  if (!size || Array.from(size).length > 30 || !/^[\p{L}\p{N}./+\-\s]+$/u.test(size)) return '';
-  return /^(?:стандарт|standard|универсальный|универсальная|one size)$/iu.test(size) ? '' : size;
-}
-
-function makeVariantStructuredName(title: string, optionLabels: string[]): string {
-  const baseTitle = limitStructuredText(cleanSearchText(title) || 'Товар', 100);
-  const suffix = limitStructuredText(optionLabels.filter(Boolean).join(' / '), 147 - Array.from(baseTitle).length);
-  return limitStructuredText(suffix ? `${baseTitle} — ${suffix}` : baseTitle, 150);
-}
-
 function makeProductSlug(title: string): string {
   return title
     .normalize('NFC')
@@ -6269,67 +6228,18 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       url: canonicalUrl,
       seller,
     });
-    const structuredVariants = discountedVariants.map((variant) => ({
-      variant,
-      color: getStructuredColor(variant.color),
-      size: getStructuredSize(variant.size),
-    }));
-    const varyingAttributes: Array<'color' | 'size'> = [];
-    if (
-      structuredVariants.length > 1 &&
-      structuredVariants.every(({ color }) => color) &&
-      new Set(structuredVariants.map(({ color }) => color)).size > 1
-    ) {
-      varyingAttributes.push('color');
-    }
-    if (
-      structuredVariants.length > 1 &&
-      structuredVariants.every(({ size }) => size) &&
-      new Set(structuredVariants.map(({ size }) => size)).size > 1
-    ) {
-      varyingAttributes.push('size');
-    }
-    const structuredData = varyingAttributes.length > 0
-      ? {
-        '@context': 'https://schema.org',
-        '@type': 'ProductGroup',
-        name: limitStructuredText(cleanSearchText(product.title) || 'Товар', 150),
-        description: limitStructuredText(description, 5000),
-        productGroupID: product.base_sku,
-        variesBy: varyingAttributes.map((attribute) => `https://schema.org/${attribute}`),
-        ...(schemaBrand ? { brand: schemaBrand } : {}),
-        url: canonicalUrl,
-        ...(imageList.length ? { image: imageList } : {}),
-        ...(product.category_name ? { category: product.category_name } : {}),
-        hasVariant: structuredVariants.map(({ variant, color, size }) => ({
-          '@type': 'Product',
-          sku: variant.variant_sku,
-          name: makeVariantStructuredName(product.title, [
-            ...(varyingAttributes.includes('color') ? [color] : []),
-            ...(varyingAttributes.includes('size') ? [size] : []),
-          ]),
-          ...(varyingAttributes.includes('color') ? { color } : {}),
-          ...(varyingAttributes.includes('size') ? { size } : {}),
-          ...(variant.image_url ? {
-            image: getWatermarkedImageUrl(productId, variant.image_url) || undefined,
-          } : {}),
-          description: limitStructuredText(description, 5000),
-          url: canonicalUrl,
-          offers: offerForPrice(variant.price_tjs),
-        })),
-      }
-      : {
-        '@context': 'https://schema.org',
-        '@type': 'Product',
-        name: limitStructuredText(cleanSearchText(product.title) || 'Товар', 150),
-        description: limitStructuredText(description, 5000),
-        sku: product.base_sku,
-        ...(schemaBrand ? { brand: schemaBrand } : {}),
-        url: canonicalUrl,
-        ...(imageList.length ? { image: imageList } : {}),
-        ...(product.category_name ? { category: product.category_name } : {}),
-        ...(price > 0 ? { offers: offerForPrice(price) } : {}),
-      };
+    const structuredData = {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: limitStructuredText(cleanSearchText(product.title) || 'Товар', 150),
+      description: limitStructuredText(description, 5000),
+      sku: product.base_sku,
+      ...(schemaBrand ? { brand: schemaBrand } : {}),
+      url: canonicalUrl,
+      ...(imageList.length ? { image: imageList } : {}),
+      ...(product.category_name ? { category: product.category_name } : {}),
+      ...(price > 0 ? { offers: offerForPrice(price) } : {}),
+    };
     const breadcrumbData = {
       '@context': 'https://schema.org',
       '@type': 'BreadcrumbList',
