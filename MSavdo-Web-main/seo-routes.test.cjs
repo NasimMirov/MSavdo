@@ -135,6 +135,13 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.equal(filtered.delivery_counts.order, 1);
   const catalogResponse = await fetch(`${base}/api/products?limit=24&offset=0&sort=popular`);
   assert.match(catalogResponse.headers.get('cache-control') || '', /private, max-age=30, stale-while-revalidate=120/);
+  assert.match(catalogResponse.headers.get('vary') || '', /Origin/i);
+  const allowedOrigin = await fetch(`${base}/api/products?limit=24`, { headers: { Origin: 'https://msavdo.shop' } });
+  assert.equal(allowedOrigin.headers.get('access-control-allow-origin'), 'https://msavdo.shop');
+  assert.match(allowedOrigin.headers.get('vary') || '', /Origin/i);
+  const otherOrigin = await fetch(`${base}/api/products?limit=24`, { headers: { Origin: 'https://example.com' } });
+  assert.equal(otherOrigin.headers.get('access-control-allow-origin'), '*');
+  assert.match(otherOrigin.headers.get('vary') || '', /Origin/i);
   const catalog = await catalogResponse.json();
   assert.equal(catalog.total, catalog.delivery_counts.all);
   assert.equal(catalog.delivery_counts.order + catalog.delivery_counts.stock, catalog.delivery_counts.all);

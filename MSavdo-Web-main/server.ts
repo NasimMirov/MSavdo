@@ -89,10 +89,10 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   const isAdminApi = req.path.startsWith('/api/admin/');
   const sameOrigin = origin === `${req.protocol}://${req.get('host')}`;
+  res.vary('Origin');
   if (origin && (sameOrigin || adminAllowedOrigins.has(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Vary', 'Origin');
   } else {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
