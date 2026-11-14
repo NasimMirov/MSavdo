@@ -3422,8 +3422,8 @@ app.put('/api/admin/orders/:id', requireAdmin, (req, res) => {
   }
 });
 
-// Публичный доступ к получению заказов для быстрой синхронизации админки
-app.get('/api/orders', (req, res) => {
+// Compatibility routes for older admin clients remain administrator-only.
+app.get('/api/orders', requireAdmin, (req, res) => {
   try {
     const rows = db.prepare('SELECT * FROM orders ORDER BY id DESC').all() as any[];
     const orders = rows.map((o) => {
@@ -3461,7 +3461,7 @@ app.put('/api/admin/orders/:id/status', requireAdmin, (req, res) => {
   }
 });
 
-app.put('/api/orders/:id/status', (req, res) => {
+app.put('/api/orders/:id/status', requireAdmin, (req, res) => {
   try {
     const id = Number(req.params.id);
     const { status } = req.body;
@@ -3488,7 +3488,7 @@ app.delete('/api/admin/orders/:id', requireAdmin, (req, res) => {
   }
 });
 
-app.delete('/api/orders/:id', (req, res) => {
+app.delete('/api/orders/:id', requireAdmin, (req, res) => {
   try {
     const id = Number(req.params.id);
     db.prepare('DELETE FROM orders WHERE id = ?').run(id);

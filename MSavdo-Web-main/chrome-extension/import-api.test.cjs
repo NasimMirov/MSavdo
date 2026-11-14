@@ -566,6 +566,12 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(db.prepare('SELECT total_amount FROM orders WHERE id = ?').get(order.order_id).total_amount, 216);
     assert.equal(db.prepare('SELECT amount FROM order_promotions WHERE order_id = ?').get(order.order_id).amount, 24);
     assert.equal(db.prepare('SELECT uses FROM promotions WHERE id = ?').get(promoId).uses, 1);
+    assert.equal((await fetch(`${base}/api/orders`)).status, 401);
+    assert.equal((await fetch(`${base}/api/orders/${order.order_id}/status`, {
+      method: 'PUT', headers, body: JSON.stringify({ status: 'cancelled' }),
+    })).status, 401);
+    assert.equal((await fetch(`${base}/api/orders/${order.order_id}`, { method: 'DELETE' })).status, 401);
+    assert.equal(db.prepare('SELECT status FROM orders WHERE id = ?').get(order.order_id).status, 'new');
     const second = await fetch(`${base}/api/orders`, { method: 'POST', headers, body: JSON.stringify({ ...orderBody, quote_fingerprint: updatedQuote.fingerprint }) });
     assert.equal(second.status, 409);
     const cancel = await fetch(`${base}/api/admin/orders/${order.order_id}/status`, { method: 'PUT', headers: { ...headers, Cookie: cookie }, body: JSON.stringify({ status: 'cancelled' }) });

@@ -8,7 +8,6 @@ test("Vercel forwards product and sitemap routes without intercepting the storef
     ["/product/38/%D1%82%D0%BE%D0%B2%D0%B0%D1%80", "https://api.msavdo.shop/product/:path*"],
     ["/product/38", "https://api.msavdo.shop/product/:path*"],
     ["/catalog/1", "https://api.msavdo.shop/catalog/:path*"],
-    ["/robots.txt", "https://api.msavdo.shop/robots.txt"],
     ["/sitemap.xml", "https://api.msavdo.shop/sitemap.xml"],
     ["/sitemap-products-1.xml", "https://api.msavdo.shop/sitemap-products-:page.xml"],
     ["/sitemap-products-42.xml", "https://api.msavdo.shop/sitemap-products-:page.xml"],
@@ -19,7 +18,7 @@ test("Vercel forwards product and sitemap routes without intercepting the storef
     assert.equal(rules.length, 1, pathname);
     assert.equal(rules[0].destination, destination);
   }
-  for (const pathname of ["/", "/api/products", "/assets/index.js", "/sitemap-products-1.json"]) {
+  for (const pathname of ["/", "/api/products", "/assets/index.js", "/robots.txt", "/sitemap-products-1.json"]) {
     assert.equal(matches(pathname).length, 0, pathname);
   }
 });
