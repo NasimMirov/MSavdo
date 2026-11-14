@@ -10,8 +10,13 @@ export default async function proxy(request) {
   if (hostname !== 'msavdo.shop' && !hostname.endsWith('.vercel.app')) return next();
   try {
     const templateUrl = new URL('/index.html', request.url);
+    const previewCookie = hostname.endsWith('.vercel.app') ? request.headers.get('cookie') : null;
     const [template, catalog] = await Promise.all([
-      fetch(templateUrl, { redirect: 'manual', signal: AbortSignal.timeout(4000) }),
+      fetch(templateUrl, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(4000),
+        headers: previewCookie ? { cookie: previewCookie } : {},
+      }),
       fetch(catalogUrl, { signal: AbortSignal.timeout(4000) }),
     ]);
     if (!template.ok || !catalog.ok) throw new Error(`Homepage sources returned ${template.status} and ${catalog.status}`);

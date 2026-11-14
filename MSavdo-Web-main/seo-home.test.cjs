@@ -34,6 +34,22 @@ test('homepage exposes current product links and falls back to the storefront if
   products.push({ id: 10, title: 'Добавленный товар', min_price_tjs: 100 });
   assert.match(await (await proxy(new Request('https://msavdo.shop/'))).text(), /Добавленный товар/);
 
+  let templateCookie;
+  global.fetch = async (url, options) => {
+    if (String(url).startsWith('https://preview.vercel.app/index.html')) {
+      templateCookie = options.headers.cookie;
+      return new Response(template);
+    }
+    if (String(url) === 'https://api.msavdo.shop/api/seo/home') {
+      assert.equal(options.headers, undefined);
+      return Response.json({ products });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  };
+  const preview = await proxy(new Request('https://preview.vercel.app/', { headers: { cookie: 'preview-auth=example' } }));
+  assert.equal(templateCookie, 'preview-auth=example');
+  assert.match(await preview.text(), /Добавленный товар/);
+
   let logged = false;
   console.error = () => { logged = true; };
   global.fetch = async () => { throw new Error('API unavailable'); };
