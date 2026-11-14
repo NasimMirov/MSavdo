@@ -5846,9 +5846,17 @@ function cleanSearchText(value: string | null): string {
     .trim();
 }
 
+function truncateSearchText(value: string, limit: number): string {
+  const characters = Array.from(value);
+  if (characters.length <= limit) return value;
+  const prefix = characters.slice(0, limit).join('').trimEnd();
+  const boundary = prefix.lastIndexOf(' ');
+  return `${boundary > limit / 2 ? prefix.slice(0, boundary) : prefix}…`;
+}
+
 function makeSearchTitle(title: string): string {
   const cleanTitle = cleanSearchText(title) || 'Товар';
-  return `${limitStructuredText(cleanTitle, 70)} — купить в Таджикистане | M.Savdo`;
+  return `${truncateSearchText(cleanTitle, 70)} — купить в Таджикистане | M.Savdo`;
 }
 
 function makeSearchDescription(
@@ -5859,8 +5867,8 @@ function makeSearchDescription(
   maxPrice: number,
   deliveryType: string | null,
 ): string {
-  const cleanTitle = Array.from(cleanSearchText(title) || 'товар').slice(0, 110).join('');
-  const cleanCategory = Array.from(cleanSearchText(category)).slice(0, 35).join('');
+  const cleanTitle = truncateSearchText(cleanSearchText(title) || 'товар', 110);
+  const cleanCategory = truncateSearchText(cleanSearchText(category), 35);
   const categoryLabel = cleanCategory ? ` (${cleanCategory})` : '';
   const priceLabel = minPrice > 0
     ? `Цена ${minPrice}${maxPrice > minPrice ? `–${maxPrice}` : ''} сомони.`
@@ -5870,12 +5878,11 @@ function makeSearchDescription(
     : 'Ориентировочная доставка из Китая в Таджикистан — 12–35 дней.';
   const details = cleanSearchText(description);
   const detailsLabel = details && details.toLocaleLowerCase('ru') !== cleanTitle.toLocaleLowerCase('ru')
-    ? ` ${Array.from(details).slice(0, 70).join('').trim()}`
+    ? ` ${truncateSearchText(details, 70)}`
     : '';
-  return `Купить ${cleanTitle}${categoryLabel} в Таджикистане на M.Savdo. ${priceLabel} ${deliveryLabel}${detailsLabel}`
+  return truncateSearchText(`Купить ${cleanTitle}${categoryLabel} в Таджикистане на M.Savdo. ${priceLabel} ${deliveryLabel}${detailsLabel}`
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 320);
+    .trim(), 320);
 }
 
 app.get('/robots.txt', (_req, res) => {
@@ -5885,6 +5892,41 @@ app.get('/robots.txt', (_req, res) => {
 });
 
 const SEO_SITEMAP_PAGE_SIZE = 100;
+
+function getSeoCatalogProducts(limit: number, offset: number, popular: boolean) {
+  const products = db.prepare(`
+    SELECT p.id, p.title, p.main_image, p.images, p.discount_percent, p.delivery_type,
+           c.name AS category_name,
+           (SELECT v.image_url FROM product_variants v WHERE v.product_id = p.id
+            AND v.image_url IS NOT NULL AND v.image_url != '' ORDER BY v.id LIMIT 1) AS variant_image,
+           (SELECT MIN(v.price_tjs) FROM product_variants v
+            WHERE v.product_id = p.id AND v.price_tjs > 0 AND v.price_tjs = CAST(v.price_tjs AS INTEGER)) AS min_price
+    FROM products p LEFT JOIN categories c ON c.id = p.category_id
+    WHERE p.status = 'active'
+    ORDER BY ${popular ? 'p.views_count DESC, p.id DESC' : 'p.id DESC'} LIMIT ? OFFSET ?
+  `).all(limit, offset) as Array<{
+    id: number; title: string; main_image: string | null; images: string | null;
+    category_name: string | null; variant_image: string | null; discount_percent: number;
+    delivery_type: string | null; min_price: number | null;
+  }>;
+  return products.map((product) => ({
+    id: product.id,
+    title: product.title,
+    category_name: product.category_name,
+    delivery_type: product.delivery_type,
+    main_image: getPublicProductImageUrls(product.id, product.main_image, product.images, [product.variant_image], 1)[0] || '',
+    min_price_tjs: product.min_price ? calculateDiscountedPriceTjs(product.min_price, product.discount_percent || 0) : 0,
+  }));
+}
+
+app.get('/api/seo/home', (_req, res) => {
+  try {
+    return res.set('Cache-Control', 'public, max-age=60').json({ products: getSeoCatalogProducts(24, 0, true) });
+  } catch (error) {
+    console.error('[SEO Homepage] Не удалось загрузить товары:', error);
+    return res.status(500).json({ error: 'Не удалось загрузить товары' });
+  }
+});
 
 app.get('/sitemap.xml', (_req, res) => {
   try {
@@ -5975,13 +6017,15 @@ app.get('/catalog/:page', (req, res) => {
     const total = (db.prepare("SELECT COUNT(*) AS count FROM products WHERE status = 'active'").get() as { count: number }).count;
     const pageCount = Math.max(1, Math.ceil(total / SEO_SITEMAP_PAGE_SIZE));
     if (page > pageCount) return res.status(404).type('text/plain').send('Страница каталога не найдена');
-    const products = db.prepare(`
-      SELECT id, title FROM products WHERE status = 'active'
-      ORDER BY id DESC LIMIT ? OFFSET ?
-    `).all(SEO_SITEMAP_PAGE_SIZE, (page - 1) * SEO_SITEMAP_PAGE_SIZE) as Array<{ id: number; title: string }>;
-    const productLinks = products.map((product) =>
-      `<li><a href="${escapeHtml(getPublicProductUrl(product.id, product.title))}">${escapeHtml(product.title)}</a></li>`
-    ).join('');
+    const products = getSeoCatalogProducts(SEO_SITEMAP_PAGE_SIZE, (page - 1) * SEO_SITEMAP_PAGE_SIZE, false);
+    const productLinks = products.map((product) => {
+      const image = product.main_image;
+      const price = product.min_price_tjs;
+      return `<li><a class="card" href="${escapeHtml(getPublicProductUrl(product.id, product.title))}">
+${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" width="320" height="320">` : '<div class="placeholder">M.Savdo</div>'}
+<span class="card-content"><span class="title">${escapeHtml(product.title)}</span><strong>${price > 0 ? `от ${escapeHtml(price)} сомони` : 'Уточните цену'}</strong>
+<span class="delivery">${product.delivery_type === 'stock' ? 'В наличии в Душанбе' : 'Доставка 12–35 дней'}</span></span></a></li>`;
+    }).join('');
     const previous = page > 1 ? `<a href="/catalog/${page - 1}">Предыдущая страница</a>` : '';
     const next = page < pageCount ? `<a href="/catalog/${page + 1}">Следующая страница</a>` : '';
     const canonicalUrl = `${seoSiteUrl}/catalog/${page}`;
@@ -5990,10 +6034,10 @@ app.get('/catalog/:page', (req, res) => {
 <title>Каталог товаров M.Savdo — страница ${page}</title>
 <meta name="description" content="Каталог товаров M.Savdo (Маркази Савдо) с доставкой в Таджикистан. Страница ${page}.">
 <link rel="canonical" href="${escapeHtml(canonicalUrl)}">
-<style>body{font:16px/1.6 Arial,sans-serif;max-width:900px;margin:auto;padding:20px;color:#172033}li{margin:12px 0}nav a{margin-right:20px}</style>
+<style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.5 Arial,sans-serif}header{background:#f4c542;padding:14px 20px}header a{color:#111827;font-weight:800;text-decoration:none}main{max-width:1200px;margin:auto;padding:20px}.grid{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}.card{height:100%;display:flex;flex-direction:column;background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;color:inherit;text-decoration:none}.card:hover{border-color:#eab308}.card img,.placeholder{width:100%;aspect-ratio:1;object-fit:contain;background:#f1f5f9}.placeholder{display:grid;place-items:center;color:#64748b}.card-content{display:flex;flex:1;flex-direction:column;gap:8px;padding:12px}.title{flex:1}.delivery{font-size:13px;color:#475569}nav a{margin-right:20px}@media(max-width:500px){main{padding:12px}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.card-content{padding:8px;font-size:14px}}</style>
 </head><body><header><a href="/">M.Savdo — Маркази Савдо</a></header><main>
 <h1>Каталог товаров M.Savdo</h1><p>Страница ${page} из ${pageCount}.</p>
-${productLinks ? `<ul>${productLinks}</ul>` : '<p>Товары пока не опубликованы.</p>'}
+${productLinks ? `<ul class="grid">${productLinks}</ul>` : '<p>Товары пока не опубликованы.</p>'}
 <nav aria-label="Страницы каталога">${previous}${next}</nav>
 <p><a href="/">Открыть витрину и поиск товаров</a></p></main></body></html>`);
   } catch (error) {
@@ -6157,6 +6201,8 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       /^(?:бренд|торговая марка|brand|品牌|商标)$/iu.test(spec.name.trim()),
     )?.value.trim();
     const knownBrand = brandCandidate &&
+      brandCandidate.length <= 100 &&
+      !/\s\/\s|https?:\/\//i.test(brandCandidate) &&
       !/^(?:нейтральный|нейтральная|без бренда|неизвестно|generic|unbranded|no brand|unknown|none|n\/?a|无品牌|无牌)$/iu.test(brandCandidate)
       ? brandCandidate
       : '';
@@ -6255,6 +6301,12 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       ? `${price}${maxPrice && maxPrice !== price ? `–${maxPrice}` : ''} сомони`
       : 'Уточните цену';
     const specsHtml = specifications
+      .filter((spec) =>
+        (knownBrand || !/^(?:бренд|торговая марка|brand|品牌|商标)$/iu.test(spec.name.trim())) &&
+        !/^фото цвета\s*:/iu.test(spec.name.trim()) &&
+        !/^количество заказов, размещенных за последние/iu.test(spec.name.trim()) &&
+        !/^показатель соответствия стандартам качества дропшиппинга/iu.test(spec.name.trim())
+      )
       .map((spec) => `<li><strong>${escapeHtml(spec.name)}:</strong> ${escapeHtml(spec.value)}</li>`)
       .join('');
     const variantsHtml = discountedVariants
@@ -6265,7 +6317,12 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       })
       .filter(Boolean)
       .join('');
-    const galleryHtml = imageList.map((image) => `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`).join('');
+    const heroHtml = imageList[0]
+      ? `<img src="${escapeHtml(imageList[0])}" alt="${escapeHtml(product.title)}" fetchpriority="high">`
+      : '<p>Фото товара скоро появится</p>';
+    const galleryHtml = imageList.slice(1).map((image) =>
+      `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`
+    ).join('');
     const safeProductData = JSON.stringify(structuredData).replace(/</g, '\\u003c');
     const safeBreadcrumbData = JSON.stringify(breadcrumbData).replace(/</g, '\\u003c');
     res.set('Cache-Control', 'public, max-age=300');
@@ -6279,17 +6336,20 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 <meta name="twitter:title" content="${escapeHtml(searchTitle)}"><meta name="twitter:description" content="${escapeHtml(description)}">
 <script type="application/ld+json">${safeProductData}</script>
 <script type="application/ld+json">${safeBreadcrumbData}</script>
-<style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.6 Arial,sans-serif}.wrap{max-width:980px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-weight:800;color:#111;text-decoration:none}.product{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-top:24px;padding:24px;border-radius:20px;background:#fff;box-shadow:0 6px 30px #0f172a12}.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start}.gallery img{width:100%;aspect-ratio:1;object-fit:contain;background:#f1f5f9;border-radius:12px}.details h1{line-height:1.25}.price{font-size:24px;font-weight:800}.button{display:inline-block;margin:10px 8px 0 0;padding:11px 16px;border-radius:10px;background:#059669;color:white;text-decoration:none;font-weight:700}.button.secondary{background:#111827}.specs{padding-left:20px}@media(max-width:680px){.product{grid-template-columns:1fr;padding:16px}.gallery{grid-template-columns:1fr 1fr}.wrap{padding:12px}}</style></head>
+<style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.6 Arial,sans-serif}.wrap{max-width:1100px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-size:22px;font-weight:800;color:#111;text-decoration:none}.product{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;margin-top:24px;padding:24px;border-radius:16px;background:#fff;box-shadow:0 6px 30px #0f172a12}.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start}.gallery img{width:100%;aspect-ratio:1;object-fit:contain;background:#fff;border-radius:10px}.product .gallery img{grid-column:1/-1}.more-images .gallery{grid-template-columns:repeat(4,minmax(0,1fr))}.details h1{line-height:1.25;margin:.4em 0}.price{font-size:26px;font-weight:800;margin:.5em 0}.delivery{color:#475569}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 24px}.button{display:inline-block;padding:11px 16px;border-radius:10px;background:#f4c542;color:#111827;text-decoration:none;font-weight:700;text-align:center}.button.secondary{background:#e8f7ef;color:#065f46}.specs{padding-left:20px;overflow-wrap:anywhere}@media(max-width:680px){.product{grid-template-columns:1fr;padding:16px;gap:12px}.more-images .gallery{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:12px}.actions .button{flex:1 1 100%}}</style></head>
 <body><main class="wrap"><nav class="top"><a class="brand" href="/">M.Savdo</a><a href="/">Каталог товаров</a></nav>
-<article class="product"><div class="gallery">${galleryHtml || '<p>Фото товара скоро появится</p>'}</div>
+<article class="product"><div class="gallery">${heroHtml}</div>
 <section class="details"><p>${escapeHtml(product.category_name || 'Каталог M.Savdo')}</p><h1>${escapeHtml(product.title)}</h1>
-<p class="price">${escapeHtml(priceLabel)}</p><p>${escapeHtml(description)}</p>
+<p class="price">${escapeHtml(priceLabel)}</p>
+<p class="delivery">${product.delivery_type === 'stock' ? 'В наличии в Душанбе.' : 'Ориентировочная доставка из Китая в Таджикистан — 12–35 дней.'}</p>
+<div class="actions"><a class="button" href="/?product=${product.id}">Выбрать вариант и заказать</a>
+<a class="button secondary" href="${escapeHtml(whatsappUrl)}" target="_blank" rel="noopener noreferrer">Уточнить в WhatsApp</a></div>
 ${cleanSearchText(product.description) ? `<h2>Описание</h2><p>${escapeHtml(cleanSearchText(product.description))}</p>` : ''}
 ${specsHtml ? `<h2>Характеристики</h2><ul class="specs">${specsHtml}</ul>` : ''}
 ${variantsHtml ? `<h2>Варианты</h2><ul class="specs">${variantsHtml}</ul>` : ''}
-<p>Артикул: ${escapeHtml(product.base_sku)}</p><a class="button secondary" href="/?product=${product.id}">Выбрать вариант и заказать на сайте</a>
-<a class="button" href="${escapeHtml(whatsappUrl)}" target="_blank" rel="noopener noreferrer">Уточнить и заказать в WhatsApp</a>
-<p><a href="/catalog/1">Каталог товаров M.Savdo</a></p></section></article></main></body></html>`);
+<p>Артикул: ${escapeHtml(product.base_sku)}</p>
+<p><a href="/catalog/1">Каталог товаров M.Savdo</a></p></section></article>
+${galleryHtml ? `<section class="more-images"><h2>Фотографии товара</h2><div class="gallery">${galleryHtml}</div></section>` : ''}</main></body></html>`);
   } catch (error) {
     console.error('[SEO Product Page] Не удалось сформировать страницу товара:', error);
     return res.status(500).type('text/plain').send('Не удалось загрузить страницу товара');

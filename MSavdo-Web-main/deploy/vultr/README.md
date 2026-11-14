@@ -39,6 +39,8 @@ Do not overwrite an existing data directory without preserving a separate copy. 
 
 Add and manage products from the storefront's administrator panel. Active products are read from the database, and the sitemap index plus paginated product sitemaps are generated from the active catalog, so adding a product does not require a code deployment or manual sitemap edit. Google controls its own recrawl and indexing schedule.
 
+The Vercel homepage middleware uses `/api/seo/home` to include up to 24 popular active products in the initial HTML; the paginated catalog and sitemaps cover the rest. Deploy the API before deploying frontend changes that use this endpoint. If either the API or the static template cannot be fetched, the middleware logs the error and serves the ordinary storefront instead. The middleware consumes Vercel function usage; monitor the account's plan limits.
+
 Checkout records the order in SQLite before opening the configured WhatsApp conversation. Review and manage orders from the authenticated administrator panel. Gemini suggestions are optional; manual product entry and the built-in semantic import fallback work without a Gemini key.
 
 Vultr Auto Backups are enabled for the production instance. The database and uploads are on the instance's root filesystem; keep a separate, verified application-data archive outside the VPS as well. The migration archives under `/opt/msavdo/backups` are on the VPS and are not an off-site copy.

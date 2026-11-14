@@ -1,4 +1,8 @@
 {
+  "proxy": {
+    "entrypoint": "proxy.js",
+    "matcher": ["/"]
+  },
   "redirects": [
     {
       "source": "/:path*",

@@ -86,12 +86,19 @@ test('catalog and sitemap discover active products and product pages are identic
   }
   const newProduct = insert.run('Умные очки Bluetooth Wi-Fi 16 ГБ', 'Доставка 18-30 дней!\n\nОписание очков', 'seo-test-glasses', 'active');
   const productId = Number(newProduct.lastInsertRowid);
-  db.prepare('UPDATE products SET main_image = ? WHERE id = ?')
-    .run('/uploads/seo-test.jpg', productId);
+  db.prepare('UPDATE products SET main_image = ?, images = ? WHERE id = ?')
+    .run('/uploads/seo-test.jpg', '/uploads/seo-test-2.jpg', productId);
   db.prepare('UPDATE products SET specifications = ? WHERE id = ?')
     .run(JSON.stringify([{ name: 'Бренд', value: 'Test Brand' }]), productId);
   db.prepare('UPDATE products SET specifications = ? WHERE id = ?')
-    .run(JSON.stringify([{ name: 'Бренд', value: 'нейтральный' }]), noOfferId);
+    .run(JSON.stringify([{ name: 'Бренд', value: 'Австралийские инвестиции / Материал оболочки / ABS' }]), noOfferId);
+  db.prepare('UPDATE products SET specifications = ? WHERE id = ?')
+    .run(JSON.stringify([
+      { name: 'Бренд', value: 'Test Brand' },
+      { name: 'Фото цвета: Чёрный', value: 'https://example.com/image.jpg' },
+      { name: 'Количество заказов, размещенных за последние 30 дней', value: '100' },
+      { name: 'Материал', value: 'Пластик' },
+    ]), productId);
   const longNameId = Number(insert.run(`${'Длинное название '.repeat(20)}`, 'Длинное описание', 'seo-test-long-name', 'active').lastInsertRowid);
   const longColorId = Number(insert.run('Товар с длинным названием '.repeat(8), 'Описание товара', 'seo-test-long-color', 'active').lastInsertRowid);
   const categoryId = Number(db.prepare('INSERT INTO categories (name) VALUES (?)').run('Оптика для теста').lastInsertRowid);
@@ -167,8 +174,17 @@ test('catalog and sitemap discover active products and product pages are identic
   await checkSitemapCoverage();
   const firstCatalog = await (await fetch(`${base}/catalog/1`)).text();
   assert.match(firstCatalog, /Умные очки Bluetooth Wi-Fi 16 ГБ/);
+  assert.match(firstCatalog, /от 360 сомони/);
+  assert.match(firstCatalog, /<img src="https:\/\/api\.msavdo\.shop\/product-image\//);
   assert.match(firstCatalog, /href="\/catalog\/2"/);
   assert.doesNotMatch(firstCatalog, /Черновик/);
+  const homeCatalog = await (await fetch(`${base}/api/seo/home`)).json();
+  assert.equal(homeCatalog.products.length, 24);
+  assert.equal(homeCatalog.products.some((product) => product.id === draftId), false);
+  const homeProduct = homeCatalog.products.find((product) => product.id === productId);
+  assert.equal(homeProduct.min_price_tjs, 360);
+  assert.equal(homeProduct.category_name, 'Оптика для теста');
+  assert.equal(homeProduct.price_cny, undefined);
   const secondCatalog = await (await fetch(`${base}/catalog/2`)).text();
   assert.match(secondCatalog, /href="\/catalog\/1"/);
   assert.equal((await fetch(`${base}/catalog/3`)).status, 404);
@@ -180,6 +196,7 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.equal(noOfferData[0].offers, undefined);
   assert.equal(noOfferData[0].brand, undefined);
   assert.match(noOfferHtml, /Уточните цену/);
+  assert.doesNotMatch(noOfferHtml, /Австралийские инвестиции/);
   const longNameHtml = await (await fetch(`${base}/product/${longNameId}/длинное-название`)).text();
   const longNameData = readStructuredData(longNameHtml);
   assert.equal(longNameData[0]['@type'], 'Product');
@@ -202,6 +219,11 @@ test('catalog and sitemap discover active products and product pages are identic
   assert.equal(html, await crawler.text());
   assert.match(html, /Умные очки Bluetooth Wi-Fi 16 ГБ — купить/);
   assert.match(html, /Описание очков/);
+  assert.ok(html.indexOf('Выбрать вариант и заказать') < html.indexOf('<h2>Характеристики</h2>'));
+  assert.ok(html.indexOf('Выбрать вариант и заказать') < html.indexOf('Фотографии товара'));
+  assert.doesNotMatch(html, /Фото цвета: Чёрный|Количество заказов, размещенных за последние/);
+  assert.match(html, /Материал/);
+  assert.doesNotMatch(html, /<p>Купить Умные очки/);
   assert.doesNotMatch(html, /18-30/);
   assert.match(html, /12–35 дней/);
   assert.match(html, new RegExp(`href="/\\?product=${productId}"`));
@@ -211,7 +233,7 @@ test('catalog and sitemap discover active products and product pages are identic
   const structuredData = readStructuredData(html);
   const productData = structuredData[0];
   assert.equal(productData['@type'], 'Product');
-  assert.equal(productData.image.length, 1);
+  assert.equal(productData.image.length, 2);
   assert.ok(sitemap.includes(`<image:loc>${productData.image[0]}</image:loc>`));
   assert.equal(structuredData[1]['@type'], 'BreadcrumbList');
   assert.ok(productData.name.length > 0 && Array.from(productData.name).length <= 150);
