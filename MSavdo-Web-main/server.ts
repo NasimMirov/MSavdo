@@ -5059,17 +5059,34 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
   });
 });
 
-app.post('/api/admin/tokenplan-key', requireAdmin, (req, res) => {
+async function verifyTokenPlanKey(key: string): Promise<void> {
+  await requestTokenPlanSuggestion(key, 'title', {
+    title: 'Тестовый товар', description: '', specifications: [],
+  }, STRICT_ALLOWED_CATEGORIES);
+}
+
+app.post('/api/admin/test-tokenplan', requireAdmin, async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  try {
+    await verifyTokenPlanKey(readTokenPlanKey());
+    return res.json({ success: true, message: 'TokenPlan отвечает, сохранённый ключ работает.' });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось проверить TokenPlan.' });
+  }
+});
+
+app.post('/api/admin/tokenplan-key', requireAdmin, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   const key: unknown = req.body?.key;
   if (typeof key !== 'string' || !key.trim() || key.trim().length > 512 || /\s/.test(key.trim())) {
     return res.status(400).json({ error: 'Введите ключ TokenPlan без пробелов.' });
   }
   try {
+    await verifyTokenPlanKey(key.trim());
     setSetting('tokenplan_api_key_encrypted', encryptTokenPlanKey(key.trim()));
     return res.json({ success: true });
-  } catch {
-    return res.status(503).json({ error: 'Не удалось сохранить ключ. Проверьте ADMIN_JWT_SECRET и настройки сервера.' });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось проверить или сохранить ключ TokenPlan.' });
   }
 });
 

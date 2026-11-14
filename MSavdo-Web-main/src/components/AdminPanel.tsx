@@ -1369,6 +1369,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const testTokenPlanKey = async () => {
+    setTokenPlanKeySaving(true);
+    setTokenPlanKeyMessage('Проверка TokenPlan…');
+    try {
+      const response = await adminFetch('/api/admin/test-tokenplan', { method: 'POST', cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось проверить TokenPlan.');
+      setTokenPlanKeyMessage(data.message || 'TokenPlan отвечает, ключ работает.');
+    } catch (error) {
+      setTokenPlanKeyMessage(error instanceof Error ? error.message : 'Не удалось проверить TokenPlan.');
+    } finally {
+      setTokenPlanKeySaving(false);
+    }
+  };
+
   const manageExtensionKey = async (revoke: boolean) => {
     setExtensionKeySaving(true);
     setExtensionImportKey('');
@@ -2828,10 +2843,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <input id="tokenplan-key" type="password" autoComplete="off" maxLength={512} value={tokenPlanKey}
               onChange={(event) => setTokenPlanKey(event.target.value)} placeholder="Вставьте новый ключ TokenPlan"
               className="w-full rounded-xl border border-slate-300 p-3 text-sm" />
-            <button type="button" disabled={tokenPlanKeySaving} onClick={() => void saveTokenPlanKey()}
-              className="rounded-xl bg-purple-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
-              {tokenPlanKeySaving ? 'Сохранение…' : 'Сохранить или заменить ключ'}
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={tokenPlanKeySaving} onClick={() => void saveTokenPlanKey()}
+                className="rounded-xl bg-purple-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">
+                {tokenPlanKeySaving ? 'Проверка…' : 'Сохранить и проверить'}
+              </button>
+              <button type="button" disabled={tokenPlanKeySaving || !tokenPlanKeyConfigured} onClick={() => void testTokenPlanKey()}
+                className="rounded-xl border border-purple-300 px-4 py-2 text-xs font-bold text-purple-800 disabled:opacity-50">
+                Проверить сохранённый ключ
+              </button>
+            </div>
             {tokenPlanKeyMessage && <p role="status" className="text-xs text-slate-700">{tokenPlanKeyMessage}</p>}
           </section>
           <section className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
