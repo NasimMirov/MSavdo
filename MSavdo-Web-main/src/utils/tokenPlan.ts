@@ -5,7 +5,7 @@ export type ProductSuggestionAction = 'title' | 'description' | 'category';
 // TokenPlan changes its API domain again.
 const tokenPlanApiUrl = typeof process !== 'undefined' && process.env?.TOKENPLAN_API_URL?.trim()
   ? process.env.TOKENPLAN_API_URL.trim().replace(/\/+$/, '')
-  : 'https://tokenplan.lat/v1/chat/completions';
+  : 'https://tokenplan.art/v1/chat/completions';
 
 export async function requestTokenPlanSuggestion(
   key: string,
