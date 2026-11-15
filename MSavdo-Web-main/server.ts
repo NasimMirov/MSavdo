@@ -5081,12 +5081,18 @@ app.post('/api/admin/tokenplan-key', requireAdmin, async (req, res) => {
   if (typeof key !== 'string' || !key.trim() || key.trim().length > 512 || /\s/.test(key.trim())) {
     return res.status(400).json({ error: 'Введите ключ TokenPlan без пробелов.' });
   }
+  const normalizedKey = key.trim();
   try {
-    await verifyTokenPlanKey(key.trim());
-    setSetting('tokenplan_api_key_encrypted', encryptTokenPlanKey(key.trim()));
-    return res.json({ success: true });
+    setSetting('tokenplan_api_key_encrypted', encryptTokenPlanKey(normalizedKey));
   } catch (error) {
-    return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось проверить или сохранить ключ TokenPlan.' });
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось сохранить ключ TokenPlan.' });
+  }
+  try {
+    await verifyTokenPlanKey(normalizedKey);
+    return res.json({ success: true, message: 'Ключ сохранён и TokenPlan отвечает.' });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Не удалось проверить доступ TokenPlan.';
+    return res.json({ success: true, message: `Ключ сохранён. Проверка TokenPlan не прошла: ${reason}` });
   }
 });
 

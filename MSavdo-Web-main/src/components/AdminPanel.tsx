@@ -1361,7 +1361,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (!response.ok) throw new Error(data.error || 'Не удалось сохранить ключ.');
       setTokenPlanKey('');
       setTokenPlanKeyConfigured(true);
-      setTokenPlanKeyMessage('Ключ сохранён. Его работоспособность проверяется при запросе к ИИ.');
+      setTokenPlanKeyMessage(data.message || 'Ключ TokenPlan сохранён.');
     } catch (error) {
       setTokenPlanKeyMessage(error instanceof Error ? error.message : 'Не удалось сохранить ключ.');
     } finally {
