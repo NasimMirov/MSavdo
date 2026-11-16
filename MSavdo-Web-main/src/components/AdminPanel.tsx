@@ -840,12 +840,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const checkSomonFeed = async () => {
     try {
-      const response = await apiFetch(`/somon-feed.xml?check=${Date.now()}`, { cache: 'no-store' });
-      const xml = await response.text();
+      const [reportResponse, feedResponse] = await Promise.all([
+        adminFetch('/api/admin/somon/feed-report', { cache: 'no-store' }),
+        apiFetch(`/somon-feed.xml?check=${Date.now()}`, { cache: 'no-store' }),
+      ]);
+      if (!feedResponse.ok) {
+        setSomonFeedStatus(`\u041b\u0435\u043d\u0442\u0430 \u0432\u0435\u0440\u043d\u0443\u043b\u0430 HTTP ${feedResponse.status}.`);
+        return;
+      }
+      const xml = await feedResponse.text();
       const count = (xml.match(/<list-item>\s*<last_update>/g) || []).length;
-      setSomonFeedStatus(response.ok ? `В XML сейчас ${count} товаров.` : `Лента вернула HTTP ${response.status}.`);
+      if (reportResponse.ok) {
+        const report = await reportResponse.json() as { skipped?: number; reasons?: Record<string, number> };
+        const skipped = Number(report.skipped || 0);
+        const details = Object.entries(report.reasons || {})
+          .filter(([, value]) => Number(value) > 0)
+          .map(([key, value]) => `${key}: ${value}`).join(', ');
+        setSomonFeedStatus(`\u0412 XML ${count} \u0442\u043e\u0432\u0430\u0440\u043e\u0432; \u043f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u043e\u0439: ${skipped}.${details ? ` \u041f\u0440\u0438\u0447\u0438\u043d\u044b: ${details}.` : ''}`);
+      } else {
+        setSomonFeedStatus(`\u0412 XML \u0441\u0435\u0439\u0447\u0430\u0441 ${count} \u0442\u043e\u0432\u0430\u0440\u043e\u0432.`);
+      }
     } catch {
-      setSomonFeedStatus('Не удалось проверить XML-ленту.');
+      setSomonFeedStatus('\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c XML-\u043b\u0435\u043d\u0442\u0443.');
     }
   };
 

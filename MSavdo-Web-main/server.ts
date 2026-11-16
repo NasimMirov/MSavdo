@@ -5854,6 +5854,80 @@ function cleanSomonTitle(title: string): string {
     .slice(0, 70);
 }
 
+/** Somon checks the URL suffix literally. Keep query strings and fragments
+ * out of the feed so a valid image cannot be rejected as ".jpg?width=640". */
+function isSomonImageUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && !url.search
+      && !url.hash
+      && /\.(?:jpe?g|png)$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isSomonDistrictId(value: string): boolean {
+  return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0;
+}
+
+app.get('/business-xml-guide/', (_req, res) => {
+  return res.sendFile(path.join(__dirname, 'docs', 'somon', 'business-xml-guide.html'));
+});
+
+app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
+  try {
+    const parsedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
+    const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
+      ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
+      : {};
+    const districtId = getSetting('somon_district_id', '139') === '511' ? '139' : getSetting('somon_district_id', '139');
+    const rows = db.prepare(`
+      SELECT p.id, p.title, p.category_id, p.main_image, p.images,
+             MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
+             GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images
+      FROM products p
+      LEFT JOIN product_variants v ON v.product_id = p.id
+      WHERE p.status = 'active'
+      GROUP BY p.id
+    `).all() as Array<{
+      id: number; title: string; category_id: number | null; main_image: string | null;
+      images: string | null; price_tjs: number | null; variant_images: string | null;
+    }>;
+    const reasons = { no_category: 0, no_price: 0, no_rubric: 0, invalid_title: 0, no_images: 0, invalid_images: 0 };
+    let publishable = 0;
+    for (const product of rows) {
+      if (!product.category_id) { reasons.no_category++; continue; }
+      if (!Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) { reasons.no_price++; continue; }
+      const config = storedConfig[String(product.category_id)];
+      const rubricId = String(config?.rubric_id ?? '');
+      const attributes = config?.attributes && typeof config.attributes === 'object' && !Array.isArray(config.attributes)
+        ? config.attributes as Record<string, unknown> : {};
+      // These mappings are resolved automatically by the feed itself.
+      const hasAutomaticMapping = [28, 29, 49, 52, 85].includes(Number(product.category_id));
+      if ((!/^\d+$/.test(rubricId) || !Object.keys(attributes).length) && !hasAutomaticMapping) { reasons.no_rubric++; continue; }
+      if (!cleanSomonTitle(product.title)) { reasons.invalid_title++; continue; }
+      const allImages = getPublicProductImageUrls(product.id, product.main_image, product.images,
+        product.variant_images ? product.variant_images.split(',') : [], 32);
+      const validImages = allImages.filter(isSomonImageUrl).slice(0, 16);
+      if (!validImages.length) { reasons.no_images++; continue; }
+      reasons.invalid_images += allImages.length - validImages.length;
+      publishable++;
+    }
+    return res.json({
+      source: 'https://somon.tj/business-xml-guide/',
+      guide_snapshot: '/business-xml-guide/',
+      city_id: '511', district_id: isSomonDistrictId(districtId) ? districtId : null,
+      total_active: rows.length, publishable, skipped: rows.length - publishable, reasons,
+      constraints: { title_max_length: 70, max_images: 16, image_extensions: ['.jpg', '.jpeg', '.png'], integer_price: true },
+    });
+  } catch (error) {
+    console.error('[Somon Report] Не удалось сформировать отчёт:', error);
+    return res.status(500).json({ error: 'Не удалось сформировать отчёт Somon' });
+  }
+});
+
 app.get('/somon-feed.xml', (_req, res) => {
   try {
     const parsedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
@@ -5991,8 +6065,9 @@ app.get('/somon-feed.xml', (_req, res) => {
         product.variant_images ? product.variant_images.split(',') : [],
         32,
       )
-        .filter((image) => !/\.(?:gif|webp|svg|avif|bmp|tiff?)$/i.test(new URL(image).pathname))
+        .filter(isSomonImageUrl)
         .slice(0, 16);
+      if (!images.length) continue;
       // Keep the .jpg suffix as the final URL suffix. Somon validates the
       // extension literally and rejects URLs with a query after `.jpg`.
       const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');

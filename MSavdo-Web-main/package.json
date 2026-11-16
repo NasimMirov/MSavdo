@@ -10,7 +10,8 @@
     "start": "tsx server.ts",
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sync:somon-guide": "node scripts/sync-somon-guide.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
