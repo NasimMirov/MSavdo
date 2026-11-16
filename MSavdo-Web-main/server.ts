@@ -5993,7 +5993,13 @@ app.get('/somon-feed.xml', (_req, res) => {
       )
         .filter((image) => !/\.(?:gif|webp|svg|avif|bmp|tiff?)$/i.test(new URL(image).pathname))
         .slice(0, 16);
-      const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
+      // Somon first performs a HEAD request and has a short header timeout.
+      // Request the cached 640px rendition to keep the transfer small.
+      const imageXml = images.map((image) => {
+        const imageUrl = new URL(image);
+        imageUrl.searchParams.set('width', '640');
+        return `<list-item>${escapeXml(imageUrl.toString())}</list-item>`;
+      }).join('');
       const delivery = product.delivery_type === 'stock' ? '0' : '1';
       items.push(`
     <list-item>
@@ -6239,6 +6245,21 @@ ${productLinks ? `<ul class="grid">${productLinks}</ul>` : '<p>Товары по
     console.error('[SEO Catalog] Не удалось сформировать страницу каталога:', error);
     return res.status(500).type('text/plain').send('Не удалось загрузить каталог');
   }
+});
+
+app.head('/product-image/:productId/:token.jpg', (req, res) => {
+  const productId = Number(req.params.productId);
+  const token = req.params.token;
+  if (!Number.isSafeInteger(productId) || productId <= 0 || !/^[a-f0-9]{64}$/.test(token)) {
+    return res.sendStatus(404);
+  }
+  // Do not render or download the source image for HEAD. Somon only needs
+  // the media headers before issuing the actual GET request.
+  return res.status(200)
+    .type('image/jpeg')
+    .set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800')
+    .set('X-Content-Type-Options', 'nosniff')
+    .end();
 });
 
 app.get('/product-image/:productId/:token.jpg', async (req, res) => {
