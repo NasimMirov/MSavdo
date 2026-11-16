@@ -5828,6 +5828,7 @@ app.get('/somon-feed.xml', (_req, res) => {
         .filter((image) => !/\.(?:gif|webp|svg|avif|bmp|tiff?)$/i.test(new URL(image).pathname))
         .slice(0, 16);
       const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
+      const delivery = product.delivery_type === 'stock' ? '0' : '1';
       const itemUrl = getPublicProductUrl(product.id, product.title);
       items.push(`
     <list-item>
@@ -5842,6 +5843,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       <phone_hide>0</phone_hide>
       <negotiable_price>0</negotiable_price>
       <exchange>0</exchange>
+      <delivery>${delivery}</delivery>
       ${xmlFields.join('')}
       <attrs>${xmlAttributes.join('')}</attrs>
       <geometry></geometry>
