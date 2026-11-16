@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Product, ProductVariant, CartItem } from '../types';
-import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play, ChevronLeft, ChevronRight } from 'lucide-react';
+import { X, Check, ShoppingBasket, ShieldCheck, Truck, Sparkles, Clock, Minus, Plus, ZoomIn, Play, ChevronLeft, ChevronRight, Star } from 'lucide-react';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { ProductShareButton } from './ProductShareButton';
@@ -92,6 +92,12 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [selectedQuantity, setSelectedQuantity] = useState(1);
   const [isQuantityPickerOpen, setIsQuantityPickerOpen] = useState(false);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
+  const [reviews, setReviews] = useState<Array<{ id: number; customer_name: string; rating: number; review_text: string; created_at: string }>>([]);
+  const [reviewName, setReviewName] = useState('');
+  const [reviewText, setReviewText] = useState('');
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewMessage, setReviewMessage] = useState('');
+  const [reviewSending, setReviewSending] = useState(false);
 
   const productVideos = useMemo(() => {
     const storedVideos = Array.isArray(product?.video_urls) ? product.video_urls : [];
@@ -132,6 +138,34 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
     return () => controller.abort();
   }, [product?.id]);
+
+  useEffect(() => {
+    if (!product) { setReviews([]); return; }
+    const controller = new AbortController();
+    setReviews([]); setReviewMessage('');
+    apiFetch(`/api/products/${product.id}/reviews`, { signal: controller.signal })
+      .then(async (response) => { if (!response.ok) throw new Error('Reviews unavailable'); return response.json(); })
+      .then((data) => setReviews(Array.isArray(data.reviews) ? data.reviews : []))
+      .catch((error) => { if (error.name !== 'AbortError') console.warn('[Product Reviews]', error); });
+    return () => controller.abort();
+  }, [product?.id]);
+
+  const submitReview = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!product || reviewSending) return;
+    setReviewSending(true); setReviewMessage('');
+    try {
+      const response = await apiFetch(`/api/products/${product.id}/reviews`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: reviewName, rating: reviewRating, review: reviewText }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось отправить отзыв.');
+      setReviewName(''); setReviewText(''); setReviewRating(5);
+      setReviewMessage(data.message || 'Спасибо! Отзыв отправлен на проверку.');
+    } catch (error) { setReviewMessage(error instanceof Error ? error.message : 'Не удалось отправить отзыв.'); }
+    finally { setReviewSending(false); }
+  };
 
   // Синхронизация размера при смене цвета
   useEffect(() => {
@@ -794,6 +828,18 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 </div>
               )}
             </div>
+
+            <section className="space-y-4 border-t border-slate-200 px-4 py-6 sm:px-8" aria-label="Отзывы о товаре">
+              <div><h3 className="text-base font-extrabold text-slate-900">Отзывы покупателей</h3><p className="mt-1 text-xs text-slate-500">Публикуем отзывы после проверки. Оценивайте только товар, который действительно получили.</p></div>
+              {reviews.length > 0 && <div className="space-y-3">{reviews.map((review) => <article key={review.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3"><div className="flex items-center justify-between gap-2"><strong className="text-xs text-slate-800">{review.customer_name}</strong><span className="flex text-amber-500" aria-label={`Оценка ${review.rating} из 5`}>{Array.from({length: review.rating}, (_, index) => <Star key={index} className="h-3.5 w-3.5 fill-current"/>)}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{review.review_text}</p></article>)}</div>}
+              <form onSubmit={(event) => void submitReview(event)} className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
+                <label className="text-xs font-semibold text-slate-700">Ваше имя<input required minLength={2} maxLength={80} value={reviewName} onChange={(event) => setReviewName(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm" /></label>
+                <label className="text-xs font-semibold text-slate-700">Оценка<select value={reviewRating} onChange={(event) => setReviewRating(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm">{[5,4,3,2,1].map((rating) => <option key={rating} value={rating}>{rating} из 5 звёзд</option>)}</select></label>
+                <label className="text-xs font-semibold text-slate-700 sm:col-span-2">Отзыв о товаре<textarea required minLength={10} maxLength={3000} rows={3} value={reviewText} onChange={(event) => setReviewText(event.target.value)} placeholder="Расскажите о полученном товаре и своём опыте" className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm" /></label>
+                <button type="submit" disabled={reviewSending} className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50 sm:col-span-2 sm:justify-self-start">{reviewSending ? 'Отправка…' : 'Отправить на проверку'}</button>
+                {reviewMessage && <p role="status" className="text-xs font-semibold text-emerald-700 sm:col-span-2">{reviewMessage}</p>}
+              </form>
+            </section>
 
             <section id="related-products" className="scroll-mt-24 px-4 pb-8 sm:px-8" aria-label={t('similarProducts')}>
               <div className="mb-3 sm:mb-4 flex items-center gap-2">

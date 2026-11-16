@@ -39,12 +39,14 @@ import {
   Package,
   Phone,
   MessageSquare,
-  Percent
+  Percent,
+  Star,
 } from 'lucide-react';
 import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
 import { PromotionsAdmin } from './PromotionsAdmin';
 import { ProductDiscountsAdmin } from './ProductDiscountsAdmin';
+import { ProductReviewsAdmin } from './ProductReviewsAdmin';
 import { apiFetch, apiUrl } from '../api';
 import { useI18n } from '../i18n';
 import { COLOR_IMAGE_SPEC_PREFIX, extractProductColors, normalizeProductColor, removeProductColor } from '../utils/productDescription';
@@ -115,7 +117,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
-  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'promotions' | 'discounts' | 'gemini_ai' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'reviews' | 'promotions' | 'discounts' | 'gemini_ai' | 'settings'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
   const [deletedProducts, setDeletedProducts] = useState<Array<{ id: number; title: string; base_sku: string; deleted_at: string }>>([]);
   const [canRecoverDeletedProducts, setCanRecoverDeletedProducts] = useState(false);
@@ -862,6 +864,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       id: 0,
       base_sku: 'НОВЫЙ',
       title: '',
+      brand: '',
+      manufacturer: '',
+      gtin: '',
+      mpn: '',
       description: '',
       original_link: '',
       delivery_type: 'order',
@@ -954,6 +960,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       id: p.id,
       base_sku: p.base_sku,
       title: p.title,
+      brand: p.brand || '',
+      manufacturer: p.manufacturer || '',
+      gtin: p.gtin || '',
+      mpn: p.mpn || '',
       description: p.description || '',
       original_link: p.original_link || '',
       delivery_type: p.delivery_type || 'order',
@@ -1481,6 +1491,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     try {
       const payload = {
         title: editingProduct.title.trim(),
+        brand: editingProduct.brand || '',
+        manufacturer: editingProduct.manufacturer || '',
+        gtin: editingProduct.gtin || '',
+        mpn: editingProduct.mpn || '',
         category_id: editingProduct.category_id || null,
         description: editingProduct.description || '',
         original_link: editingProduct.original_link || '',
@@ -1929,6 +1943,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               { id: 'visitors' as const, label: 'Посещения', icon: <Eye className="h-4 w-4 text-sky-500" />, action: () => { setActiveTab('visitors'); void loadVisitAnalytics(); } },
               { id: 'searches' as const, label: 'Поиски', icon: <Search className="h-4 w-4 text-amber-500" />, action: () => { setActiveTab('searches'); void loadSearchAnalytics(); } },
               { id: 'feedback' as const, label: 'Предложения', icon: <MessageSquare className="h-4 w-4 text-emerald-500" />, action: () => { setActiveTab('feedback'); void loadFeedback(); } },
+              { id: 'reviews' as const, label: 'Отзывы', icon: <Star className="h-4 w-4 text-amber-500" />, action: () => setActiveTab('reviews') },
             ],
           },
           {
@@ -1998,6 +2013,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </button>}
         </section>
       )}
+      {activeTab === 'reviews' && <ProductReviewsAdmin />}
       {activeTab === 'products' && (
         <div className="space-y-4">
           {adminProductsError && (
@@ -3792,6 +3808,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   className="w-full p-2.5 border border-slate-300 rounded-xl text-xs text-slate-800 focus:ring-2 focus:ring-amber-500 outline-none leading-relaxed font-sans"
                 />
               </div>
+
+              <section className="rounded-2xl border border-sky-200 bg-sky-50/60 p-3.5 space-y-2">
+                <div><h4 className="text-xs font-extrabold text-slate-900">Данные производителя для Google</h4><p className="mt-1 text-[10px] text-slate-600">Перепишите данные с упаковки или страницы производителя. Не указывайте M.Savdo как бренд товара. GTIN/EAN проверяется по контрольной цифре.</p></div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {[['brand','Бренд товара','Например, Xiaomi'],['manufacturer','Производитель','Компания с упаковки'],['gtin','Штрихкод GTIN / EAN','8, 12, 13 или 14 цифр'],['mpn','Номер модели производителя (MPN)','С упаковки или паспорта']].map(([key,label,placeholder]) => (
+                    <label key={key} className="space-y-1 text-[11px] font-bold text-slate-700">{label}
+                      <input value={editingProduct[key] || ''} onChange={(event) => setEditingProduct({ ...editingProduct, [key]: event.target.value })} maxLength={key === 'manufacturer' ? 150 : 100} inputMode={key === 'gtin' ? 'numeric' : undefined} placeholder={placeholder} className="w-full rounded-xl border border-slate-300 bg-white p-2.5 text-sm font-normal text-slate-900 outline-none focus:ring-2 focus:ring-sky-500" />
+                    </label>
+                  ))}
+                </div>
+              </section>
 
               {/* ТИП ДОСТАВКИ */}
               <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">

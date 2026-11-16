@@ -264,6 +264,23 @@ try {
 try {
   db.exec('ALTER TABLE products ADD COLUMN views_count INTEGER DEFAULT 0;');
 } catch (_) {}
+for (const column of ['brand TEXT', 'manufacturer TEXT', 'gtin TEXT', 'mpn TEXT']) {
+  try { db.exec(`ALTER TABLE products ADD COLUMN ${column};`); } catch (_) {}
+}
+try { db.exec('ALTER TABLE product_reviews ADD COLUMN purchase_verified INTEGER NOT NULL DEFAULT 0;'); } catch (_) {}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    customer_name TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    review_text TEXT NOT NULL,
+    purchase_verified INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_product_reviews_visible ON product_reviews(product_id, status, created_at);
+`);
 
 function normalizeVideoUrls(value: unknown, fallback = ''): string[] {
   let candidates: unknown[] = [];
@@ -2585,7 +2602,7 @@ app.get('/api/products/:id', (req, res) => {
     }
 
     const product = db.prepare(`
-      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type,
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.brand, p.manufacturer, p.gtin, p.mpn, p.status, p.delivery_type,
              p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications,
              p.created_at, p.views_count, p.discount_percent, c.name AS category_name,
              COALESCE(MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS min_price_tjs,
@@ -2655,6 +2672,71 @@ app.get('/api/products/:id', (req, res) => {
     console.error('[Public Product Detail Error]', error);
     return res.status(500).json({ error: 'Не удалось загрузить товар' });
   }
+});
+
+const publicReviewLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+app.get('/api/products/:id/reviews', (req, res) => {
+  const productId = Number(req.params.id);
+  if (!Number.isSafeInteger(productId) || productId <= 0) return res.status(400).json({ error: 'Неверный товар.' });
+  const exists = db.prepare("SELECT 1 FROM products WHERE id = ? AND status = 'active'").get(productId);
+  if (!exists) return res.status(404).json({ error: 'Товар не найден.' });
+  const reviews = db.prepare(`
+    SELECT id, customer_name, rating, review_text, created_at
+    FROM product_reviews WHERE product_id = ? AND status = 'approved'
+    ORDER BY created_at DESC, id DESC LIMIT 100
+  `).all(productId) as Array<{ id: number; customer_name: string; rating: number; review_text: string; created_at: string }>;
+  const aggregate = db.prepare(`
+    SELECT COUNT(*) AS count, AVG(rating) AS average
+    FROM product_reviews WHERE product_id = ? AND status = 'approved'
+  `).get(productId) as { count: number; average: number | null };
+  return res.json({
+    reviews,
+    aggregate_rating: aggregate.count ? { rating_value: Math.round(Number(aggregate.average) * 10) / 10, review_count: aggregate.count } : null,
+  });
+});
+
+app.post('/api/products/:id/reviews', publicReviewLimiter, (req, res) => {
+  const productId = Number(req.params.id);
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim().replace(/\s+/g, ' ') : '';
+  const review = typeof req.body?.review === 'string' ? req.body.review.trim() : '';
+  const rating = Number(req.body?.rating);
+  if (!Number.isSafeInteger(productId) || productId <= 0) return res.status(400).json({ error: 'Неверный товар.' });
+  if (name.length < 2 || name.length > 80 || /[<>]/.test(name)) return res.status(400).json({ error: 'Укажите имя от 2 до 80 символов.' });
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'Выберите оценку от 1 до 5.' });
+  if (review.length < 10 || review.length > 3000 || /https?:\/\//i.test(review)) return res.status(400).json({ error: 'Отзыв должен содержать от 10 до 3000 символов без ссылок.' });
+  const exists = db.prepare("SELECT 1 FROM products WHERE id = ? AND status = 'active'").get(productId);
+  if (!exists) return res.status(404).json({ error: 'Товар не найден.' });
+  db.prepare(`INSERT INTO product_reviews (product_id, customer_name, rating, review_text) VALUES (?, ?, ?, ?)`)
+    .run(productId, name, rating, review);
+  return res.status(201).json({ success: true, message: 'Спасибо! Отзыв отправлен на проверку и появится после модерации.' });
+});
+
+app.get('/api/admin/product-reviews', requireAdmin, (req, res) => {
+  const status = ['pending', 'approved', 'rejected'].includes(String(req.query.status)) ? String(req.query.status) : 'pending';
+  const reviews = db.prepare(`
+    SELECT r.id, r.product_id, p.title AS product_title, r.customer_name, r.rating, r.review_text, r.status, r.created_at
+    FROM product_reviews r JOIN products p ON p.id = r.product_id
+    WHERE r.status = ? ORDER BY r.created_at DESC, r.id DESC LIMIT 200
+  `).all(status);
+  return res.json({ reviews });
+});
+
+app.put('/api/admin/product-reviews/:id', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const status = req.body?.status;
+  const purchaseVerified = req.body?.purchase_verified === true;
+  if (!Number.isSafeInteger(id) || id <= 0 || !['approved', 'rejected'].includes(status) || (status === 'approved' && !purchaseVerified)) {
+    return res.status(400).json({ error: 'Неверное действие с отзывом.' });
+  }
+  const result = db.prepare('UPDATE product_reviews SET status = ?, purchase_verified = ? WHERE id = ?').run(status, purchaseVerified ? 1 : 0, id);
+  if (!result.changes) return res.status(404).json({ error: 'Отзыв не найден.' });
+  return res.json({ success: true, id, status });
 });
 
 const RELATED_STOP_WORDS = new Set([
@@ -3674,12 +3756,17 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       youtube_url = '',
       original_link = '',
       specifications = [],
+      brand = '',
+      manufacturer = '',
+      gtin = '',
+      mpn = '',
       variants = [],
     } = req.body;
 
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
     }
+    if (gtin && !normalizeGtin(gtin)) return res.status(400).json({ error: 'GTIN/EAN is invalid. Check the code or leave this field empty.' });
     const cleanSourceLink = normalizeProductSourceLink(original_link);
     if (cleanSourceLink === undefined) {
       return res.status(400).json({ error: 'Укажите корректную ссылку товара с HTTP или HTTPS.' });
@@ -3761,9 +3848,9 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     const baseSku = generateBaseSku(categoryId);
 
     const insertProd = db.prepare(`
-      INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, baseSku, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs);
+      INSERT INTO products (title, description, original_link, category_id, base_sku, brand, manufacturer, gtin, mpn, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, baseSku, normalizeOptionalProductText(brand, 100), normalizeOptionalProductText(manufacturer, 150), normalizeGtin(gtin), normalizeOptionalProductText(mpn, 100), cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs);
 
     const productId = Number(insertProd.lastInsertRowid);
 
@@ -3875,12 +3962,17 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       video_first = false,
       default_weight_kg,
       specifications,
+      brand,
+      manufacturer,
+      gtin,
+      mpn,
       variants,
     } = req.body;
 
     if (!title || typeof title !== 'string' || !title.trim()) {
       return res.status(400).json({ error: 'Название товара обязательно' });
     }
+    if (gtin !== undefined && gtin && !normalizeGtin(gtin)) return res.status(400).json({ error: 'GTIN/EAN is invalid. Check the code or leave this field empty.' });
     const requestedSourceLink = original_link === undefined ? undefined : normalizeProductSourceLink(original_link);
     if (original_link !== undefined && requestedSourceLink === undefined) {
       return res.status(400).json({ error: 'Укажите корректную ссылку товара с HTTP или HTTPS.' });
@@ -3969,7 +4061,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     }
 
     // Получаем текущий базовый артикул
-    const existingProd = db.prepare('SELECT base_sku, specifications, original_link FROM products WHERE id = ?').get(id) as { base_sku: string; specifications: string | null; original_link: string | null } | undefined;
+    const existingProd = db.prepare('SELECT base_sku, specifications, original_link, brand, manufacturer, gtin, mpn FROM products WHERE id = ?').get(id) as { base_sku: string; specifications: string | null; original_link: string | null; brand: string | null; manufacturer: string | null; gtin: string | null; mpn: string | null } | undefined;
     const baseSku = existingProd ? existingProd.base_sku : generateBaseSku(categoryId);
     const cleanSourceLink = requestedSourceLink === undefined
       ? (existingProd?.original_link || '')
@@ -3984,9 +4076,14 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     const updatedProduct = db.prepare(`
       UPDATE products
       SET title = ?, description = ?, original_link = ?, category_id = ?, status = ?, delivery_type = ?, main_image = ?, images = ?, video_url = ?, video_urls = ?, youtube_url = ?, video_first = ?,
-          specifications = CASE WHEN ? IS NOT NULL THEN ? ELSE specifications END
+          specifications = CASE WHEN ? IS NOT NULL THEN ? ELSE specifications END,
+          brand = ?, manufacturer = ?, gtin = ?, mpn = ?
       WHERE id = ? AND COALESCE(status, '') != 'deleted'
-    `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs, id);
+    `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, video_first && cleanVideos.length > 0 ? 1 : 0, cleanSpecs, cleanSpecs,
+      brand === undefined ? existingProd?.brand || null : normalizeOptionalProductText(brand, 100),
+      manufacturer === undefined ? existingProd?.manufacturer || null : normalizeOptionalProductText(manufacturer, 150),
+      gtin === undefined ? existingProd?.gtin || null : normalizeGtin(gtin),
+      mpn === undefined ? existingProd?.mpn || null : normalizeOptionalProductText(mpn, 100), id);
     if (updatedProduct.changes === 0) {
       db.exec('ROLLBACK;');
       return res.status(409).json({ error: 'Товар удалён или не найден. Обновите список товаров.' });
@@ -5530,6 +5627,22 @@ function limitStructuredText(value: string, maxLength: number): string {
   return Array.from(value).slice(0, maxLength).join('').trim();
 }
 
+function normalizeOptionalProductText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  return normalized ? limitStructuredText(normalized, maxLength) : null;
+}
+
+function normalizeGtin(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const gtin = value.replace(/[\s-]/g, '');
+  if (!/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(gtin)) return null;
+  const digits = [...gtin].map(Number);
+  const checkDigit = digits.pop()!;
+  const sum = digits.reverse().reduce((total, digit, index) => total + digit * (index % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === checkDigit ? gtin : null;
+}
+
 function makeProductSlug(title: string): string {
   return title
     .normalize('NFC')
@@ -6190,7 +6303,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     if (!Number.isSafeInteger(productId) || productId <= 0) return next();
 
     const product = db.prepare(`
-      SELECT p.id, p.title, p.description, p.base_sku, p.status, p.delivery_type,
+      SELECT p.id, p.title, p.description, p.base_sku, p.brand, p.manufacturer, p.gtin, p.mpn, p.status, p.delivery_type,
              p.main_image, p.images, p.specifications, p.discount_percent,
              c.name AS category_name
       FROM products p
@@ -6201,6 +6314,10 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       title: string;
       description: string | null;
       base_sku: string;
+      brand: string | null;
+      manufacturer: string | null;
+      gtin: string | null;
+      mpn: string | null;
       status: string;
       delivery_type: string | null;
       main_image: string | null;
@@ -6334,6 +6451,22 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     const schemaBrand = knownBrand
       ? { '@type': 'Brand', name: limitStructuredText(knownBrand, 100) }
       : undefined;
+    const explicitBrand = normalizeOptionalProductText(product.brand, 100) || normalizeOptionalProductText(brandCandidate, 100);
+    const manufacturerSpec = specifications.find((spec) => /^(manufacturer|maker|producer|factory)$/i.test(spec.name.trim()))?.value;
+    const gtinSpec = specifications.find((spec) => /^(gtin|ean|ean-?13|barcode|global trade item number)$/i.test(spec.name.trim()))?.value;
+    const mpnSpec = specifications.find((spec) => /^(mpn|manufacturer part number|model number)$/i.test(spec.name.trim()))?.value;
+    const explicitManufacturer = normalizeOptionalProductText(product.manufacturer, 150) || normalizeOptionalProductText(manufacturerSpec, 150);
+    const validGtin = normalizeGtin(product.gtin) || normalizeGtin(gtinSpec);
+    const explicitMpn = normalizeOptionalProductText(product.mpn, 100) || normalizeOptionalProductText(mpnSpec, 100);
+    const approvedRating = db.prepare(`
+      SELECT COUNT(*) AS count, AVG(rating) AS average
+      FROM product_reviews WHERE product_id = ? AND status = 'approved'
+    `).get(product.id) as { count: number; average: number | null };
+    const approvedReviews = db.prepare(`
+      SELECT customer_name, rating, review_text, created_at
+      FROM product_reviews WHERE product_id = ? AND status = 'approved'
+      ORDER BY created_at DESC, id DESC LIMIT 5
+    `).all(product.id) as Array<{ customer_name: string; rating: number; review_text: string; created_at: string }>;
     const seller = {
       '@type': 'Organization',
       name: 'M.Savdo',
@@ -6357,7 +6490,26 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       name: limitStructuredText(cleanSearchText(product.title) || 'Товар', 150),
       description: limitStructuredText(description, 5000),
       ...(product.base_sku?.trim() ? { sku: limitStructuredText(product.base_sku.trim(), 100) } : {}),
-      ...(schemaBrand ? { brand: schemaBrand } : {}),
+      ...(explicitBrand ? { brand: { '@type': 'Brand', name: explicitBrand } } : schemaBrand ? { brand: schemaBrand } : {}),
+      ...(explicitManufacturer ? { manufacturer: { '@type': 'Organization', name: explicitManufacturer } } : {}),
+      ...(validGtin ? { gtin: validGtin } : {}),
+      ...(explicitMpn ? { mpn: explicitMpn } : {}),
+      ...(approvedRating.count > 0 ? {
+        aggregateRating: {
+          '@type': 'AggregateRating',
+          ratingValue: Math.round(Number(approvedRating.average) * 10) / 10,
+          reviewCount: approvedRating.count,
+          bestRating: 5,
+          worstRating: 1,
+        },
+      } : {}),
+      ...(approvedReviews.length ? { review: approvedReviews.map((review) => ({
+        '@type': 'Review',
+        author: { '@type': 'Person', name: limitStructuredText(review.customer_name, 80) },
+        datePublished: new Date(`${review.created_at.replace(' ', 'T')}Z`).toISOString().slice(0, 10),
+        reviewBody: limitStructuredText(review.review_text, 3000),
+        reviewRating: { '@type': 'Rating', ratingValue: review.rating, bestRating: 5, worstRating: 1 },
+      })) } : {}),
       url: canonicalUrl,
       ...(imageList.length ? { image: imageList } : {}),
       ...(product.category_name ? { category: product.category_name } : {}),
@@ -6400,6 +6552,8 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     const galleryHtml = imageList.slice(1).map((image) =>
       `<img src="${escapeHtml(image)}" alt="${escapeHtml(product.title)}" loading="lazy">`
     ).join('');
+    const reviewMarkup = approvedReviews.map((review) => `<article class="review"><strong>${escapeHtml(review.customer_name)}</strong><span aria-label="Rating ${review.rating} out of 5">${String.fromCharCode(9733).repeat(review.rating)}${String.fromCharCode(9734).repeat(5 - review.rating)}</span><p>${escapeHtml(review.review_text)}</p></article>`).join('');
+    const reviewFormHtml = `<form id="review-form" class="review-form"><label>&#1042;&#1072;&#1096;&#1077; &#1080;&#1084;&#1103;<input name="name" minlength="2" maxlength="80" required></label><label>&#1054;&#1094;&#1077;&#1085;&#1082;&#1072;<select name="rating">${[5,4,3,2,1].map((rating) => `<option value="${rating}">${rating} / 5</option>`).join('')}</select></label><label>&#1054;&#1090;&#1079;&#1099;&#1074;<textarea name="review" minlength="10" maxlength="3000" required></textarea></label><button type="submit">&#1054;&#1090;&#1087;&#1088;&#1072;&#1074;&#1080;&#1090;&#1100; &#1085;&#1072; &#1087;&#1088;&#1086;&#1074;&#1077;&#1088;&#1082;&#1091;</button><div id="review-notice" class="notice" role="status"></div></form>`;
     const safeProductData = JSON.stringify(structuredData).replace(/</g, '\\u003c');
     const safeBreadcrumbData = JSON.stringify(breadcrumbData).replace(/</g, '\\u003c');
     res.set('Cache-Control', 'public, max-age=300');
@@ -6413,7 +6567,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
 <meta name="twitter:title" content="${escapeHtml(searchTitle)}"><meta name="twitter:description" content="${escapeHtml(description)}">
 <script type="application/ld+json">${safeProductData}</script>
 <script type="application/ld+json">${safeBreadcrumbData}</script>
-<style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.6 Arial,sans-serif}.wrap{max-width:1100px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-size:22px;font-weight:800;color:#111;text-decoration:none}.product{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;margin-top:24px;padding:24px;border-radius:16px;background:#fff;box-shadow:0 6px 30px #0f172a12}.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start}.gallery img{width:100%;aspect-ratio:1;object-fit:contain;background:#fff;border-radius:10px}.product .gallery img{grid-column:1/-1}.more-images .gallery{grid-template-columns:repeat(4,minmax(0,1fr))}.details h1{line-height:1.25;margin:.4em 0}.price{font-size:26px;font-weight:800;margin:.5em 0}.delivery{color:#475569}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 24px}.button{display:inline-block;padding:11px 16px;border-radius:10px;background:#f4c542;color:#111827;text-decoration:none;font-weight:700;text-align:center}.button.secondary{background:#e8f7ef;color:#065f46}.specs{padding-left:20px;overflow-wrap:anywhere}@media(max-width:680px){.product{grid-template-columns:1fr;padding:16px;gap:12px}.more-images .gallery{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:12px}.actions .button{flex:1 1 100%}}</style></head>
+<style>body{margin:0;background:#f8fafc;color:#172033;font:16px/1.6 Arial,sans-serif}.wrap{max-width:1100px;margin:auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center}.brand{font-size:22px;font-weight:800;color:#111;text-decoration:none}.product{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;margin-top:24px;padding:24px;border-radius:16px;background:#fff;box-shadow:0 6px 30px #0f172a12}.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-content:start}.gallery img{width:100%;aspect-ratio:1;object-fit:contain;background:#fff;border-radius:10px}.product .gallery img{grid-column:1/-1}.more-images .gallery{grid-template-columns:repeat(4,minmax(0,1fr))}.details h1{line-height:1.25;margin:.4em 0}.price{font-size:26px;font-weight:800;margin:.5em 0}.delivery{color:#475569}.actions{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0 24px}.button{display:inline-block;padding:11px 16px;border-radius:10px;background:#f4c542;color:#111827;text-decoration:none;font-weight:700;text-align:center}.button.secondary{background:#e8f7ef;color:#065f46}.specs{padding-left:20px;overflow-wrap:anywhere}.reviews{margin:24px 0;padding:20px;background:white;border-radius:16px}.review{padding:12px 0;border-bottom:1px solid #e2e8f0}.review span{float:right;color:#d97706}.review-form{display:grid;gap:10px;max-width:600px;margin-top:18px}.review-form input,.review-form textarea,.review-form select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px}.review-form button{padding:11px;background:#111827;color:white;border:0;border-radius:8px;font-weight:bold}.notice{color:#047857;font-weight:bold}@media(max-width:680px){.product{grid-template-columns:1fr;padding:16px;gap:12px}.more-images .gallery{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:12px}.actions .button{flex:1 1 100%}}</style></head>
 <body><main class="wrap"><nav class="top"><a class="brand" href="/">M.Savdo</a><a href="/">Каталог товаров</a></nav>
 <article class="product"><div class="gallery">${heroHtml}</div>
 <section class="details"><p>${escapeHtml(product.category_name || 'Каталог M.Savdo')}</p><h1>${escapeHtml(product.title)}</h1>
@@ -6426,6 +6580,8 @@ ${specsHtml ? `<h2>Характеристики</h2><ul class="specs">${specsHtm
 ${variantsHtml ? `<h2>Варианты</h2><ul class="specs">${variantsHtml}</ul>` : ''}
 <p>Артикул: ${escapeHtml(product.base_sku)}</p>
 <p><a href="/catalog/1">Каталог товаров M.Savdo</a></p></section></article>
+<section class="reviews"><h2>&#1054;&#1090;&#1079;&#1099;&#1074;&#1099; &#1087;&#1086;&#1082;&#1091;&#1087;&#1072;&#1090;&#1077;&#1083;&#1077;&#1081;</h2><p>&#1054;&#1090;&#1079;&#1099;&#1074;&#1099; &#1087;&#1091;&#1073;&#1083;&#1080;&#1082;&#1091;&#1102;&#1090;&#1089;&#1103; &#1087;&#1086;&#1089;&#1083;&#1077; &#1087;&#1088;&#1086;&#1074;&#1077;&#1088;&#1082;&#1080;.</p>${reviewMarkup || '<p>&#1055;&#1086;&#1082;&#1072; &#1085;&#1077;&#1090; &#1086;&#1090;&#1079;&#1099;&#1074;&#1086;&#1074;.</p>'}${reviewFormHtml}</section>
+<script>document.getElementById('review-form').addEventListener('submit',async(event)=>{event.preventDefault();const form=event.currentTarget;const notice=document.getElementById('review-notice');const button=form.querySelector('button');button.disabled=true;notice.textContent='Sending…';try{const response=await fetch('/api/products/${product.id}/reviews',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.fromEntries(new FormData(form)))});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not submit review');notice.textContent=data.message;form.reset()}catch(error){notice.textContent=error.message||'Submission failed'}finally{button.disabled=false}})</script>
 ${galleryHtml ? `<section class="more-images"><h2>Фотографии товара</h2><div class="gallery">${galleryHtml}</div></section>` : ''}</main></body></html>`);
   } catch (error) {
     console.error('[SEO Product Page] Не удалось сформировать страницу товара:', error);
