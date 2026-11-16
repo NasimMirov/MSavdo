@@ -5150,7 +5150,7 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
     delivery_per_kg_tjs: '30',
     cny_tjs_rate: '1.45',
-    somon_district_id: getSetting('somon_district_id', '511'),
+    somon_district_id: getSetting('somon_district_id', '139'),
     somon_category_config: somonCategoryConfig,
     tokenplan_key_configured: Boolean(getSetting('tokenplan_api_key_encrypted', '')),
   });
@@ -5858,7 +5858,11 @@ app.get('/somon-feed.xml', (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    const districtId = getSetting('somon_district_id', '511');
+    // 139 is a valid Dushanbe district (10 мкр-н) in Somon's official
+    // location list. 511 is the city ID and must be sent as <city>, not
+    // as <district>.
+    const cityId = '511';
+    const districtId = getSetting('somon_district_id', '139');
     if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
       throw new Error('В настройках Somon указан некорректный ID района');
     }
@@ -5987,7 +5991,6 @@ app.get('/somon-feed.xml', (_req, res) => {
         .slice(0, 16);
       const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
       const delivery = product.delivery_type === 'stock' ? '0' : '1';
-      const itemUrl = getPublicProductUrl(product.id, product.title);
       items.push(`
     <list-item>
       <last_update>${escapeXml(timestamp)}</last_update>
@@ -5995,9 +5998,10 @@ app.get('/somon-feed.xml', (_req, res) => {
       <images>${imageXml}</images>
       <status>active</status>
       <rubric>${rubricId}</rubric>
+      <city>${cityId}</city>
       <district>${districtId}</district>
       <description>${escapeXml(description)}</description>
-      <price>${Number(product.price_tjs).toFixed(2)}</price>
+      <price>${Math.max(0, Math.round(Number(product.price_tjs)))}</price>
       <phone_hide>0</phone_hide>
       <negotiable_price>0</negotiable_price>
       <exchange>0</exchange>
@@ -6007,7 +6011,6 @@ app.get('/somon-feed.xml', (_req, res) => {
       <geometry></geometry>
       <title>${escapeXml(title)}</title>
       <chosen_phone></chosen_phone>
-      <item_link><![CDATA[${itemUrl.replace(/\]\]>/g, ']]]]><![CDATA[>')}]]></item_link>
     </list-item>`);
     }
 

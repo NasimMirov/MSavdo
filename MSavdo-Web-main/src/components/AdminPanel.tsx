@@ -306,7 +306,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     whatsapp_phone: '992444431',
     cny_tjs_rate: '1.45',
     delivery_per_kg_tjs: '30',
-    somon_district_id: '511',
+    somon_district_id: '139',
     somon_category_config: {} as Record<string, { rubric_id: string; attributes_json: string }>,
   });
   const [settingsSaved, setSettingsSaved] = useState(false);
@@ -529,7 +529,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           whatsapp_phone: setData.whatsapp_phone || '992444431',
           cny_tjs_rate: setData.cny_tjs_rate || '1.45',
           delivery_per_kg_tjs: setData.delivery_per_kg_tjs || '30',
-          somon_district_id: setData.somon_district_id || '511',
+          somon_district_id: setData.somon_district_id || '139',
           somon_category_config: setData.somon_category_config || {},
         });
       }
@@ -3036,7 +3036,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   onChange={(e) => setSettings({ ...settings, somon_district_id: e.target.value })}
                   className="w-full rounded-xl border border-slate-300 p-3 text-sm font-mono font-bold"
                 />
-                <span className="text-[10px] text-slate-500">Душанбе — 511.</span>
+                <span className="text-[10px] text-slate-500">Для Душанбе используйте район 139 (10 мкр-н). ID города 511 добавляется в XML автоматически.</span>
               </div>
               <div>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
