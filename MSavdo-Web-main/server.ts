@@ -6452,7 +6452,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     const schemaBrand = knownBrand
       ? { '@type': 'Brand', name: limitStructuredText(knownBrand, 100) }
       : undefined;
-    const explicitBrand = normalizeOptionalProductText(product.brand, 100) || normalizeOptionalProductText(brandCandidate, 100);
+    const explicitBrand = normalizeOptionalProductText(product.brand, 100) || (knownBrand ? normalizeOptionalProductText(knownBrand, 100) : null);
     const manufacturerSpec = specifications.find((spec) => /^(manufacturer|maker|producer|factory)$/i.test(spec.name.trim()))?.value;
     const gtinSpec = specifications.find((spec) => /^(gtin|ean|ean-?13|barcode|global trade item number)$/i.test(spec.name.trim()))?.value;
     const mpnSpec = specifications.find((spec) => /^(mpn|manufacturer part number|model number)$/i.test(spec.name.trim()))?.value;
