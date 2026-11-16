@@ -93,6 +93,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   const [isQuantityPickerOpen, setIsQuantityPickerOpen] = useState(false);
   const [isPhotoZoomed, setIsPhotoZoomed] = useState(false);
   const [reviews, setReviews] = useState<Array<{ id: number; customer_name: string; rating: number; review_text: string; created_at: string }>>([]);
+  const [aggregateRating, setAggregateRating] = useState<{ rating_value: number; review_count: number } | null>(null);
   const [reviewName, setReviewName] = useState('');
   const [reviewText, setReviewText] = useState('');
   const [reviewRating, setReviewRating] = useState(5);
@@ -142,10 +143,13 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   useEffect(() => {
     if (!product) { setReviews([]); return; }
     const controller = new AbortController();
-    setReviews([]); setReviewMessage('');
+    setReviews([]); setAggregateRating(null); setReviewMessage('');
     apiFetch(`/api/products/${product.id}/reviews`, { signal: controller.signal })
       .then(async (response) => { if (!response.ok) throw new Error('Reviews unavailable'); return response.json(); })
-      .then((data) => setReviews(Array.isArray(data.reviews) ? data.reviews : []))
+      .then((data) => {
+        setReviews(Array.isArray(data.reviews) ? data.reviews : []);
+        setAggregateRating(data.aggregate_rating || null);
+      })
       .catch((error) => { if (error.name !== 'AbortError') console.warn('[Product Reviews]', error); });
     return () => controller.abort();
   }, [product?.id]);
@@ -831,6 +835,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
             <section className="space-y-4 border-t border-slate-200 px-4 py-6 sm:px-8" aria-label="Отзывы о товаре">
               <div><h3 className="text-base font-extrabold text-slate-900">Отзывы покупателей</h3><p className="mt-1 text-xs text-slate-500">Публикуем отзывы после проверки. Оценивайте только товар, который действительно получили.</p></div>
+              {aggregateRating && <p className="flex items-center gap-2 text-sm font-bold text-slate-800"><span className="flex text-amber-500" aria-label={`Средняя оценка ${aggregateRating.rating_value} из 5`}>{Array.from({length: Math.round(aggregateRating.rating_value)}, (_, index) => <Star key={index} className="h-4 w-4 fill-current"/>)}</span>{aggregateRating.rating_value} из 5 · {aggregateRating.review_count} {aggregateRating.review_count === 1 ? 'отзыв' : 'отзывов'}</p>}
               {reviews.length > 0 && <div className="space-y-3">{reviews.map((review) => <article key={review.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3"><div className="flex items-center justify-between gap-2"><strong className="text-xs text-slate-800">{review.customer_name}</strong><span className="flex text-amber-500" aria-label={`Оценка ${review.rating} из 5`}>{Array.from({length: review.rating}, (_, index) => <Star key={index} className="h-3.5 w-3.5 fill-current"/>)}</span></div><p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{review.review_text}</p></article>)}</div>}
               <form onSubmit={(event) => void submitReview(event)} className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-2">
                 <label className="text-xs font-semibold text-slate-700">Ваше имя<input required minLength={2} maxLength={80} value={reviewName} onChange={(event) => setReviewName(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white p-2 text-sm" /></label>
