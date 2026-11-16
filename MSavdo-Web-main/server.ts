@@ -5150,7 +5150,9 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
     delivery_per_kg_tjs: '30',
     cny_tjs_rate: '1.45',
-    somon_district_id: getSetting('somon_district_id', '139'),
+    somon_district_id: getSetting('somon_district_id', '139') === '511'
+      ? '139'
+      : getSetting('somon_district_id', '139'),
     somon_category_config: somonCategoryConfig,
     tokenplan_key_configured: Boolean(getSetting('tokenplan_api_key_encrypted', '')),
   });
@@ -5862,7 +5864,9 @@ app.get('/somon-feed.xml', (_req, res) => {
     // location list. 511 is the city ID and must be sent as <city>, not
     // as <district>.
     const cityId = '511';
-    const districtId = getSetting('somon_district_id', '139');
+    const configuredDistrictId = getSetting('somon_district_id', '139');
+    // Older admin settings used 511 (the Dushanbe city ID) as a district.
+    const districtId = configuredDistrictId === '511' ? '139' : configuredDistrictId;
     if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
       throw new Error('В настройках Somon указан некорректный ID района');
     }
