@@ -5993,13 +5993,9 @@ app.get('/somon-feed.xml', (_req, res) => {
       )
         .filter((image) => !/\.(?:gif|webp|svg|avif|bmp|tiff?)$/i.test(new URL(image).pathname))
         .slice(0, 16);
-      // Somon first performs a HEAD request and has a short header timeout.
-      // Request the cached 640px rendition to keep the transfer small.
-      const imageXml = images.map((image) => {
-        const imageUrl = new URL(image);
-        imageUrl.searchParams.set('width', '640');
-        return `<list-item>${escapeXml(imageUrl.toString())}</list-item>`;
-      }).join('');
+      // Keep the .jpg suffix as the final URL suffix. Somon validates the
+      // extension literally and rejects URLs with a query after `.jpg`.
+      const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
       const delivery = product.delivery_type === 'stock' ? '0' : '1';
       items.push(`
     <list-item>
