@@ -5800,7 +5800,7 @@ app.get('/somon-feed.xml', (_req, res) => {
         }
       }
       if (rubricId === '182' && product.category_id === 49) {
-        const memory = Object.entries(specifications).find(([name, value]) => /\u043f\u0430\u043c\u044f\u0442|memory|storage/i.test(`${name} ${value}`));
+        const memory = Object.entries(specifications).find(([name, value]) => /memory|storage/i.test(`${name} ${value}`) || /(?:^|\D)(4|8|16|32|64|128|256|512|1024|1536|2048)\s*(?:\u0433\u0431?|gb|tb)/i.test(value));
         const match = memory?.[1].match(/(?:^|\D)(4|8|16|32|64|128|256|512|1024|1536|2048)\s*(?:\u0433\u0431?|gb|tb)/i);
         if (match) {
           const gb = Number(match[1]) * (/tb/i.test(match[0]) ? 1024 : 1);
