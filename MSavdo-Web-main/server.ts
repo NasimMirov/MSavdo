@@ -6395,6 +6395,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
     const knownBrand = brandCandidate &&
       brandCandidate.length <= 100 &&
       !/\s\/\s|https?:\/\//i.test(brandCandidate) &&
+      !/(?:нейтраль|без\s+бренд|неизвест|generic|unbranded|unknown|no\s+brand)/iu.test(brandCandidate) &&
       !/^(?:нейтральный|нейтральная|без бренда|неизвестно|generic|unbranded|no brand|unknown|none|n\/?a|无品牌|无牌)$/iu.test(brandCandidate)
       ? brandCandidate
       : '';
