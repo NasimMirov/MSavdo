@@ -1,4 +1,6 @@
 api.msavdo.shop {
 	encode zstd gzip
+	@storefrontRoot path /
+	redir @storefrontRoot https://msavdo.shop/ permanent
 	reverse_proxy api:3000
 }

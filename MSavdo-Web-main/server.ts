@@ -5509,6 +5509,14 @@ app.get('/api/extension-file', (req, res) => {
 const seoSiteUrl = (process.env.PUBLIC_SITE_URL || 'https://msavdo.shop').replace(/\/+$/, '');
 const publicMediaBaseUrl = (process.env.PUBLIC_BASE_URL || 'https://api.msavdo.shop').replace(/\/+$/, '');
 
+// The API host must not expose the storefront root as an indexable duplicate.
+// Product pages and media remain available there for the canonical storefront
+// rewrites and for image fetching.
+app.get('/', (req, res, next) => {
+  if (req.hostname === 'api.msavdo.shop') return res.redirect(301, `${seoSiteUrl}/`);
+  return next();
+});
+
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -5948,6 +5956,11 @@ function makeSearchDescription(
 }
 
 app.get('/robots.txt', (_req, res) => {
+  if (_req.hostname === 'api.msavdo.shop') {
+    return res.type('text/plain').send(
+      'User-agent: *\nDisallow: /\nAllow: /product-image/\nAllow: /uploads/\n'
+    );
+  }
   res.type('text/plain').send(
     `User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: ${seoSiteUrl}/sitemap.xml\n`
   );
@@ -6332,7 +6345,9 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       price: offerPrice,
       shippingDetails,
       hasMerchantReturnPolicy: returnPolicy,
-      ...(product.delivery_type === 'stock' ? { availability: 'https://schema.org/InStock' } : {}),
+      availability: product.delivery_type === 'stock'
+        ? 'https://schema.org/InStock'
+        : 'https://schema.org/BackOrder',
       url: canonicalUrl,
       seller,
     });
@@ -6341,7 +6356,7 @@ app.get('/product/:id/:slug?', (req, res, next) => {
       '@type': 'Product',
       name: limitStructuredText(cleanSearchText(product.title) || 'Товар', 150),
       description: limitStructuredText(description, 5000),
-      sku: product.base_sku,
+      ...(product.base_sku?.trim() ? { sku: limitStructuredText(product.base_sku.trim(), 100) } : {}),
       ...(schemaBrand ? { brand: schemaBrand } : {}),
       url: canonicalUrl,
       ...(imageList.length ? { image: imageList } : {}),

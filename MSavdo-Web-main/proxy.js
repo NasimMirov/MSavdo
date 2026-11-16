@@ -6,7 +6,8 @@ const rootPlaceholder = '<div id="root"><p>M.Savdo (МСавдо) — Марка
 
 export default async function proxy(request) {
   if (request.method !== 'GET') return next();
-  const hostname = new URL(request.url).hostname;
+  const requestUrl = new URL(request.url);
+  const hostname = requestUrl.hostname;
   if (hostname !== 'msavdo.shop' && !hostname.endsWith('.vercel.app')) return next();
   try {
     const templateUrl = new URL('/index.html', request.url);
@@ -24,8 +25,19 @@ export default async function proxy(request) {
     if (!html.includes(rootPlaceholder) || !Array.isArray(data.products)) {
       throw new Error('Homepage template or catalog has an unexpected format');
     }
-    return new Response(html.replace(rootPlaceholder, () => `<div id="root">${renderHomeCatalog(data.products)}</div>`), {
-      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store' },
+    const renderedHtml = html.replace(rootPlaceholder, () => `<div id="root">${renderHomeCatalog(data.products)}</div>`);
+    const hasProductQuery = /^\d+$/.test(requestUrl.searchParams.get('product') || '');
+    const seoHtml = hasProductQuery
+      ? renderedHtml
+        .replace(/<meta name="robots"[^>]*>/i, '<meta name="robots" content="noindex,follow">')
+        .replace(/<meta name="googlebot"[^>]*>/i, '<meta name="googlebot" content="noindex,follow">')
+      : renderedHtml;
+    return new Response(seoHtml, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'private, no-store',
+        ...(hasProductQuery ? { 'X-Robots-Tag': 'noindex, follow' } : {}),
+      },
     });
   } catch (error) {
     console.error('[SEO Homepage] Unable to render the catalog:', error);
