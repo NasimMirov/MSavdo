@@ -5746,7 +5746,8 @@ app.get('/somon-feed.xml', (_req, res) => {
       SELECT p.id, p.title, p.description, p.delivery_type, p.category_id, p.main_image, p.images,
              p.specifications,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
-             GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images
+             GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images,
+             GROUP_CONCAT(DISTINCT NULLIF(v.size, '')) AS variant_sizes
       FROM products p
       LEFT JOIN product_variants v ON v.product_id = p.id
       WHERE p.status = 'active'
@@ -5763,6 +5764,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       specifications: string | null;
       price_tjs: number | null;
       variant_images: string | null;
+      variant_sizes: string | null;
     }>;
 
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -5770,10 +5772,32 @@ app.get('/somon-feed.xml', (_req, res) => {
     for (const product of products) {
       if (!product.category_id || !Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) continue;
       const categoryConfig = storedConfig[String(product.category_id)];
-      const rubricId = String(categoryConfig?.rubric_id ?? '');
-      const attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
+      let rubricId = String(categoryConfig?.rubric_id ?? '');
+      let attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
         ? categoryConfig.attributes as Record<string, unknown>
         : {};
+      // The universal profile remains the safe fallback. For categories with
+      // stable Somon requirements, use a ready mapping automatically.
+      if (rubricId === '182' && product.category_id === 85) {
+        rubricId = '3447';
+        attributes = { sostoyanie: 'const:2', tip: 'const:30' };
+      }
+      if (rubricId === '182' && (product.category_id === 28 || product.category_id === 29)) {
+        const sizeKeys = (product.variant_sizes || '').split(',')
+          .map((value) => Number.parseInt(value.trim(), 10))
+          .filter((value) => Number.isInteger(value) && value >= 32 && value <= 49)
+          .map((value) => String(value - 31));
+        if (sizeKeys.length) {
+          const lowerTitle = product.title.toLocaleLowerCase('ru');
+          const tip = /кроссов|кеды/.test(lowerTitle)
+            ? (product.category_id === 28 ? '50' : '40')
+            : /сапог/.test(lowerTitle) ? (product.category_id === 28 ? '70' : '70')
+              : /сандал/.test(lowerTitle) ? (product.category_id === 28 ? '80' : '60')
+                : product.category_id === 28 ? '100' : '90';
+          rubricId = product.category_id === 28 ? '2963' : '2961';
+          attributes = { 'razmer-obuvi': `const:${Array.from(new Set(sizeKeys)).join(',')}`, sostoyanie: 'const:2', tip: `const:${tip}` };
+        }
+      }
       if (!/^\d+$/.test(rubricId) || !Object.keys(attributes).length) continue;
 
       const specifications = parseSomonSpecifications(product.specifications);
