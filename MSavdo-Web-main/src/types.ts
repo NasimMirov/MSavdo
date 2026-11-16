@@ -23,6 +23,10 @@ export interface Product {
   category_id: number | null;
   category_name?: string;
   base_sku: string;
+  brand?: string | null;
+  manufacturer?: string | null;
+  gtin?: string | null;
+  mpn?: string | null;
   status: 'active' | 'draft';
   delivery_type?: 'stock' | 'order';
   main_image: string;
