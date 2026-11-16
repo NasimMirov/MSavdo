@@ -308,6 +308,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     somon_category_config: {} as Record<string, { rubric_id: string; attributes_json: string }>,
   });
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const somonPresets = [
+    { id: '182', label: 'Универсально: другие товары для дома (ID 182)', attributes: '{"sostoyanie":"const:2"}' },
+    { id: '165', label: 'Электроника и аксессуары (ID 165)', attributes: '{"sostoyanie":"const:2"}' },
+  ];
+  const [somonQuickPreset, setSomonQuickPreset] = useState('182');
+  const [somonQuickRubric, setSomonQuickRubric] = useState('182');
+  const [somonQuickAttributes, setSomonQuickAttributes] = useState('{"sostoyanie":"const:2"}');
+  const [somonFeedStatus, setSomonFeedStatus] = useState('');
   const [tokenPlanKey, setTokenPlanKey] = useState('');
   const [tokenPlanKeyConfigured, setTokenPlanKeyConfigured] = useState(false);
   const [tokenPlanKeyMessage, setTokenPlanKeyMessage] = useState('');
@@ -784,6 +792,58 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     } catch (err) {
       console.error('Ошибка сохранения настроек:', err);
+    }
+  };
+
+  const applySomonQuickConfig = async () => {
+    const rubricId = somonQuickRubric.trim();
+    if (!/^\d+$/.test(rubricId) || Number(rubricId) <= 0) {
+      setSomonFeedStatus('Укажите корректный ID рубрики Somon.');
+      return;
+    }
+    let parsedAttributes: unknown;
+    try { parsedAttributes = JSON.parse(somonQuickAttributes); } catch { setSomonFeedStatus('Атрибуты должны быть корректным JSON.'); return; }
+    if (!parsedAttributes || typeof parsedAttributes !== 'object' || Array.isArray(parsedAttributes)) {
+      setSomonFeedStatus('Атрибуты должны быть JSON-объектом.');
+      return;
+    }
+    const categoryEntries = categories.flatMap((category) => [
+      category,
+      ...(category.subcategories || []),
+    ]);
+    const nextConfig = { ...settings.somon_category_config };
+    categoryEntries.forEach((category) => {
+      nextConfig[String(category.id)] = { rubric_id: rubricId, attributes_json: JSON.stringify(parsedAttributes) };
+    });
+    const nextSettings = { ...settings, somon_category_config: nextConfig };
+    setSettings(nextSettings);
+    try {
+      const response = await adminFetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(nextSettings) });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось сохранить настройки Somon.');
+      setSettingsSaved(true);
+      setSomonFeedStatus(`Готово: настройки применены к ${categoryEntries.length} категориям. Проверьте ленту.`);
+    } catch (error) {
+      setSomonFeedStatus(error instanceof Error ? error.message : 'Не удалось сохранить настройки Somon.');
+    }
+  };
+
+  const chooseSomonPreset = (value: string) => {
+    const preset = somonPresets.find((item) => item.id === value);
+    if (!preset) return;
+    setSomonQuickPreset(value);
+    setSomonQuickRubric(preset.id);
+    setSomonQuickAttributes(preset.attributes);
+  };
+
+  const checkSomonFeed = async () => {
+    try {
+      const response = await apiFetch(`/somon-feed.xml?check=${Date.now()}`, { cache: 'no-store' });
+      const xml = await response.text();
+      const count = (xml.match(/<list-item>\s*<last_update>/g) || []).length;
+      setSomonFeedStatus(response.ok ? `В XML сейчас ${count} товаров.` : `Лента вернула HTTP ${response.status}.`);
+    } catch {
+      setSomonFeedStatus('Не удалось проверить XML-ленту.');
     }
   };
 
@@ -2973,6 +3033,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   >
                     Официальный справочник рубрик
                   </a>
+                </div>
+                <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 space-y-2">
+                  <div className="font-bold text-emerald-900">Быстрая публикация всех товаров</div>
+                  <p className="text-[10px] leading-relaxed text-emerald-900/80">Выберите готовый вариант и нажмите кнопку. Настройка применится ко всем категориям магазина.</p>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[160px_1fr]">
+                    <select value={somonQuickPreset} onChange={(e) => chooseSomonPreset(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs sm:col-span-2">
+                      {somonPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => void applySomonQuickConfig()} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white">Применить ко всем категориям</button>
+                    <button type="button" onClick={() => void checkSomonFeed()} className="rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800">Проверить XML-ленту</button>
+                  </div>
+                  {somonFeedStatus && <p role="status" className="text-[11px] font-semibold text-emerald-900">{somonFeedStatus}</p>}
                 </div>
                 <div className="space-y-2">
                   {categories.flatMap((category) => [
