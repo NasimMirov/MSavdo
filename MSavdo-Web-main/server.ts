@@ -5771,6 +5771,7 @@ app.get('/somon-feed.xml', (_req, res) => {
     const items: string[] = [];
     for (const product of products) {
       if (!product.category_id || !Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) continue;
+      const specifications = parseSomonSpecifications(product.specifications);
       const categoryConfig = storedConfig[String(product.category_id)];
       let rubricId = String(categoryConfig?.rubric_id ?? '');
       let attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
@@ -5798,9 +5799,21 @@ app.get('/somon-feed.xml', (_req, res) => {
           attributes = { 'razmer-obuvi': `const:${Array.from(new Set(sizeKeys)).join(',')}`, sostoyanie: 'const:2', tip: `const:${tip}` };
         }
       }
+      if (rubricId === '182' && product.category_id === 49) {
+        const memory = Object.entries(specifications).find(([name, value]) => /памят|memory|storage/i.test(`${name} ${value}`));
+        const match = memory?.[1].match(/(?:^|\D)(4|8|16|32|64|128|256|512|1024|1536|2048)\s*(?:гб|gb|tb)/i);
+        if (match) {
+          const gb = Number(match[1]) * (/tb/i.test(match[0]) ? 1024 : 1);
+          const key = ({ 4: '10', 8: '20', 16: '30', 32: '40', 64: '50', 128: '60', 256: '70', 512: '80', 1024: '90', 1536: '100', 2048: '110' } as Record<number, string>)[gb];
+          if (key) { rubricId = '2911'; attributes = { 'obem-pamyati': `const:${key}`, sostoyanie: 'const:2' }; }
+        }
+      }
+      if (rubricId === '182' && product.category_id === 52) {
+        rubricId = '3081';
+        attributes = { sostoyanie: 'const:2', tip: /беспровод|wireless/i.test(product.title) ? 'const:20' : 'const:10' };
+      }
       if (!/^\d+$/.test(rubricId) || !Object.keys(attributes).length) continue;
 
-      const specifications = parseSomonSpecifications(product.specifications);
       const xmlAttributes: string[] = [];
       const xmlFields: string[] = [];
       let hasAllAttributeValues = true;
