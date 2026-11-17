@@ -374,9 +374,17 @@ export default function App() {
 
     // Проверка URL параметра для скрытого служебного входа (?admin=true)
     const params = new URLSearchParams(window.location.search);
-    if (params.get('admin') === 'true' || params.get('manage') === '1') {
+    const isMobileAdmin = params.get('mobile-admin') === '1';
+    if (isMobileAdmin) document.body.classList.add('mobile-admin-app');
+    if (params.get('admin') === 'true' || params.get('manage') === '1' || isMobileAdmin) {
       setCurrentView('admin');
     }
+    if ('serviceWorker' in navigator && window.isSecureContext) {
+      void navigator.serviceWorker.register('/sw.js').catch((error) => {
+        console.warn('[App install] Service worker registration failed', error);
+      });
+    }
+    return () => document.body.classList.remove('mobile-admin-app');
   }, []);
 
   useEffect(() => {

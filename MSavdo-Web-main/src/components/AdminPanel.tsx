@@ -147,6 +147,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [backupDownloading, setBackupDownloading] = useState(false);
   const [backupError, setBackupError] = useState('');
 
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('import') === '1') {
+      setIsImportModalOpen(true);
+    }
+  }, []);
+
   const downloadBackup = async () => {
     setBackupDownloading(true);
     setBackupError('');

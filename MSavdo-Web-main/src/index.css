@@ -179,3 +179,16 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+/* Compact standalone admin mode used by the Android app and the installable mobile web app. */
+body.mobile-admin-app { background: #f8fafc; }
+body.mobile-admin-app > #root > div > header,
+body.mobile-admin-app > #root > div > nav,
+body.mobile-admin-app > #root > div > .fixed.bottom-0,
+body.mobile-admin-app .mobile-only-shop-controls { display: none !important; }
+body.mobile-admin-app main { padding: 0.5rem !important; max-width: none !important; }
+body.mobile-admin-app main > div { max-width: none !important; }
+body.mobile-admin-app .max-w-7xl { max-width: none !important; }
+@media (max-width: 640px) {
+  body.mobile-admin-app .admin-products-grid { grid-template-columns: 1fr !important; }
+  body.mobile-admin-app button { min-height: 40px; }
+}

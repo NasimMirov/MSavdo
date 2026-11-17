@@ -1709,7 +1709,9 @@ async function resolveCategoryWithAi(title: string): Promise<string> {
 // ==========================================
 const ADMIN_COOKIE_NAME = '__Host-msavdo_admin';
 const ADMIN_TELEGRAM_NONCE_COOKIE = '__Host-msavdo_telegram_nonce';
-const ADMIN_SESSION_SECONDS = 2 * 60 * 60;
+// HttpOnly, revocable sessions should survive normal mobile use without asking
+// an administrator to repeat Telegram login every time the app is reopened.
+const ADMIN_SESSION_SECONDS = 30 * 24 * 60 * 60;
 const blockedLoginIps = new Map<string, number>();
 const TELEGRAM_LOGIN_NONCE_SECONDS = 5 * 60;
 
@@ -4764,7 +4766,7 @@ app.post('/api/add-product', (req, res, next) => {
 });
 
 // 8.1. ТОЧНЫЙ АНАЛИЗ И ИМПОРТ ИЗ ИСХОДНОГО КОДА СТРАНИЦЫ (HTML / window.context / __INIT_DATA__)
-app.post('/api/parse-product-html', async (req, res) => {
+app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
   try {
     const {
       html_code = '',
