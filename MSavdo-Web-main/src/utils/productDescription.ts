@@ -216,7 +216,7 @@ const TAJIK_DESCRIPTION_TERMS: Array<[string, string]> = [
 function translateKnownProductTerms(text: string): string {
   const titleTranslated = TAJIK_TITLE_TERMS.reduce((translated, [pattern, value]) => translated.replace(pattern, value), text);
   return TAJIK_DESCRIPTION_TERMS.reduce((translated, [source, value]) => {
-    const pattern = new RegExp(`\\b(?:${source})\\b`, 'gi');
+    const pattern = new RegExp(`(?<![\\p{L}])(?:${source})(?![\\p{L}])`, 'giu');
     return translated.replace(pattern, value);
   }, titleTranslated);
 }
@@ -239,7 +239,7 @@ export function buildBilingualProductDescription(
     })
     .filter(Boolean)
     .slice(0, 8);
-  const tajikDescription = [translateKnownProductTerms(title.trim()), ...facts].filter(Boolean).join('. ');
+  const tajikDescription = [translateKnownProductTerms(title.trim()), translateKnownProductTerms(cleanBody), ...facts].filter(Boolean).join('. ');
   const bilingualNotice = deliveryType === 'stock' ? BILINGUAL_STOCK_NOTICE : BILINGUAL_ORDER_NOTICE;
   const productSections = [
     cleanBody ? `Описание товара: ${cleanBody}` : '',
