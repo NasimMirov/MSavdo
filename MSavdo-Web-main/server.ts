@@ -6101,14 +6101,12 @@ app.get('/somon-feed.xml', (_req, res) => {
       const title = cleanSomonTitle(product.title);
       if (!title) continue;
       const sourceDescription = String(product.description || product.title);
-      const somonSpecifications = Object.entries(parseSomonSpecifications(product.specifications))
-        .map(([name, value]) => ({ name, value }));
-      const description = buildBilingualProductDescription(sourceDescription, product.title, somonSpecifications, product.delivery_type === 'stock' ? 'stock' : 'order')
+      const description = cleanProductDescription(sourceDescription)
         .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
         .replace(/<[^>]*>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 10000) || title;
+        .slice(0, 5000) || title;
       const images = getPublicProductImageUrls(
         product.id,
         product.main_image,
@@ -6128,6 +6126,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       <images>${imageXml}</images>
       <status>active</status>
       <rubric>${rubricId}</rubric>
+      <city>${cityId}</city>
       <district>${districtId}</district>
       <description>${escapeXml(description)}</description>
       <price>${Math.max(0, Math.round(Number(product.price_tjs)))}</price>
