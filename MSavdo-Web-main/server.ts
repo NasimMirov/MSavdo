@@ -421,8 +421,8 @@ db.exec(`
 const ordersColumns = db.prepare('PRAGMA table_info(orders)').all() as Array<{ name: string }>;
 if (!ordersColumns.some((column) => column.name === 'total_amount_tjs')) {
   db.exec('ALTER TABLE orders ADD COLUMN total_amount_tjs REAL NOT NULL DEFAULT 0;');
+  db.exec('UPDATE orders SET total_amount_tjs = total_amount WHERE total_amount != 0;');
 }
-db.exec('UPDATE orders SET total_amount_tjs = total_amount WHERE total_amount_tjs = 0 AND total_amount != 0;');
 const variantColumns = db.prepare('PRAGMA table_info(product_variants)').all() as Array<{ name: string }>;
 if (!variantColumns.some((column) => column.name === 'volume_m3')) {
   db.exec('ALTER TABLE product_variants ADD COLUMN volume_m3 REAL NOT NULL DEFAULT 0;');
@@ -5628,9 +5628,9 @@ app.get('/api/ping', (_req, res) => {
 // Эндпоинт для получения свежего кода файлов расширения
 app.get('/api/extension-file', (req, res) => {
   const file = String(req.query.file || 'content.js');
-  const allowed = ['content.js', 'background.js', 'manifest.json', 'popup.html', 'popup.js', 'app.py'];
+  const allowed = ['content.js', 'background.js', 'manifest.json', 'popup.html', 'popup.js'];
   if (!allowed.includes(file)) return res.status(400).send('Invalid file');
-  const filePath = file === 'app.py' ? path.join(process.cwd(), 'app.py') : path.join(process.cwd(), 'chrome-extension', file);
+  const filePath = path.join(process.cwd(), 'chrome-extension', file);
   if (fs.existsSync(filePath)) {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.sendFile(filePath);
