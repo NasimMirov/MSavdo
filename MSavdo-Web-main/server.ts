@@ -15,7 +15,7 @@ import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculateDiscountedPriceTjs, calculatePriceTjs, calculateQuantityDiscountedPriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
-import { cleanProductDescription, ensureOrderDeliveryNotice, removeOrderDeliveryNotice } from './src/utils/productDescription.js';
+import { buildBilingualProductDescription, cleanProductDescription, ensureOrderDeliveryNotice, removeOrderDeliveryNotice } from './src/utils/productDescription.js';
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { importVariantInstructions } from './src/utils/importAiPrompt.js';
 import { calculatePromotions } from './src/utils/promotions.js';
@@ -970,14 +970,18 @@ try {
 
 // Очистка существующих товаров от запрещенных слов и фраз о контроле производства
 try {
-  const existingProds = db.prepare("SELECT id, title, description, delivery_type FROM products WHERE COALESCE(status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string; delivery_type: string | null }>;
+  const existingProds = db.prepare("SELECT id, title, description, delivery_type, specifications FROM products WHERE COALESCE(status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string; delivery_type: string | null; specifications: string | null }>;
   const updateProd = db.prepare('UPDATE products SET title = ?, description = ? WHERE id = ?');
   for (const p of existingProds) {
     const cleanT = cleanBannedWordsAndPhrases(p.title || '');
     const description = cleanBannedWordsAndPhrases(p.description || '');
-    const cleanD = p.delivery_type === 'stock'
-      ? cleanProductDescription(removeOrderDeliveryNotice(description))
-      : ensureOrderDeliveryNotice(description);
+    const parsedSpecs = parseSpecifications(p.specifications);
+    const cleanD = buildBilingualProductDescription(
+      description,
+      cleanT,
+      parsedSpecs,
+      p.delivery_type === 'stock' ? 'stock' : 'order',
+    );
     if (cleanT !== p.title || cleanD !== p.description) {
       updateProd.run(cleanT, cleanD, p.id);
     }
@@ -3713,7 +3717,7 @@ app.post('/api/admin/import-assistant', requireAdmin, importAssistantRateLimiter
 });
 
 app.post('/api/admin/product-suggestions', requireAdmin, importAssistantRateLimiter, async (req, res) => {
-  const { action, title, description, specifications } = req.body || {};
+  const { action, title, description, specifications, delivery_type: requestedDeliveryType } = req.body || {};
   if ((action !== 'category' && action !== 'description' && action !== 'title') || typeof title !== 'string' || !title.trim() || title.length > 500) {
     return res.status(400).json({ error: 'Укажите название товара и корректное действие.' });
   }
@@ -3726,6 +3730,14 @@ app.post('/api/admin/product-suggestions', requireAdmin, importAssistantRateLimi
       typeof (item as { name?: unknown }).name === 'string' &&
       typeof (item as { value?: unknown }).value === 'string')
     .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) }));
+
+  if (action === 'description') {
+    // Fixed bilingual copy and verified facts avoid a paid AI call. Unknown
+    // product details remain untouched in the original Russian description.
+    const deliveryType = requestedDeliveryType === 'stock' ? 'stock' : 'order';
+    const improvedDescription = buildBilingualProductDescription(description, title, safeSpecifications, deliveryType);
+    return res.json({ description: improvedDescription, source: 'local-template' });
+  }
 
   try {
     const suggestion = await requestTokenPlanSuggestion(readTokenPlanKey(), action, {
@@ -3815,9 +3827,12 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       aiCategory,
       Array.isArray(specifications) ? specifications : [],
     );
-    cleanDesc = cleanDelivery === 'stock'
-      ? cleanProductDescription(removeOrderDeliveryNotice(cleanDesc))
-      : ensureOrderDeliveryNotice(cleanDesc);
+    cleanDesc = buildBilingualProductDescription(
+      cleanDesc,
+      cleanTitle,
+      Array.isArray(specifications) ? specifications : [],
+      cleanDelivery,
+    );
 
     // Нормализация спецификаций/характеристик
     let cleanSpecs = '';
@@ -4033,9 +4048,12 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       aiCategory,
       Array.isArray(specifications) ? specifications : [],
     );
-    cleanDesc = cleanDelivery === 'stock'
-      ? cleanProductDescription(removeOrderDeliveryNotice(cleanDesc))
-      : ensureOrderDeliveryNotice(cleanDesc);
+    cleanDesc = buildBilingualProductDescription(
+      cleanDesc,
+      cleanTitle,
+      Array.isArray(specifications) ? specifications : [],
+      cleanDelivery,
+    );
 
     // Нормализация спецификаций
     let cleanSpecs: string | null = null;
@@ -4599,9 +4617,7 @@ app.post('/api/add-product', (req, res, next) => {
     if (preserve_reviewed_data !== true || !manual_description) {
       finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
     }
-    finalDesc = finalDeliveryType === 'stock'
-      ? cleanProductDescription(removeOrderDeliveryNotice(finalDesc))
-      : ensureOrderDeliveryNotice(finalDesc);
+    finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, specificationsToProcess, finalDeliveryType);
     const categoryId = resolveCategoryId(finalCategory);
 
     // Генерируем уникальный артикул базового товара
@@ -4873,9 +4889,7 @@ app.post('/api/parse-product-html', async (req, res) => {
       analysis.category_name,
       searchableSpecs,
     );
-    finalDesc = delivery_type === 'stock'
-      ? cleanProductDescription(removeOrderDeliveryNotice(finalDesc))
-      : ensureOrderDeliveryNotice(finalDesc);
+    finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, searchableSpecs, delivery_type === 'stock' ? 'stock' : 'order');
 
     const finalProduct = {
       title: finalTitle,
@@ -5150,9 +5164,10 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
     delivery_per_kg_tjs: '30',
     cny_tjs_rate: '1.45',
-    somon_district_id: getSetting('somon_district_id', '139') === '511'
-      ? '139'
-      : getSetting('somon_district_id', '139'),
+    somon_district_id: getSetting('somon_city_id', '513') === '511'
+      ? (getSetting('somon_district_id', '139') === '511' ? '139' : getSetting('somon_district_id', '139'))
+      : getSetting('somon_city_id', '513'),
+    somon_city_id: getSetting('somon_city_id', '513'),
     somon_category_config: somonCategoryConfig,
     tokenplan_key_configured: Boolean(getSetting('tokenplan_api_key_encrypted', '')),
   });
@@ -5197,15 +5212,34 @@ app.post('/api/admin/tokenplan-key', requireAdmin, async (req, res) => {
 
 app.post('/api/admin/settings', requireAdmin, (req, res) => {
   try {
-    const { whatsapp_phone, somon_district_id, somon_category_config } = req.body;
-    if (whatsapp_phone) setSetting('whatsapp_phone', String(whatsapp_phone).trim());
-    if (somon_district_id !== undefined) {
+    const { whatsapp_phone, somon_city_id, somon_district_id, somon_category_config } = req.body;
+    if (whatsapp_phone !== undefined) {
+      const phone = String(whatsapp_phone).replace(/\D/g, '');
+      if (phone.length < 7 || phone.length > 15) {
+        return res.status(400).json({ error: 'Укажите WhatsApp в международном формате, например 992900000000' });
+      }
+      setSetting('whatsapp_phone', phone);
+    }
+    if (somon_city_id !== undefined) {
+      const cityId = String(somon_city_id).trim();
+      if (!['511', '513', '665'].includes(cityId)) {
+        return res.status(400).json({ error: 'Выберите город из списка Somon' });
+      }
+      setSetting('somon_city_id', cityId);
+      // Somon locations list city IDs as selectable location IDs except
+      // Dushanbe, which has explicit districts.
+      if (cityId !== '511') setSetting('somon_district_id', cityId);
+      else if (String(somon_district_id ?? getSetting('somon_district_id', '139')) !== '139') setSetting('somon_district_id', '139');
+    }
+    if (somon_district_id !== undefined && (somon_city_id === undefined || String(somon_city_id) === '511')) {
       const districtId = String(somon_district_id).trim();
       if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
         return res.status(400).json({ error: 'ID района Somon должен быть положительным числом' });
       }
       setSetting('somon_district_id', districtId);
     }
+    const selectedCityId = String(somon_city_id ?? getSetting('somon_city_id', '513'));
+    if (selectedCityId !== '511') setSetting('somon_district_id', selectedCityId);
     if (somon_category_config !== undefined) {
       if (!somon_category_config || typeof somon_category_config !== 'object' || Array.isArray(somon_category_config)) {
         return res.status(400).json({ error: 'Укажите корректные настройки категорий Somon' });
@@ -5882,7 +5916,8 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    const districtId = getSetting('somon_district_id', '139') === '511' ? '139' : getSetting('somon_district_id', '139');
+    const cityId = getSetting('somon_city_id', '513');
+    const districtId = cityId === '511' ? getSetting('somon_district_id', '139') : cityId;
     const rows = db.prepare(`
       SELECT p.id, p.title, p.category_id, p.main_image, p.images,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
@@ -5918,7 +5953,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     return res.json({
       source: 'https://somon.tj/business-xml-guide/',
       guide_snapshot: '/business-xml-guide/',
-      city_id: '511', district_id: isSomonDistrictId(districtId) ? districtId : null,
+      city_id: cityId, district_id: isSomonDistrictId(districtId) ? districtId : null,
       total_active: rows.length, publishable, skipped: rows.length - publishable, reasons,
       constraints: { title_max_length: 70, max_images: 16, image_extensions: ['.jpg', '.jpeg', '.png'], integer_price: true },
     });
@@ -5937,10 +5972,11 @@ app.get('/somon-feed.xml', (_req, res) => {
     // 139 is a valid Dushanbe district (10 мкр-н) in Somon's official
     // location list. 511 is the city ID and must be sent as <city>, not
     // as <district>.
-    const cityId = '511';
-    const configuredDistrictId = getSetting('somon_district_id', '139');
-    // Older admin settings used 511 (the Dushanbe city ID) as a district.
-    const districtId = configuredDistrictId === '511' ? '139' : configuredDistrictId;
+    const cityId = getSetting('somon_city_id', '513');
+    const configuredDistrictId = getSetting('somon_district_id', cityId === '511' ? '139' : cityId);
+    const districtId = cityId === '511'
+      ? (configuredDistrictId === '511' ? '139' : configuredDistrictId)
+      : cityId;
     if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
       throw new Error('В настройках Somon указан некорректный ID района');
     }
@@ -6050,9 +6086,9 @@ app.get('/somon-feed.xml', (_req, res) => {
       const title = cleanSomonTitle(product.title);
       if (!title) continue;
       const sourceDescription = String(product.description || product.title);
-      const description = (product.delivery_type === 'stock'
-        ? removeOrderDeliveryNotice(sourceDescription)
-        : ensureOrderDeliveryNotice(sourceDescription))
+      const somonSpecifications = Object.entries(parseSomonSpecifications(product.specifications))
+        .map(([name, value]) => ({ name, value }));
+      const description = buildBilingualProductDescription(sourceDescription, product.title, somonSpecifications, product.delivery_type === 'stock' ? 'stock' : 'order')
         .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
         .replace(/<[^>]*>/g, ' ')
         .replace(/\s+/g, ' ')
@@ -6079,11 +6115,11 @@ app.get('/somon-feed.xml', (_req, res) => {
       <images>${imageXml}</images>
       <status>active</status>
       <rubric>${rubricId}</rubric>
-      <city>${cityId}</city>
       <district>${districtId}</district>
       <description>${escapeXml(description)}</description>
       <price>${Math.max(0, Math.round(Number(product.price_tjs)))}</price>
       <phone_hide>0</phone_hide>
+      <whatsapp>${escapeXml(String(getSetting('whatsapp_phone', '992444431')).replace(/\D/g, ''))}</whatsapp>
       <negotiable_price>0</negotiable_price>
       <exchange>0</exchange>
       <delivery>${delivery}</delivery>

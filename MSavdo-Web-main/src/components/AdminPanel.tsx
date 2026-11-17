@@ -306,6 +306,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     whatsapp_phone: '992444431',
     cny_tjs_rate: '1.45',
     delivery_per_kg_tjs: '30',
+    somon_city_id: '513',
     somon_district_id: '139',
     somon_category_config: {} as Record<string, { rubric_id: string; attributes_json: string }>,
   });
@@ -529,6 +530,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           whatsapp_phone: setData.whatsapp_phone || '992444431',
           cny_tjs_rate: setData.cny_tjs_rate || '1.45',
           delivery_per_kg_tjs: setData.delivery_per_kg_tjs || '30',
+          somon_city_id: setData.somon_city_id || '513',
           somon_district_id: setData.somon_district_id || '139',
           somon_category_config: setData.somon_category_config || {},
         });
@@ -1395,6 +1397,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           title: snapshot.title,
           description: snapshot.description || '',
           specifications: snapshot.specifications || [],
+          delivery_type: snapshot.delivery_type === 'stock' ? 'stock' : 'order',
         }),
       });
       const data = await response.json();
@@ -3043,16 +3046,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </p>
               </div>
               <div>
-                <label className="mb-1 block font-bold text-slate-700">ID района Somon</label>
-                <input
-                  type="number"
-                  min="1"
-                  required
-                  value={settings.somon_district_id}
-                  onChange={(e) => setSettings({ ...settings, somon_district_id: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 p-3 text-sm font-mono font-bold"
-                />
-                <span className="text-[10px] text-slate-500">Для Душанбе используйте район 139 (10 мкр-н). ID города 511 добавляется в XML автоматически.</span>
+                <label className="mb-1 block font-bold text-slate-700">Город публикации Somon</label>
+                <select
+                  value={settings.somon_city_id}
+                  onChange={(e) => setSettings({
+                    ...settings,
+                    somon_city_id: e.target.value,
+                    somon_district_id: e.target.value === '511' ? '139' : e.target.value,
+                  })}
+                  className="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm font-semibold"
+                >
+                  <option value="513">Бохтар (Курган-Тюбе)</option>
+                  <option value="511">Душанбе</option>
+                  <option value="665">Леваканд (Сарбанд)</option>
+                </select>
+                <span className="text-[10px] text-slate-500">По умолчанию выбран Бохтар. Для Душанбе используется район 139 из справочника Somon. Бохтар и Леваканд передаются как отдельные ID города.</span>
               </div>
               <div>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -3813,7 +3821,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </label>
                   <button type="button" disabled={productSuggestionInProgress !== null} onClick={() => void handleProductSuggestion('description')}
                     className="rounded-lg bg-purple-100 px-2 py-1 text-[10px] font-bold text-purple-700 disabled:opacity-50">
-                    {productSuggestionInProgress === 'description' ? 'Улучшаем…' : 'Улучшить описание'}
+                    {productSuggestionInProgress === 'description' ? 'Готовим…' : 'Описание RU + TJ (без ИИ)'}
                   </button>
                 </div>
                 <textarea
