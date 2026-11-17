@@ -5963,6 +5963,20 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
   }
 });
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS somon_feed_state (
+    product_id INTEGER PRIMARY KEY,
+    payload_hash TEXT NOT NULL,
+    last_update TEXT NOT NULL
+  );
+`);
+
+const getSomonFeedState = db.prepare('SELECT payload_hash, last_update FROM somon_feed_state WHERE product_id = ?');
+const saveSomonFeedState = db.prepare(`
+  INSERT INTO somon_feed_state (product_id, payload_hash, last_update) VALUES (?, ?, ?)
+  ON CONFLICT(product_id) DO UPDATE SET payload_hash = excluded.payload_hash, last_update = excluded.last_update
+`);
+
 app.get('/somon-feed.xml', (_req, res) => {
   try {
     const parsedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
@@ -6006,7 +6020,6 @@ app.get('/somon-feed.xml', (_req, res) => {
       variant_sizes: string | null;
     }>;
 
-    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
     const items: string[] = [];
     for (const product of products) {
       if (!product.category_id || !Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) continue;
@@ -6108,9 +6121,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       // extension literally and rejects URLs with a query after `.jpg`.
       const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
       const delivery = product.delivery_type === 'stock' ? '0' : '1';
-      items.push(`
-    <list-item>
-      <last_update>${escapeXml(timestamp)}</last_update>
+      const itemPayload = `
       <external_id>${product.id}</external_id>
       <images>${imageXml}</images>
       <status>active</status>
@@ -6128,7 +6139,16 @@ app.get('/somon-feed.xml', (_req, res) => {
       <geometry></geometry>
       <title>${escapeXml(title)}</title>
       <chosen_phone></chosen_phone>
-    </list-item>`);
+`;
+      const payloadHash = crypto.createHash('sha256').update(itemPayload).digest('hex');
+      const previous = getSomonFeedState.get(product.id) as { payload_hash: string; last_update: string } | undefined;
+      const lastUpdate = previous?.payload_hash === payloadHash
+        ? previous.last_update
+        : new Date().toISOString().replace('T', ' ').slice(0, 19);
+      saveSomonFeedState.run(product.id, payloadHash, lastUpdate);
+      items.push(`
+    <list-item>
+      <last_update>${escapeXml(lastUpdate)}</last_update>${itemPayload}    </list-item>`);
     }
 
     return res
