@@ -1336,7 +1336,7 @@ export default function App() {
             />
             <div>
               <span className="font-black text-white">MSavdo</span> · Маркази Савдо · Сервис выкупа фабричных товаров
-              <span className="text-zinc-600 block sm:inline sm:ml-2">Instagram: <strong className="text-amber-400">@MSavdo.tj</strong></span>
+              <span className="text-zinc-600 block sm:inline sm:ml-2">Instagram: <strong className="text-amber-400">@msavdo_official</strong></span>
             </div>
           </div>
 
@@ -1352,12 +1352,12 @@ export default function App() {
               {t('rules')}
             </button>
             <a 
-              href="https://instagram.com/MSavdo.tj" 
+              href="https://instagram.com/msavdo_official" 
               target="_blank" 
               rel="noreferrer"
               className="text-amber-400 hover:underline"
             >
-              @MSavdo.tj
+              @msavdo_official
             </a>
             
             {/* Скрытый дискретный служебный вход: только для владельца магазина */}
@@ -1381,7 +1381,7 @@ export default function App() {
                 <Send className="h-4 w-4" />
               </a>
               <a
-                href="https://instagram.com/MSavdo.tj"
+                href="https://instagram.com/msavdo_official"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="M.Savdo в Instagram"
