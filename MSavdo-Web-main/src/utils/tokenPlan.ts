@@ -1,9 +1,10 @@
-export type ProductSuggestionAction = 'title' | 'description' | 'category';
+export type ProductSuggestionAction = 'title' | 'description' | 'description-proofread' | 'category';
 const API_URL = (typeof process !== 'undefined' && process.env?.TOKENPLAN_API_URL?.trim()) || 'https://tokenplan.art/v1/chat/completions';
 const MODEL = (typeof process !== 'undefined' && process.env?.TOKENPLAN_MODEL?.trim()) || 'gemini-3.8-flash';
 const tasks: Record<ProductSuggestionAction, string> = {
   title: 'Перепиши название товара по-русски кратко и точно. Сохрани модель, размер и количество. Удали рекламу. Верни только название.',
   description: 'Напиши описание товара на русском в 2–5 предложениях только по подтверждённым данным. Не выдумывай факты, цену или доставку. Верни только описание.',
+  'description-proofread': 'Отредактируй исходное описание: исправь орфографию, грамматику и неясные формулировки, сохрани язык и смысл. Не добавляй факты, характеристики, заголовки, рекламные призывы или доставку. Не повторяй и не расширяй информацию. Верни только исправленный текст.',
   category: 'Выбери одну категорию строго из списка и верни только её точное название.',
 };
 export async function requestTokenPlanSuggestion(key: string, action: ProductSuggestionAction, data: { title: string; description: string; specifications: Array<{ name: string; value: string }> }, categories: string[], fetcher: typeof fetch = fetch): Promise<string> {
@@ -24,6 +25,6 @@ export async function requestTokenPlanSuggestion(key: string, action: ProductSug
   const result = content.trim().replace(/^```(?:text)?\s*/i, '').replace(/\s*```$/, '').replace(/^['"“”]|['"“”]$/g, '').trim();
   if (action !== 'category' && /[\u3400-\u9fff]/.test(result)) throw new Error('TokenPlan оставил китайские иероглифы. Повторите запрос.');
   if (action === 'category' && !categories.includes(result)) throw new Error('TokenPlan вернул категорию вне каталога. Повторите запрос.');
-  if ((action === 'title' && result.length > 500) || (action === 'description' && result.length > 20000)) throw new Error('Ответ TokenPlan слишком длинный.');
+  if ((action === 'title' && result.length > 500) || ((action === 'description' || action === 'description-proofread') && result.length > 20000)) throw new Error('Ответ TokenPlan слишком длинный.');
   return result;
 }

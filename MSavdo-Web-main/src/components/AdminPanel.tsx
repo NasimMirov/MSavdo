@@ -127,7 +127,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [editingProduct, setEditingProduct] = useState<any | null>(null);
-  const [productSuggestionInProgress, setProductSuggestionInProgress] = useState<'title' | 'category' | 'description' | null>(null);
+  const [productSuggestionInProgress, setProductSuggestionInProgress] = useState<'title' | 'category' | 'description' | 'description-proofread' | null>(null);
   const [categoryEditorProduct, setCategoryEditorProduct] = useState<any | null>(null);
   const [categoryDraftId, setCategoryDraftId] = useState('');
   const [isSavingCategory, setIsSavingCategory] = useState(false);
@@ -1386,7 +1386,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
-  const handleProductSuggestion = async (action: 'title' | 'category' | 'description') => {
+  const handleProductSuggestion = async (action: 'title' | 'category' | 'description' | 'description-proofread') => {
     if (!editingProduct || !editingProduct.title.trim()) {
       setProductSaveError('Сначала укажите название товара');
       return;
@@ -1395,6 +1395,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setProductSuggestionInProgress(action);
     setProductSaveError('');
     try {
+      const normalizedSpecifications = Array.isArray(snapshot.specifications)
+        ? snapshot.specifications
+        : typeof snapshot.specifications === 'string'
+          ? (() => { try { const parsed = JSON.parse(snapshot.specifications); return Array.isArray(parsed) ? parsed : []; } catch { return []; } })()
+          : [];
       const response = await adminFetch('/api/admin/product-suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1402,7 +1407,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           action,
           title: snapshot.title,
           description: snapshot.description || '',
-          specifications: snapshot.specifications || [],
+          specifications: action === 'description-proofread' ? [] : normalizedSpecifications,
           delivery_type: snapshot.delivery_type === 'stock' ? 'stock' : 'order',
         }),
       });
@@ -1411,7 +1416,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (action === 'category' && (!Number.isSafeInteger(data.category_id) || typeof data.category_name !== 'string')) {
         throw new Error('Сервер вернул некорректную категорию');
       }
-      if ((action === 'description' || action === 'title') && (typeof data[action] !== 'string' || !data[action].trim())) {
+      if ((action === 'description' || action === 'description-proofread' || action === 'title') && (typeof data[action === 'description-proofread' ? 'description' : action] !== 'string' || !data[action === 'description-proofread' ? 'description' : action].trim())) {
         throw new Error('Сервер вернул пустой результат');
       }
       const current = editingProductRef.current;
@@ -1427,9 +1432,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           (action === 'category' && current.category_id !== snapshot.category_id)) {
           return current;
         }
+        const resultKey = action === 'description-proofread' ? 'description' : action;
         return action === 'category'
           ? { ...current, category_id: data.category_id, category_name: data.category_name }
-          : { ...current, [action]: data[action] };
+          : { ...current, [resultKey]: data[resultKey] };
       });
       showNotice('Рекомендация получена. Проверьте её перед сохранением товара.');
     } catch (error) {
@@ -3825,10 +3831,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <label className="block font-bold text-slate-800">
                     Описание товара (включая характеристики):
                   </label>
-                  <button type="button" disabled={productSuggestionInProgress !== null} onClick={() => void handleProductSuggestion('description')}
-                    className="rounded-lg bg-purple-100 px-2 py-1 text-[10px] font-bold text-purple-700 disabled:opacity-50">
-                    {productSuggestionInProgress === 'description' ? 'Готовим…' : 'Описание RU + TJ (без ИИ)'}
-                  </button>
+                  <div className="flex gap-1">
+                    <button type="button" disabled={productSuggestionInProgress !== null} onClick={() => void handleProductSuggestion('description')}
+                      className="rounded-lg bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-800 disabled:opacity-50">
+                      {productSuggestionInProgress === 'description' ? 'Готовим…' : 'Описание RU + TJ (без ИИ)'}
+                    </button>
+                    <button type="button" disabled={productSuggestionInProgress !== null} onClick={() => void handleProductSuggestion('description-proofread')}
+                      className="rounded-lg bg-purple-100 px-2 py-1 text-[10px] font-bold text-purple-700 disabled:opacity-50">
+                      {productSuggestionInProgress === 'description-proofread' ? 'Исправляем…' : 'Исправить с ИИ'}
+                    </button>
+                  </div>
                 </div>
                 <textarea
                   rows={6}

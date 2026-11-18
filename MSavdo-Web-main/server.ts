@@ -3720,12 +3720,22 @@ app.post('/api/admin/import-assistant', requireAdmin, importAssistantRateLimiter
 });
 
 app.post('/api/admin/product-suggestions', requireAdmin, importAssistantRateLimiter, async (req, res) => {
-  const { action, title, description, specifications, delivery_type: requestedDeliveryType } = req.body || {};
-  if ((action !== 'category' && action !== 'description' && action !== 'title') || typeof title !== 'string' || !title.trim() || title.length > 500) {
+  const { action, title, description, specifications: rawSpecifications, delivery_type: requestedDeliveryType } = req.body || {};
+  const allowedAction = action === 'category' || action === 'description' || action === 'description-proofread' || action === 'title';
+  if (!allowedAction || typeof title !== 'string' || !title.trim() || title.length > 500) {
     return res.status(400).json({ error: 'Укажите название товара и корректное действие.' });
   }
-  if (typeof description !== 'string' || description.length > 20000 || !Array.isArray(specifications) || specifications.length > 100) {
-    return res.status(400).json({ error: 'Описание или характеристики имеют неверный формат.' });
+  if (typeof description !== 'string' || description.length > 20000) {
+    return res.status(400).json({ error: 'Описание имеет неверный формат.' });
+  }
+  let specifications: unknown = rawSpecifications;
+  if (typeof specifications === 'string' && specifications.trim()) {
+    try { specifications = JSON.parse(specifications); }
+    catch { return res.status(400).json({ error: 'Характеристики должны быть массивом или корректной JSON-строкой.' }); }
+  }
+  if (specifications === undefined || specifications === null || specifications === '') specifications = [];
+  if (!Array.isArray(specifications) || specifications.length > 100) {
+    return res.status(400).json({ error: 'Характеристики имеют неверный формат.' });
   }
   const safeSpecifications = specifications
     .filter((item: unknown): item is { name: string; value: string } =>
@@ -3735,8 +3745,6 @@ app.post('/api/admin/product-suggestions', requireAdmin, importAssistantRateLimi
     .map((item) => ({ name: item.name.slice(0, 120), value: item.value.slice(0, 500) }));
 
   if (action === 'description') {
-    // Fixed bilingual copy and verified facts avoid a paid AI call. Unknown
-    // product details remain untouched in the original Russian description.
     const deliveryType = requestedDeliveryType === 'stock' ? 'stock' : 'order';
     const improvedDescription = buildBilingualProductDescription(description, title, safeSpecifications, deliveryType);
     return res.json({ description: improvedDescription, source: 'local-template' });
@@ -3744,12 +3752,12 @@ app.post('/api/admin/product-suggestions', requireAdmin, importAssistantRateLimi
 
   try {
     const suggestion = await requestTokenPlanSuggestion(readTokenPlanKey(), action, {
-      title: title.trim(), description, specifications: safeSpecifications,
+      title: title.trim(), description, specifications: action === 'description-proofread' ? [] : safeSpecifications,
     }, STRICT_ALLOWED_CATEGORIES);
     if (action === 'category') return res.json({ category_id: resolveCategoryId(suggestion), category_name: suggestion, source: 'tokenplan' });
     const improved = cleanProductDescription(cleanBannedWordsAndPhrases(suggestion));
     if (!improved.trim()) throw new Error('TokenPlan вернул пустой результат.');
-    return res.json({ [action]: improved, source: 'tokenplan' });
+    return res.json({ [action === 'description-proofread' ? 'description' : action]: improved, source: 'tokenplan' });
   } catch (error) {
     return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось получить ответ TokenPlan.' });
   }
