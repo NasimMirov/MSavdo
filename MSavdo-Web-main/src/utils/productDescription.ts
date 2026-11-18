@@ -269,12 +269,18 @@ function translateCategory(category: string): string {
 }
 
 function cleanRussianDescription(description: string): string {
-  const withoutGeneratedSections = description.includes('Описание товара:')
-    ? description.split('Описание товара:')[1].split('Характеристики:')[0]
-    : description.replace(/^Тавсифи маҳсулот:[\s\S]*?(?=Описание товара:|$)/i, '');
-  return cleanProductDescription(withoutGeneratedSections
+  const source = description.trim();
+  const markers = Array.from(source.matchAll(/Описание товара:\s*/giu));
+  const withoutGeneratedSections = markers.length
+    ? source.slice(markers[markers.length - 1].index! + markers[markers.length - 1][0].length)
+    : source.replace(/^Тавсифи маҳсулот:[\s\S]*?(?=Описание товара:|$)/i, '');
+  const body = withoutGeneratedSections
+    .replace(/^Описание товара:\s*/giu, '')
+    .split(/(?:Тавсифи маҳсулот:|Характеристики:?|Категория:|Барои фармоиш додани ин|Заказывайте этот|Нет в наличии\.|Дар анбор мавҷуд нест\.)/iu)[0]
+    .replace(/(?:Нет в наличии\.|Дар анбор мавҷуд нест\.)[\s\S]*$/iu, '')
     .replace(/\n?Ключевые слова для поиска:[\s\S]*$/i, '')
-    .replace(/\n?Тавсифи маҳсулот:[\s\S]*$/i, ''));
+    .replace(/\n?Тавсифи маҳсулот:[\s\S]*$/i, '');
+  return cleanProductDescription(body);
 }
 
 function cleanSpecificationPart(value: string): string {
