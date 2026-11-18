@@ -6088,10 +6088,11 @@ app.get('/somon-feed.xml', (_req, res) => {
     const configuredDistrictId = getSetting('somon_district_id', cityId === '511' ? '139' : cityId);
     const districtId = cityId === '511'
       ? (configuredDistrictId === '511' ? '139' : configuredDistrictId)
-      : cityId;
-    if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
+      : '';
+    if (cityId === '511' && (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0)) {
       throw new Error('В настройках Somon указан некорректный ID района');
     }
+    const locationXml = cityId === '511' ? `<district>${districtId}</district>` : '';
 
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.delivery_type, p.category_id, p.main_image, p.images,
@@ -6223,7 +6224,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       <status>active</status>
       <rubric>${rubricId}</rubric>
       <city>${cityId}</city>
-      <district>${districtId}</district>
+      ${locationXml}
       <description>${escapeXml(description)}</description>
       <price>${Math.max(0, Math.round(Number(product.price_tjs)))}</price>
       <phone_hide>0</phone_hide>
