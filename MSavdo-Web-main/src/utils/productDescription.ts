@@ -178,6 +178,14 @@ const TAJIK_SPEC_LABELS: Record<string, string> = {
 };
 
 const TAJIK_TITLE_TERMS: Array<[RegExp, string]> = [
+  [/мужские|мужской/gi, 'мардона'],
+  [/женские|женский/gi, 'занона'],
+  [/зимние|зимний/gi, 'зимистона'],
+  [/летние|летний/gi, 'тобистона'],
+  [/беговые|беговой/gi, 'барои давидан'],
+  [/повседневные|повседневный/gi, 'рӯзмарра'],
+  [/увеличения роста|увеличение роста/gi, 'баландии қад'],
+  [/амортизирующей воздушной подушкой/gi, 'бо болишти ҳавоии амортизатсионӣ'],
   [/смартфон|смарт телефон/gi, 'телефони ҳушманд'],
   [/мобильный телефон|телефон/gi, 'телефон'],
   [/умные очки|смарт-очки/gi, 'айнаки ҳушманд'], [/очки/gi, 'айнак'],
@@ -260,6 +268,41 @@ function translateCategory(category: string): string {
   return known ? known[1] : translateKnownProductTerms(normalized);
 }
 
+function cleanRussianDescription(description: string): string {
+  const withoutGeneratedSections = description.includes('Описание товара:')
+    ? description.split('Описание товара:')[1].split('Характеристики:')[0]
+    : description.replace(/^Тавсифи маҳсулот:[\s\S]*?(?=Описание товара:|$)/i, '');
+  return cleanProductDescription(withoutGeneratedSections
+    .replace(/\n?Ключевые слова для поиска:[\s\S]*$/i, '')
+    .replace(/\n?Тавсифи маҳсулот:[\s\S]*$/i, ''));
+}
+
+function cleanSpecificationPart(value: string): string {
+  return value
+    .replace(/[㐀-鿿]+/g, ' ')
+    .replace(/\s*\/\s*/g, ', ')
+    .replace(/\s*\|\s*/g, ', ')
+    .replace(/\s*;\s*/g, ', ')
+    .replace(/(?:,\s*){2,}/g, ', ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s,.:;–—-]+|[\s,.:;–—-]+$/g, '')
+    .trim();
+}
+
+function normalizeSpecifications(specifications: Array<{ name: string; value: string }>): Array<{ name: string; value: string }> {
+  const seen = new Set<string>();
+  return specifications
+    .filter((spec) => spec && typeof spec.name === 'string' && typeof spec.value === 'string')
+    .map((spec) => ({ name: cleanSpecificationPart(spec.name), value: cleanSpecificationPart(spec.value) }))
+    .filter((spec) => {
+      const key = spec.name.toLocaleLowerCase('ru');
+      if (!spec.name || !spec.value || /^фото цвета:/i.test(spec.name) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 8);
+}
+
 export function buildBilingualProductDescription(
   description: string,
   title = '',
@@ -267,13 +310,8 @@ export function buildBilingualProductDescription(
   deliveryType: 'stock' | 'order' = 'order',
   category = '',
 ): string {
-  const cleanBody = cleanProductDescription(removeProductCta(removeOrderDeliveryNotice(description))
-    .replace(/\n?Ключевые слова для поиска:[\s\S]*$/i, ''));
-  const validSpecifications = specifications
-    .filter((spec) => spec && typeof spec.name === 'string' && typeof spec.value === 'string')
-    .map((spec) => ({ name: spec.name.trim(), value: spec.value.trim() }))
-    .filter((spec) => spec.name && spec.value && !/^фото цвета:/i.test(spec.name))
-    .slice(0, 8);
+  const cleanBody = cleanRussianDescription(removeProductCta(removeOrderDeliveryNotice(description)));
+  const validSpecifications = normalizeSpecifications(specifications);
   const russianFacts = validSpecifications.map(({ name, value }) => `${name}: ${value}`);
   const tajikFacts = validSpecifications.map(({ name, value }) => (
     `${TAJIK_SPEC_LABELS[name.toLocaleLowerCase('ru')] || translateKnownProductTerms(name)}: ${translateKnownProductTerms(value)}`
@@ -282,7 +320,6 @@ export function buildBilingualProductDescription(
   const tajikDescription = [
     translateKnownProductTerms(title.trim()),
     tajikCategory ? `Категория: ${tajikCategory}` : '',
-    translateKnownProductTerms(cleanBody),
     ...tajikFacts,
   ]
     .filter(Boolean)
