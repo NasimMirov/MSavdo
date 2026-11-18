@@ -1414,6 +1414,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
     const snapshot = editingProduct;
+    const productTitle = typeof snapshot.title === 'string' ? snapshot.title.trim() : '';
+    if (!productTitle) {
+      setProductSaveError('Сначала укажите название товара');
+      return;
+    }
     setProductSuggestionInProgress(action);
     setProductSaveError('');
     try {
@@ -1427,7 +1432,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action,
-          title: snapshot.title,
+          title: productTitle,
           description: snapshot.description || '',
           specifications: action === 'description-proofread' ? [] : normalizedSpecifications,
           delivery_type: snapshot.delivery_type === 'stock' ? 'stock' : 'order',
