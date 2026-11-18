@@ -3588,46 +3588,45 @@ app.delete('/api/orders/:id', requireAdmin, (req, res) => {
 // 3. АДМИНСКИЙ КАТАЛОГ (ДОСТУПЕН ТОЛЬКО АВТОРИЗОВАННОМУ АДМИНУ)
 app.get('/api/admin/products', requireAdmin, (req, res) => {
   try {
+    const requestedLimit = Number.parseInt(String(req.query.limit || '100'), 10);
+    const requestedOffset = Number.parseInt(String(req.query.offset || '0'), 10);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 100;
+    const offset = Number.isFinite(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
+    const aggregateCounts = db.prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN p.delivery_type = 'stock' THEN 1 ELSE 0 END) AS stock_count,
+             SUM(CASE WHEN p.status = 'draft' THEN 1 ELSE 0 END) AS draft_count,
+             (SELECT COUNT(*) FROM product_variants v JOIN products active ON active.id = v.product_id WHERE COALESCE(active.status, '') != 'deleted') AS variant_count
+      FROM products p
+      WHERE COALESCE(p.status, '') != 'deleted'
+    `).get() as { total: number; stock_count: number | null; draft_count: number | null; variant_count: number };
+    const total = aggregateCounts.total;
     const products = db.prepare(`
-      SELECT p.*, c.name as category_name,
-             COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs
+      SELECT p.id, p.base_sku, p.title, p.description, p.category_id, p.status, p.delivery_type,
+             p.main_image, p.original_link, p.views_count, p.discount_percent,
+             c.name as category_name,
+             COALESCE(variant_summary.variant_count, 0) AS variant_count,
+             COALESCE(variant_summary.min_price_tjs, 0) AS min_price_tjs,
+             COALESCE(variant_summary.max_price_tjs, 0) AS max_price_tjs,
+             CASE
+               WHEN p.specifications IS NULL OR p.specifications = '' THEN 0
+               WHEN json_valid(p.specifications) AND json_type(p.specifications) = 'array' THEN json_array_length(p.specifications)
+               WHEN json_valid(p.specifications) AND json_type(p.specifications) = 'object' THEN (SELECT COUNT(*) FROM json_each(p.specifications))
+               ELSE 0
+             END AS specification_count
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
+      LEFT JOIN (
+        SELECT product_id, COUNT(*) AS variant_count,
+               MIN(CASE WHEN price_tjs > 0 THEN price_tjs END) AS min_price_tjs,
+               MAX(CASE WHEN price_tjs > 0 THEN price_tjs END) AS max_price_tjs
+        FROM product_variants
+        GROUP BY product_id
+      ) variant_summary ON variant_summary.product_id = p.id
       WHERE COALESCE(p.status, '') != 'deleted'
       ORDER BY p.id DESC
-    `).all() as any[];
-
-    const getVariants = db.prepare(`SELECT * FROM product_variants WHERE product_id = ? ORDER BY id ASC`);
-
-    const enriched: any[] = [];
-    for (const p of products) {
-      const variants = getVariants.all(p.id);
-
-      let parsedSpecs: Array<{ name: string; value: string }> = [];
-      if (p.specifications) {
-        try {
-          const s = typeof p.specifications === 'string' ? JSON.parse(p.specifications) : p.specifications;
-          if (Array.isArray(s)) {
-            parsedSpecs = s;
-          } else if (typeof s === 'object' && s !== null) {
-            parsedSpecs = Object.entries(s).map(([k, v]) => ({ name: k, value: String(v) }));
-          }
-        } catch (_) {}
-      }
-      if (parsedSpecs.length === 0) {
-        parsedSpecs = fallbackAnalysis('', p.title, 50, 0.5).specifications || [];
-      }
-
-      enriched.push({
-        ...p,
-        delivery_type: p.delivery_type || 'order',
-        video_urls: normalizeVideoUrls(p.video_urls, p.youtube_url || p.video_url || ''),
-        youtube_url: p.youtube_url || p.video_url || '',
-        video_url: p.youtube_url || p.video_url || '',
-        specifications: parsedSpecs,
-        variants,
-      });
-    }
+      LIMIT ? OFFSET ?
+    `).all(limit, offset) as any[];
 
     const deletedProducts = db.prepare(`
       SELECT p.id, p.title, p.base_sku, d.deleted_at
@@ -3635,18 +3634,72 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
       WHERE p.status = 'deleted'
       ORDER BY d.deletion_id DESC LIMIT 10
     `).all();
-    return res.json({ products: enriched, deleted_products: deletedProducts });
+    return res.json({ products: products.map((p) => ({ ...p, delivery_type: p.delivery_type || 'order' })), deleted_products: deletedProducts, total, stock_count: aggregateCounts.stock_count || 0, draft_count: aggregateCounts.draft_count || 0, variant_count: aggregateCounts.variant_count, limit, offset, has_more: offset + products.length < total });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
-const importAssistantRateLimiter = rateLimit({
+
+app.put('/api/admin/products/:id/status', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const { status } = req.body || {};
+  if (!Number.isSafeInteger(id) || id <= 0 || (status !== 'active' && status !== 'draft')) {
+    return res.status(400).json({ error: 'Некорректный товар или статус.' });
+  }
+  const existing = db.prepare('SELECT status FROM products WHERE id = ?').get(id) as { status: string } | undefined;
+  if (!existing || existing.status === 'deleted') return res.status(404).json({ error: 'Товар не найден.' });
+  if (existing.status === 'draft' && status === 'active') {
+    const price = db.prepare('SELECT COUNT(*) AS count FROM product_variants WHERE product_id = ? AND price_tjs > 0').get(id) as { count: number };
+    const count = db.prepare('SELECT COUNT(*) AS count FROM product_variants WHERE product_id = ?').get(id) as { count: number };
+    if (!count.count || price.count !== count.count) return res.status(400).json({ error: 'Перед публикацией укажите цену продажи больше нуля для каждого варианта.' });
+  }
+  db.prepare('UPDATE products SET status = ? WHERE id = ?').run(status, id);
+  return res.json({ success: true, status });
+});
+
+app.put('/api/admin/products/:id/delivery', requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const deliveryType = req.body?.delivery_type;
+  if (!Number.isSafeInteger(id) || id <= 0 || (deliveryType !== 'stock' && deliveryType !== 'order')) {
+    return res.status(400).json({ error: 'Некорректный товар или тип доставки.' });
+  }
+  const result = db.prepare("UPDATE products SET delivery_type = ? WHERE id = ? AND COALESCE(status, '') != 'deleted'").run(deliveryType, id);
+  if (!result.changes) return res.status(404).json({ error: 'Товар не найден.' });
+  return res.json({ success: true, delivery_type: deliveryType });
+});
+
+app.get('/api/admin/products/:id', requireAdmin, (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Некорректный идентификатор товара.' });
+    const product = db.prepare(`
+      SELECT p.*, c.name AS category_name
+      FROM products p LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.id = ? AND COALESCE(p.status, '') != 'deleted'
+    `).get(id) as any;
+    if (!product) return res.status(404).json({ error: 'Товар не найден.' });
+    const variants = db.prepare('SELECT * FROM product_variants WHERE product_id = ? ORDER BY id ASC').all(id);
+    let specifications: Array<{ name: string; value: string }> = [];
+    if (product.specifications) {
+      try {
+        const parsed = JSON.parse(product.specifications);
+        specifications = Array.isArray(parsed)
+          ? parsed
+          : Object.entries(parsed || {}).map(([name, value]) => ({ name, value: String(value) }));
+      } catch (_) {}
+    }
+    return res.json({ ...product, variants, specifications, video_urls: normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || '') });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});const importAssistantRateLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 15,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
 });
+
 
 app.post('/api/admin/import-assistant', requireAdmin, importAssistantRateLimiter, async (req, res) => {
   const { title, description, source_text: sourceText, instruction, history, variant_labels: variantLabels = [], model = GEMINI_IMPORT_MODEL, prepare_only: prepareOnly = false } = req.body || {};
