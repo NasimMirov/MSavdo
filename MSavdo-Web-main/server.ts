@@ -1332,9 +1332,7 @@ function buildVerifiedProductDescription(title: string, specifications: Array<{ 
     if (details.length === 6) break;
   }
   const cleanTitle = String(title || '').replace(/[\s\-–—|:;,.]+$/g, '').trim();
-  return details.length > 0
-    ? `${cleanTitle}. Основные характеристики: ${details.join('; ')}.`
-    : `${cleanTitle}. Подробные характеристики уточняйте у менеджера.`;
+  return `${cleanTitle}. Описание и основные параметры товара приведены в характеристиках карточки.`;
 }
 
 function isVerifiedProductDescription(description: string): boolean {
@@ -4893,7 +4891,7 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
     finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
     const searchableSpecs = combinedSpecs.filter((spec) => !/^Фото цвета:/i.test(spec.name));
-    if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
+    if (!manual_description && (!isVerifiedProductDescription(finalDesc) || /(?:пойафзол|мавод|барои|мавҷуд|расонидан|имкон|то хона|тавсифи маҳсулот)/iu.test(finalDesc) || (finalDesc.match(/[\/|]/g) || []).length > 2)) {
       finalDesc = buildVerifiedProductDescription(finalTitle, searchableSpecs);
     }
     finalDesc = appendSearchKeywords(
