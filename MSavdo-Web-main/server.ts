@@ -4786,6 +4786,8 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       weight_kg = 0.5,
       save_to_catalog = false,
       delivery_type = 'order',
+      images: inputImages = [],
+      video_urls: inputVideoUrls = [],
     } = req.body;
 
     if (!html_code || typeof html_code !== 'string' || html_code.trim().length < 10) {
@@ -4827,6 +4829,11 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
     }
 
     const structured = extractStructuredFromHtmlOrJson(html_code);
+    const suppliedImages = Array.isArray(inputImages) ? filterProductImageUrls(inputImages) : [];
+    structured.images = filterProductImageUrls([...structured.images, ...suppliedImages]).slice(0, 32);
+    const suppliedVideos = Array.isArray(inputVideoUrls) ? normalizeVideoUrls(inputVideoUrls) : [];
+    structured.videoUrls = normalizeVideoUrls([...structured.videoUrls, ...suppliedVideos]).slice(0, 12);
+    structured.videoUrl = structured.videoUrls[0] || '';
     const effectiveTitle = structured.title || '';
     const baseCny = parseFloat(price_cny) || (structured.variants[0]?.price_cny) || 50;
     const initialWeight = parseFloat(weight_kg) || structured.weightKg || 0.5;
