@@ -3602,12 +3602,12 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
     `).get() as { total: number; stock_count: number | null; draft_count: number | null; variant_count: number };
     const total = aggregateCounts.total;
     const products = db.prepare(`
-      SELECT p.id, p.base_sku, p.title, p.description, p.category_id, p.status, p.delivery_type,
+      SELECT p.id, p.base_sku, p.title, p.category_id, p.status, p.delivery_type,
              p.main_image, p.original_link, p.views_count, p.discount_percent,
              c.name as category_name,
-             COALESCE(variant_summary.variant_count, 0) AS variant_count,
-             COALESCE(variant_summary.min_price_tjs, 0) AS min_price_tjs,
-             COALESCE(variant_summary.max_price_tjs, 0) AS max_price_tjs,
+             COALESCE((SELECT COUNT(*) FROM product_variants v WHERE v.product_id = p.id), 0) AS variant_count,
+             COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs,
+             COALESCE((SELECT MAX(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS max_price_tjs,
              CASE
                WHEN p.specifications IS NULL OR p.specifications = '' THEN 0
                WHEN json_valid(p.specifications) AND json_type(p.specifications) = 'array' THEN json_array_length(p.specifications)
@@ -3616,18 +3616,10 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
              END AS specification_count
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      LEFT JOIN (
-        SELECT product_id, COUNT(*) AS variant_count,
-               MIN(CASE WHEN price_tjs > 0 THEN price_tjs END) AS min_price_tjs,
-               MAX(CASE WHEN price_tjs > 0 THEN price_tjs END) AS max_price_tjs
-        FROM product_variants
-        GROUP BY product_id
-      ) variant_summary ON variant_summary.product_id = p.id
       WHERE COALESCE(p.status, '') != 'deleted'
       ORDER BY p.id DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset) as any[];
-
     const deletedProducts = db.prepare(`
       SELECT p.id, p.title, p.base_sku, d.deleted_at
       FROM deleted_products d JOIN products p ON p.id = d.product_id

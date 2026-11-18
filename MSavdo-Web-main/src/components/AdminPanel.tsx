@@ -538,26 +538,23 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (!isAuthenticated) return;
     setIsLoading(true);
     try {
-      const productsLoaded = await loadAdminProducts();
-      if (!productsLoaded) return;
-      const [, categoriesResult] = await Promise.all([
-        (async () => {
-          const response = await adminFetch('/api/admin/settings');
-          if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) return;
-          const data = await response.json();
-          setTokenPlanKeyConfigured(data.tokenplan_key_configured === true);
-          setSettings({
-            whatsapp_phone: data.whatsapp_phone || '992444431',
-            cny_tjs_rate: data.cny_tjs_rate || '1.45',
-            delivery_per_kg_tjs: data.delivery_per_kg_tjs || '30',
-            somon_city_id: data.somon_city_id || '513',
-            somon_district_id: data.somon_district_id || '139',
-            somon_category_config: data.somon_category_config || {},
-          });
-        })(),
-        apiFetch('/api/categories'),
-        loadOrders(),
-      ]);
+      const productsPromise = loadAdminProducts();
+      const settingsPromise = (async () => {
+        const response = await adminFetch('/api/admin/settings');
+        if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) return;
+        const data = await response.json();
+        setTokenPlanKeyConfigured(data.tokenplan_key_configured === true);
+        setSettings({
+          whatsapp_phone: data.whatsapp_phone || '992444431',
+          cny_tjs_rate: data.cny_tjs_rate || '1.45',
+          delivery_per_kg_tjs: data.delivery_per_kg_tjs || '30',
+          somon_city_id: data.somon_city_id || '513',
+          somon_district_id: data.somon_district_id || '139',
+          somon_category_config: data.somon_category_config || {},
+        });
+      })();
+      const categoriesPromise = apiFetch('/api/categories');
+      const [, categoriesResult] = await Promise.all([productsPromise, Promise.all([settingsPromise, categoriesPromise]).then(([_, categories]) => categories)]);
       if (categoriesResult.ok && (categoriesResult.headers.get('content-type') || '').includes('application/json')) {
         const data = await categoriesResult.json();
         setCategories(data.tree || []);
@@ -1647,8 +1644,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         throw new Error(data.error || `Сервер вернул ошибку ${res.status}. Повторите попытку`);
       }
 
-      setEditingProduct(null);
-      await loadAdminData();
+      if (editingProduct.id === 0) {
+        const created = data.product;
+        if (created?.id) {
+          setAdminProducts((previous) => [{
+            ...created,
+            variant_count: Array.isArray(created.variants) ? created.variants.length : 0,
+            min_price_tjs: Array.isArray(created.variants) ? Math.min(...created.variants.map((v: any) => Number(v.price_tjs) || 0)) : 0,
+            max_price_tjs: Array.isArray(created.variants) ? Math.max(...created.variants.map((v: any) => Number(v.price_tjs) || 0)) : 0,
+            specification_count: Array.isArray(created.specifications) ? created.specifications.length : 0,
+          }, ...previous]);
+          setAdminProductsTotal((total) => total + 1);
+        }
+      } else {
+        setAdminProducts((previous) => previous.map((product) => (
+          product.id === editingProduct.id
+            ? { ...product, title: editingProduct.title, category_id: editingProduct.category_id, delivery_type: editingProduct.delivery_type, status: editingProduct.status, main_image: editingProduct.main_image, category_name: editingProduct.category_name }
+            : product
+        )));
+      }
       onRefreshCatalog();
       showNotice(editingProduct.id === 0 ? '✓ Новый товар успешно создан!' : '✓ Товар и характеристики обновлены!');
     } catch (err: any) {
@@ -1704,7 +1718,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         method: 'DELETE',
       });
       if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
-      await loadAdminData();
+      setAdminProducts((previous) => previous.filter((product) => product.id !== id));
+      setAdminProductsTotal((total) => Math.max(0, total - 1));
+      void loadAdminProducts();
       onRefreshCatalog();
       showNotice('Товар удалён. Его можно восстановить в разделе «Недавно удалённые».');
     } catch (err) {
