@@ -1,8 +1,8 @@
 export const ORDER_DELIVERY_NOTICE = 'Доставка 12–35 дней!';
 export const BILINGUAL_ORDER_NOTICE_RU = 'Нет в наличии. Доставка занимает 15–35 дней. Возможна доставка до дома в городах Душанбе, Бохтар (Курган-Тюбе) и Левакант. В другие города Таджикистана отправляем.';
 export const BILINGUAL_ORDER_NOTICE_TJ = 'Дар анбор мавҷуд нест. Мӯҳлати расонидан 15–35 рӯз аст. Имкони расонидан то хона дар шаҳрҳои Душанбе, Бохтар (Қӯрғонтеппа) ва Левакант мавҷуд аст. Ба дигар шаҳрҳои Тоҷикистон низ мефиристем.';
-export const BILINGUAL_ORDER_NOTICE = `${BILINGUAL_ORDER_NOTICE_RU}\n\n${BILINGUAL_ORDER_NOTICE_TJ}`;
-export const BILINGUAL_STOCK_NOTICE = 'В наличии. Возможна доставка до дома в городах Душанбе, Бохтар (Курган-Тюбе) и Левакант. В другие города Таджикистана отправляем.\n\nДар анбор мавҷуд аст. Имкони расонидан то хона дар шаҳрҳои Душанбе, Бохтар (Қӯрғонтеппа) ва Левакант мавҷуд аст. Ба дигар шаҳрҳои Тоҷикистон низ мефиристем.';
+export const BILINGUAL_ORDER_NOTICE = `${BILINGUAL_ORDER_NOTICE_TJ}\n\n${BILINGUAL_ORDER_NOTICE_RU}`;
+export const BILINGUAL_STOCK_NOTICE = 'Дар анбор мавҷуд аст. Имкони расонидан то хона дар шаҳрҳои Душанбе, Бохтар (Қӯрғонтеппа) ва Левакант мавҷуд аст. Ба дигар шаҳрҳои Тоҷикистон низ мефиристем.\n\nВ наличии. Возможна доставка до дома в городах Душанбе, Бохтар (Курган-Тюбе) и Левакант. В другие города Таджикистана отправляем.';
 export const COLOR_IMAGE_SPEC_PREFIX = 'Фото цвета: ';
 const PRODUCT_COLOR_SPEC_PATTERN = /^(?:доступные\s+цвета|цвет(?:а)?|цвет\s+товара|color(?:\s+classification)?|colou?r(?:\s+classification)?|颜色(?:分类)?|顏色)$/i;
 const PRODUCT_COLOR_LIST_SEPARATOR = /[,，、;；|\n/]+/;
@@ -103,6 +103,22 @@ export function extractProductColors(
 export function cleanProductDescription(description: string): string {
   const seen = new Set<string>();
   const lines = description
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/\s*(?:p|div|li|h[1-6]|section|article)\s*>/gi, '\n')
+    .replace(/<\s*li\b[^>]*>/gi, '• ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;|&#160;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;|&#34;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, '$1$2')
+    .replace(/\*([^*]+)\*|_([^_]+)_/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1')
     .replace(/[\u3400-\u9fff]/g, ' ')
     .replace(/[，]/g, ',')
     .replace(/[。]/g, '.')
@@ -140,19 +156,13 @@ export function ensureOrderDeliveryNotice(description: string): string {
   return cleanBody ? `${ORDER_DELIVERY_NOTICE}\n\n${cleanBody}` : ORDER_DELIVERY_NOTICE;
 }
 
+const LEGACY_BILINGUAL_ORDER_NOTICE = `${BILINGUAL_ORDER_NOTICE_RU}\n\n${BILINGUAL_ORDER_NOTICE_TJ}`;
+const LEGACY_BILINGUAL_STOCK_NOTICE = 'В наличии. Возможна доставка до дома в городах Душанбе, Бохтар (Курган-Тюбе) и Левакант. В другие города Таджикистана отправляем.\n\nДар анбор мавҷуд аст. Имкони расонидан то хона дар шаҳрҳои Душанбе, Бохтар (Қӯрғонтеппа) ва Левакант мавҷуд аст. Ба дигар шаҳрҳои Тоҷикистон низ мефиристем.';
+
 export function removeBilingualOrderNotice(description: string): string {
   const trimmed = description.trim();
-  if (trimmed.startsWith(BILINGUAL_ORDER_NOTICE)) {
-    return trimmed.slice(BILINGUAL_ORDER_NOTICE.length).trim();
-  }
-  if (trimmed.startsWith(BILINGUAL_ORDER_NOTICE_RU)) {
-    return trimmed.slice(BILINGUAL_ORDER_NOTICE_RU.length).trim();
-  }
-  if (trimmed.startsWith(BILINGUAL_ORDER_NOTICE_TJ)) {
-    return trimmed.slice(BILINGUAL_ORDER_NOTICE_TJ.length).trim();
-  }
-  if (trimmed.startsWith(BILINGUAL_STOCK_NOTICE)) {
-    return trimmed.slice(BILINGUAL_STOCK_NOTICE.length).trim();
+  for (const notice of [BILINGUAL_ORDER_NOTICE, BILINGUAL_STOCK_NOTICE, LEGACY_BILINGUAL_ORDER_NOTICE, LEGACY_BILINGUAL_STOCK_NOTICE, BILINGUAL_ORDER_NOTICE_RU, BILINGUAL_ORDER_NOTICE_TJ]) {
+    if (trimmed.startsWith(notice)) return trimmed.slice(notice.length).trim();
   }
   return trimmed;
 }
@@ -221,29 +231,68 @@ function translateKnownProductTerms(text: string): string {
   }, titleTranslated);
 }
 
+const PRODUCT_CTA_TJ = 'Барои фармоиш додани ин ва дигар маҳсулоти гуногун ба M.Savdo муроҷиат кунед. Мо маҳсулотро то дари хона дар тамоми Тоҷикистон мерасонем.';
+const PRODUCT_CTA_RU = 'Заказывайте этот и другие различные товары в M.Savdo — мы доставляем их до вашего дома по всему Таджикистану.';
+const PRODUCT_CTA_MARKER = 'M.Savdo';
+
+const CATEGORY_TAJIK_LABELS: Array<[RegExp, string]> = [
+  [/телефон|смартфон|электроник/iu, 'электроника'],
+  [/одежд|плать|обув|кроссовк/iu, 'либос ва пойафзол'],
+  [/дом|кухн|мебел|интерьер/iu, 'молҳои хона'],
+  [/красот|космет|уход/iu, 'маҳсулоти зебоӣ ва нигоҳубин'],
+  [/спорт|тренаж/iu, 'молҳои варзишӣ'],
+  [/авто|автомобил/iu, 'молҳои автомобилӣ'],
+  [/дет|игруш/iu, 'молҳои кӯдакона'],
+];
+
+function removeProductCta(description: string): string {
+  if (!description.includes(PRODUCT_CTA_MARKER)) return description;
+  return description
+    .replace(new RegExp(`(?:${PRODUCT_CTA_TJ}|${PRODUCT_CTA_RU})`, 'giu'), '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function translateCategory(category: string): string {
+  const normalized = category.trim();
+  if (!normalized) return '';
+  const known = CATEGORY_TAJIK_LABELS.find(([pattern]) => pattern.test(normalized));
+  return known ? known[1] : translateKnownProductTerms(normalized);
+}
+
 export function buildBilingualProductDescription(
   description: string,
   title = '',
   specifications: Array<{ name: string; value: string }> = [],
   deliveryType: 'stock' | 'order' = 'order',
+  category = '',
 ): string {
-  const cleanBody = cleanProductDescription(removeOrderDeliveryNotice(description)
+  const cleanBody = cleanProductDescription(removeProductCta(removeOrderDeliveryNotice(description))
     .replace(/\n?Ключевые слова для поиска:[\s\S]*$/i, ''));
-  const facts = specifications
+  const validSpecifications = specifications
     .filter((spec) => spec && typeof spec.name === 'string' && typeof spec.value === 'string')
-    .map((spec) => {
-      const name = spec.name.trim();
-      const value = spec.value.trim();
-      if (!name || !value || /^фото цвета:/i.test(name)) return '';
-      return `${TAJIK_SPEC_LABELS[name.toLocaleLowerCase('ru')] || translateKnownProductTerms(name)}: ${translateKnownProductTerms(value)}`;
-    })
-    .filter(Boolean)
+    .map((spec) => ({ name: spec.name.trim(), value: spec.value.trim() }))
+    .filter((spec) => spec.name && spec.value && !/^фото цвета:/i.test(spec.name))
     .slice(0, 8);
-  const tajikDescription = [translateKnownProductTerms(title.trim()), translateKnownProductTerms(cleanBody), ...facts].filter(Boolean).join('. ');
+  const russianFacts = validSpecifications.map(({ name, value }) => `${name}: ${value}`);
+  const tajikFacts = validSpecifications.map(({ name, value }) => (
+    `${TAJIK_SPEC_LABELS[name.toLocaleLowerCase('ru')] || translateKnownProductTerms(name)}: ${translateKnownProductTerms(value)}`
+  ));
+  const tajikCategory = translateCategory(category);
+  const tajikDescription = [
+    translateKnownProductTerms(title.trim()),
+    tajikCategory ? `Категория: ${tajikCategory}` : '',
+    translateKnownProductTerms(cleanBody),
+    ...tajikFacts,
+  ]
+    .filter(Boolean)
+    .join('. ');
   const bilingualNotice = deliveryType === 'stock' ? BILINGUAL_STOCK_NOTICE : BILINGUAL_ORDER_NOTICE;
-  const productSections = [
-    cleanBody ? `Описание товара: ${cleanBody}` : '',
-    tajikDescription ? `Тавсифи маҳсулот: ${tajikDescription}` : '',
+  const russianSections = [
+    cleanBody ? `Описание товара:\n${cleanBody}` : '',
+    category ? `Категория: ${category}` : '',
+    russianFacts.length ? `Характеристики:\n${russianFacts.map((fact) => `• ${fact}`).join('\n')}` : '',
   ].filter(Boolean);
-  return [bilingualNotice, ...productSections].join('\n\n');
+  const tajikSection = tajikDescription ? `Тавсифи маҳсулот:\n${tajikDescription}` : '';
+  return [bilingualNotice, tajikSection, ...russianSections, PRODUCT_CTA_TJ, PRODUCT_CTA_RU].filter(Boolean).join('\n\n');
 }

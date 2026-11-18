@@ -970,7 +970,7 @@ try {
 
 // Очистка существующих товаров от запрещенных слов и фраз о контроле производства
 try {
-  const existingProds = db.prepare("SELECT id, title, description, delivery_type, specifications FROM products WHERE COALESCE(status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string; delivery_type: string | null; specifications: string | null }>;
+  const existingProds = db.prepare("SELECT p.id, p.title, p.description, p.delivery_type, p.specifications, c.name AS category_name FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE COALESCE(p.status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string; delivery_type: string | null; specifications: string | null; category_name: string | null }>;
   const updateProd = db.prepare('UPDATE products SET title = ?, description = ? WHERE id = ?');
   for (const p of existingProds) {
     const cleanT = cleanBannedWordsAndPhrases(p.title || '');
@@ -981,6 +981,7 @@ try {
       cleanT,
       parsedSpecs,
       p.delivery_type === 'stock' ? 'stock' : 'order',
+      p.category_name || '',
     );
     if (cleanT !== p.title || cleanD !== p.description) {
       updateProd.run(cleanT, cleanD, p.id);
@@ -3834,6 +3835,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
       cleanTitle,
       Array.isArray(specifications) ? specifications : [],
       cleanDelivery,
+      aiCategory,
     );
 
     // Нормализация спецификаций/характеристик
@@ -4055,6 +4057,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       cleanTitle,
       Array.isArray(specifications) ? specifications : [],
       cleanDelivery,
+      aiCategory,
     );
 
     // Нормализация спецификаций
@@ -4619,7 +4622,7 @@ app.post('/api/add-product', (req, res, next) => {
     if (preserve_reviewed_data !== true || !manual_description) {
       finalDesc = appendSearchKeywords(finalDesc, finalTitle, finalCategory, specificationsToProcess);
     }
-    finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, specificationsToProcess, finalDeliveryType);
+    finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, specificationsToProcess, finalDeliveryType, finalCategory);
     const categoryId = resolveCategoryId(finalCategory);
 
     // Генерируем уникальный артикул базового товара
@@ -4891,7 +4894,7 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       analysis.category_name,
       searchableSpecs,
     );
-    finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, searchableSpecs, delivery_type === 'stock' ? 'stock' : 'order');
+    finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, searchableSpecs, delivery_type === 'stock' ? 'stock' : 'order', analysis.category_name);
 
     const finalProduct = {
       title: finalTitle,
@@ -6204,7 +6207,8 @@ function makeSearchDescription(
   const detailsLabel = details && details.toLocaleLowerCase('ru') !== cleanTitle.toLocaleLowerCase('ru')
     ? ` ${truncateSearchText(details, 70)}`
     : '';
-  return truncateSearchText(`Купить ${cleanTitle}${categoryLabel} в Таджикистане на M.Savdo. ${priceLabel} ${deliveryLabel}${detailsLabel}`
+  const searchCta = ' Заказывайте товары в M.Savdo с доставкой до дома по Таджикистану.';
+  return truncateSearchText(`Купить ${cleanTitle}${categoryLabel} в Таджикистане на M.Savdo. ${priceLabel} ${deliveryLabel}${detailsLabel}${searchCta}`
     .replace(/\s+/g, ' ')
     .trim(), 320);
 }
