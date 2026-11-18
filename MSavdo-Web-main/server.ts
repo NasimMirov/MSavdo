@@ -4792,6 +4792,40 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Пожалуйста, вставьте исходный HTML-код страницы или JSON (window.context)' });
     }
 
+    const normalizedOriginalLink = normalizeProductSourceLink(original_link);
+    if (normalizedOriginalLink === undefined) {
+      return res.status(400).json({ error: 'Укажите корректную ссылку товара с HTTP или HTTPS.' });
+    }
+    if (normalizedOriginalLink) {
+      const existingDraft = db.prepare(`
+        SELECT id, title, description, original_link, category_id, status, delivery_type, main_image, images, specifications
+        FROM products
+        WHERE original_link = ? AND status = 'draft'
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(normalizedOriginalLink) as {
+        id: number;
+        title: string;
+        description: string;
+        original_link: string;
+        category_id: number | null;
+        status: string;
+        delivery_type: string;
+        main_image: string;
+        images: string;
+        specifications: string;
+      } | undefined;
+      if (existingDraft) {
+        return res.json({
+          success: true,
+          saved: true,
+          duplicate: true,
+          message: 'Этот товар уже есть среди черновиков.',
+          product: existingDraft,
+        });
+      }
+    }
+
     const structured = extractStructuredFromHtmlOrJson(html_code);
     const effectiveTitle = structured.title || '';
     const baseCny = parseFloat(price_cny) || (structured.variants[0]?.price_cny) || 50;
@@ -4915,7 +4949,8 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       main_image: mainImg,
       video_url: structured.videoUrl || '',
       video_urls: structured.videoUrls,
-      original_link: original_link || '',
+      original_link: normalizedOriginalLink,
+      category_id: resolveCategoryId(analysis.category_name),
       delivery_type: delivery_type === 'stock' ? 'stock' : 'order',
       status: 'draft',
     };
@@ -4934,7 +4969,7 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       `).run(
         finalProduct.title,
         finalProduct.description,
-        original_link,
+        normalizedOriginalLink,
         categoryId,
         baseSku,
         finalProduct.status,

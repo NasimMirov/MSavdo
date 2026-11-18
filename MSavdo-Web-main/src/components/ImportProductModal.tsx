@@ -17,7 +17,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
   onClose,
   onSuccess,
 }) => {
-  const [activeTab, setActiveTab] = useState<'html' | 'link' | 'json'>('html');
+  const [activeTab, setActiveTab] = useState<'html' | 'link' | 'json' | 'mobile'>('mobile');
   const [htmlCode, setHtmlCode] = useState('');
   const [productLink, setProductLink] = useState('');
   const [jsonText, setJsonText] = useState('');
@@ -364,10 +364,10 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
         </div>
 
         {/* Вкладки */}
-        <div className="border-b border-slate-200 px-6 pt-3 flex gap-4 text-xs font-bold bg-slate-50">
+        <div className="border-b border-slate-200 px-6 pt-3 flex gap-4 text-xs font-bold bg-slate-50 overflow-x-auto">
           <button
             onClick={() => setActiveTab('html')}
-            className={`pb-3 flex items-center gap-2 border-b-2 transition-all ${
+            className={`pb-3 flex items-center gap-2 border-b-2 transition-all whitespace-nowrap ${
               activeTab === 'html'
                 ? 'border-amber-500 text-amber-700'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -379,7 +379,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('link')}
-            className={`pb-3 flex items-center gap-2 border-b-2 transition-all ${
+            className={`pb-3 flex items-center gap-2 border-b-2 transition-all whitespace-nowrap ${
               activeTab === 'link'
                 ? 'border-amber-500 text-amber-700'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -390,7 +390,7 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('json')}
-            className={`pb-3 flex items-center gap-2 border-b-2 transition-all ${
+            className={`pb-3 flex items-center gap-2 border-b-2 transition-all whitespace-nowrap ${
               activeTab === 'json'
                 ? 'border-amber-500 text-amber-700'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -399,11 +399,20 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
             <Clipboard className="w-4 h-4" />
             <span>JSON из расширения</span>
           </button>
+          <button
+            onClick={() => setActiveTab('mobile')}
+            className={`pb-3 flex items-center gap-2 border-b-2 transition-all whitespace-nowrap ${
+              activeTab === 'mobile'
+                ? 'border-amber-500 text-amber-700'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Zap className="w-4 h-4" />
+            <span>Быстрый импорт с телефона</span>
+          </button>
         </div>
 
-        {/* Тело модального окна */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-3 text-xs flex-1">
-          
           {/* Сообщения об ошибках / успехе */}
           {errorMsg && (
             <div className="p-3.5 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex items-start gap-2.5">
@@ -416,6 +425,26 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
             <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl text-emerald-800 flex items-start gap-2.5 font-semibold">
               <Check className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
               <div>{successMsg}</div>
+            </div>
+          )}
+
+          {activeTab === 'mobile' && (
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <h3 className="text-sm font-extrabold text-slate-900">Импорт с телефона в один клик</h3>
+                <p className="mt-2 leading-relaxed text-slate-700">
+                  В приложении M.Savdo Admin войдите в админку через Telegram, затем нажмите «Открыть 1688». Войдите в свой аккаунт 1688 один раз — WebView сохранит сессию.
+                </p>
+                <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-slate-700">
+                  <li>Откройте карточку товара на 1688.</li>
+                  <li>Нажмите плавающую кнопку «Добавить в M.Savdo».</li>
+                  <li>Товар сохранится скрытым черновиком с фотографиями, вариантами и характеристиками.</li>
+                  <li>В админке проверьте черновик и опубликуйте его вручную.</li>
+                </ol>
+              </div>
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-slate-600 leading-relaxed">
+                Встроенный браузер надёжнее iframe: 1688 может запрещать встраивание страницы. Если приложение ещё не установлено, используйте вкладку «По ссылке 1688» или расширение Chrome.
+              </div>
             </div>
           )}
 
