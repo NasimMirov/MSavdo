@@ -3792,7 +3792,7 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     if (cleanSourceLink === undefined) {
       return res.status(400).json({ error: 'Укажите корректную ссылку товара с HTTP или HTTPS.' });
     }
-    const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '';
+    const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '' && Number(requestedCategoryId) !== 0;
     const explicitCategory = hasRequestedCategory ? findExplicitCategory(requestedCategoryId) : null;
     if (hasRequestedCategory && !explicitCategory) {
       return res.status(400).json({ error: 'Выберите действующую подкатегорию каталога' });
@@ -4002,7 +4002,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
     if (original_link !== undefined && requestedSourceLink === undefined) {
       return res.status(400).json({ error: 'Укажите корректную ссылку товара с HTTP или HTTPS.' });
     }
-    const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '';
+    const hasRequestedCategory = requestedCategoryId !== undefined && requestedCategoryId !== null && requestedCategoryId !== '' && Number(requestedCategoryId) !== 0;
     const explicitCategory = hasRequestedCategory ? findExplicitCategory(requestedCategoryId) : null;
     if (hasRequestedCategory && !explicitCategory) {
       return res.status(400).json({ error: 'Выберите действующую подкатегорию каталога' });
