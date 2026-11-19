@@ -3126,19 +3126,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div>
                 <label className="mb-1 block font-bold text-slate-700">Город публикации Somon</label>
                 <select
-                  value={settings.somon_city_id}
-                  onChange={(e) => setSettings({
+                  value="513"
+                  onChange={() => setSettings({
                     ...settings,
-                    somon_city_id: e.target.value,
-                    somon_district_id: e.target.value === '511' ? '139' : e.target.value,
+                    somon_city_id: '513',
+                    somon_district_id: '513',
                   })}
                   className="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm font-semibold"
                 >
                   <option value="513">Бохтар (Курган-Тюбе)</option>
-                  <option value="511">Душанбе</option>
-                  <option value="665">Леваканд (Сарбанд)</option>
                 </select>
-                <span className="text-[10px] text-slate-500">По умолчанию выбран Бохтар. Для Душанбе используется район 139 из справочника Somon. Бохтар и Леваканд передаются как отдельные ID города.</span>
+                <span className="text-[10px] text-slate-500">Город публикации: Бохтар (ID 513 из справочника Somon).</span>
               </div>
               <div>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

@@ -5262,10 +5262,8 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
     delivery_per_kg_tjs: '30',
     cny_tjs_rate: '1.45',
-    somon_district_id: getSetting('somon_city_id', '513') === '511'
-      ? (getSetting('somon_district_id', '139') === '511' ? '139' : getSetting('somon_district_id', '139'))
-      : getSetting('somon_city_id', '513'),
-    somon_city_id: getSetting('somon_city_id', '513'),
+    somon_district_id: '513',
+    somon_city_id: '513',
     somon_category_config: somonCategoryConfig,
     tokenplan_key_configured: Boolean(getSetting('tokenplan_api_key_encrypted', '')),
   });
@@ -5318,26 +5316,11 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
       }
       setSetting('whatsapp_phone', phone);
     }
-    if (somon_city_id !== undefined) {
-      const cityId = String(somon_city_id).trim();
-      if (!['511', '513', '665'].includes(cityId)) {
-        return res.status(400).json({ error: 'Выберите город из списка Somon' });
-      }
-      setSetting('somon_city_id', cityId);
-      // Somon locations list city IDs as selectable location IDs except
-      // Dushanbe, which has explicit districts.
-      if (cityId !== '511') setSetting('somon_district_id', cityId);
-      else if (String(somon_district_id ?? getSetting('somon_district_id', '139')) !== '139') setSetting('somon_district_id', '139');
+    if (somon_city_id !== undefined && String(somon_city_id).trim() !== '513') {
+      return res.status(400).json({ error: 'Для публикации в Somon выбран город Бохтар' });
     }
-    if (somon_district_id !== undefined && (somon_city_id === undefined || String(somon_city_id) === '511')) {
-      const districtId = String(somon_district_id).trim();
-      if (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0) {
-        return res.status(400).json({ error: 'ID района Somon должен быть положительным числом' });
-      }
-      setSetting('somon_district_id', districtId);
-    }
-    const selectedCityId = String(somon_city_id ?? getSetting('somon_city_id', '513'));
-    if (selectedCityId !== '511') setSetting('somon_district_id', selectedCityId);
+    setSetting('somon_city_id', '513');
+    setSetting('somon_district_id', '513');
     if (somon_category_config !== undefined) {
       if (!somon_category_config || typeof somon_category_config !== 'object' || Array.isArray(somon_category_config)) {
         return res.status(400).json({ error: 'Укажите корректные настройки категорий Somon' });
@@ -6000,10 +5983,6 @@ function isSomonImageUrl(value: string): boolean {
   }
 }
 
-function isSomonDistrictId(value: string): boolean {
-  return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0;
-}
-
 app.get('/business-xml-guide/', (_req, res) => {
   return res.sendFile(path.join(__dirname, 'docs', 'somon', 'business-xml-guide.html'));
 });
@@ -6014,8 +5993,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    const cityId = getSetting('somon_city_id', '513');
-    const districtId = cityId === '511' ? getSetting('somon_district_id', '139') : cityId;
+    const cityId = '513';
     const rows = db.prepare(`
       SELECT p.id, p.title, p.category_id, p.main_image, p.images,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
@@ -6051,7 +6029,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     return res.json({
       source: 'https://somon.tj/business-xml-guide/',
       guide_snapshot: '/business-xml-guide/',
-      city_id: cityId, district_id: isSomonDistrictId(districtId) ? districtId : null,
+      city_id: cityId, district_id: cityId,
       total_active: rows.length, publishable, skipped: rows.length - publishable, reasons,
       constraints: { title_max_length: 70, max_images: 16, image_extensions: ['.jpg', '.jpeg', '.png'], integer_price: true },
     });
@@ -6081,18 +6059,8 @@ app.get('/somon-feed.xml', (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    // 139 is a valid Dushanbe district (10 мкр-н) in Somon's official
-    // location list. 511 is the city ID and must be sent as <city>, not
-    // as <district>.
-    const cityId = getSetting('somon_city_id', '513');
-    const configuredDistrictId = getSetting('somon_district_id', cityId === '511' ? '139' : cityId);
-    const districtId = cityId === '511'
-      ? (configuredDistrictId === '511' ? '139' : configuredDistrictId)
-      : '';
-    if (cityId === '511' && (!/^\d+$/.test(districtId) || !Number.isSafeInteger(Number(districtId)) || Number(districtId) <= 0)) {
-      throw new Error('В настройках Somon указан некорректный ID района');
-    }
-    const locationXml = cityId === '511' ? `<district>${districtId}</district>` : '';
+    const cityId = '513';
+    const locationXml = '';
 
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.delivery_type, p.category_id, p.main_image, p.images,
