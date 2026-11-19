@@ -1332,7 +1332,8 @@ function buildVerifiedProductDescription(title: string, specifications: Array<{ 
     if (details.length === 6) break;
   }
   const cleanTitle = String(title || '').replace(/[\s\-–—|:;,.]+$/g, '').trim();
-  return `${cleanTitle}. Описание и основные параметры товара приведены в характеристиках карточки.`;
+  const detailsText = details.join('. ');
+  return `${cleanTitle}. ${detailsText || 'Описание и основные параметры товара приведены в характеристиках карточки.'}`;
 }
 
 function isVerifiedProductDescription(description: string): boolean {
@@ -1341,7 +1342,10 @@ function isVerifiedProductDescription(description: string): boolean {
   const sentenceCount = text.split(/(?<=[.!?])\s+(?=[А-ЯA-ZЁ])/).filter(Boolean).length;
   return wordCount >= 15 && wordCount <= 130 && sentenceCount >= 2 && sentenceCount <= 7 &&
     !/[\u4e00-\u9fa5]/.test(text) &&
-    !/высокое качество|идеальный выбор|надежный|надежная|лучший выбор|покупайте|заказывайте/i.test(text);
+    !/высокое качество|идеальный выбор|надежный|надежная|лучший выбор|покупайте|заказывайте/i.test(text) &&
+    !/(?:пойафзол|мавод|барои|мавҷуд|расонидан|имкон|то хона|тавсифи маҳсулот|технические характеристики и модели)/iu.test(text) &&
+    (text.match(/[\/|]/g) || []).length <= 2 &&
+    !/\.\.\s*[\p{L}]/u.test(text);
 }
 
 function cleanRawTitle(raw: string): string {
@@ -4977,7 +4981,7 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
     finalTitle = cleanBannedWordsAndPhrases(finalTitle);
     finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
     const searchableSpecs = combinedSpecs.filter((spec) => !/^Фото цвета:/i.test(spec.name));
-    if (!manual_description && (!isVerifiedProductDescription(finalDesc) || /(?:пойафзол|мавод|барои|мавҷуд|расонидан|имкон|то хона|тавсифи маҳсулот)/iu.test(finalDesc) || (finalDesc.match(/[\/|]/g) || []).length > 2)) {
+    if (!manual_description && !isVerifiedProductDescription(finalDesc)) {
       finalDesc = buildVerifiedProductDescription(finalTitle, searchableSpecs);
     }
     finalDesc = appendSearchKeywords(

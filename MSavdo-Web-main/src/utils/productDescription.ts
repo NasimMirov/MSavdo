@@ -270,6 +270,8 @@ function translateCategory(category: string): string {
 
 function cleanRussianDescription(description: string): string {
   const source = description.trim();
+  if (/(?:предназначенн\w*\s+барои|мавод\s+|технические характеристики и модели|длинноствольное ружье|длинное копье)/iu.test(source)
+    || (source.match(/[\/|]/g) || []).length > 2) return '';
   const markers = Array.from(source.matchAll(/Описание товара:\s*/giu));
   const withoutGeneratedSections = markers.length
     ? source.slice(markers[markers.length - 1].index! + markers[markers.length - 1][0].length)
@@ -337,5 +339,7 @@ export function buildBilingualProductDescription(
     russianFacts.length ? `Характеристики:\n${russianFacts.map((fact) => `• ${fact}`).join('\n')}` : '',
   ].filter(Boolean);
   const tajikSection = tajikDescription ? `Тавсифи маҳсулот:\n${tajikDescription}` : '';
-  return [bilingualNotice, tajikSection, ...russianSections, PRODUCT_CTA_TJ, PRODUCT_CTA_RU].filter(Boolean).join('\n\n');
+  const tajikNotice = bilingualNotice.split('\n\n')[0] || '';
+  const russianNotice = bilingualNotice.split('\n\n')[1] || '';
+  return [tajikNotice, tajikSection, russianNotice, ...russianSections, PRODUCT_CTA_TJ, PRODUCT_CTA_RU].filter(Boolean).join('\n\n');
 }
