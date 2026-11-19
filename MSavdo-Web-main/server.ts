@@ -6106,7 +6106,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    const cityId = '513';
+    const districtId = '513';
     const rows = db.prepare(`
       SELECT p.id, p.title, p.category_id, p.main_image, p.images,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
@@ -6142,7 +6142,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     return res.json({
       source: 'https://somon.tj/business-xml-guide/',
       guide_snapshot: '/business-xml-guide/',
-      city_id: cityId, district_id: cityId,
+      city_id: null, district_id: districtId,
       total_active: rows.length, publishable, skipped: rows.length - publishable, reasons,
       constraints: { title_max_length: 70, max_images: 16, image_extensions: ['.jpg', '.jpeg', '.png'], integer_price: true },
     });
@@ -6172,8 +6172,7 @@ app.get('/somon-feed.xml', (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    const cityId = '513';
-    const locationXml = '';
+    const districtId = '513';
 
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.delivery_type, p.category_id, p.main_image, p.images,
@@ -6304,8 +6303,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       <images>${imageXml}</images>
       <status>active</status>
       <rubric>${rubricId}</rubric>
-      <city>${cityId}</city>
-      ${locationXml}
+      <district>${districtId}</district>
       <description>${escapeXml(description)}</description>
       <price>${Math.max(0, Math.round(Number(product.price_tjs)))}</price>
       <phone_hide>0</phone_hide>
