@@ -15,7 +15,7 @@ import { GoogleGenAI } from '@google/genai';
 import { analyzeSemantically, cleanProductTitle, isLikelyProductTitle, translateVariantName, extractStructuredFromHtmlOrJson, cleanBannedWordsAndPhrases, filterProductImageUrls } from './src/utils/semanticAi.js';
 import type { ExtractedHtmlContext } from './src/utils/semanticAi.js';
 import { calculateDiscountedPriceTjs, calculatePriceTjs, calculateQuantityDiscountedPriceTjs, extractShippingMetrics, normalizeWeightKg } from './src/utils/pricing.js';
-import { buildBilingualProductDescription, cleanProductDescription, ensureOrderDeliveryNotice, removeOrderDeliveryNotice } from './src/utils/productDescription.js';
+import { buildBilingualProductDescription, cleanProductDescription, ensureOrderDeliveryNotice, filterProductSpecifications, removeOrderDeliveryNotice } from './src/utils/productDescription.js';
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { importVariantInstructions } from './src/utils/importAiPrompt.js';
 import { calculatePromotions } from './src/utils/promotions.js';
@@ -4614,7 +4614,7 @@ app.post('/api/add-product', (req, res, next) => {
         specificationMap.set(normalizedName, specification);
       }
     }
-    specificationsToProcess = [...specificationMap.values()].slice(0, 100);
+    specificationsToProcess = filterProductSpecifications([...specificationMap.values()]).slice(0, 100);
     if (structuredMedia.weightKg) finalWeight = structuredMedia.weightKg;
 
     // Если в названии остались китайские иероглифы или фабричные токены
@@ -4927,6 +4927,7 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       }
       combinedSpecs.push({ name, value });
     }
+    combinedSpecs.splice(0, combinedSpecs.length, ...filterProductSpecifications(combinedSpecs));
 
     // Формируем варианты с соблюдением цен и остатков (Правило 2)
     let finalVariants = analysis.variants;

@@ -297,10 +297,24 @@ function cleanSpecificationPart(value: string): string {
     .trim();
 }
 
+export function filterProductSpecifications<T extends { name: string; value: string }>(
+  specifications: T[],
+): T[] {
+  return specifications.filter((spec) => {
+    if (!spec || typeof spec.name !== 'string' || typeof spec.value !== 'string') return false;
+    const name = spec.name.trim();
+    const mergedValueSeparators = spec.value.match(/\s+[\/|]\s+/gu) || [];
+    return !/^технические характеристики и модели:?$/iu.test(name)
+      && !/[|]|\s+\/\s+/u.test(name)
+      && !/[|]/u.test(spec.value)
+      && mergedValueSeparators.length < 2;
+  });
+}
+
 function normalizeSpecifications(specifications: Array<{ name: string; value: string }>): Array<{ name: string; value: string }> {
   const seen = new Set<string>();
-  return specifications
-    .filter((spec) => spec && typeof spec.name === 'string' && typeof spec.value === 'string')
+  return filterProductSpecifications(specifications)
+    .filter((spec) => typeof spec.name === 'string' && typeof spec.value === 'string')
     .map((spec) => ({ name: cleanSpecificationPart(spec.name), value: cleanSpecificationPart(spec.value) }))
     .filter((spec) => {
       const key = spec.name.toLocaleLowerCase('ru');

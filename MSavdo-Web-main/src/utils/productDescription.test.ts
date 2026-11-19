@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildBilingualProductDescription, ensureOrderDeliveryNotice, extractProductColors, removeOrderDeliveryNotice, removeProductColor } from './productDescription.ts';
+import { buildBilingualProductDescription, ensureOrderDeliveryNotice, extractProductColors, filterProductSpecifications, removeOrderDeliveryNotice, removeProductColor } from './productDescription.ts';
 
 test('normalizes old and current delivery notices without duplicating them', () => {
   for (const notice of ['Доставка 18-30 дней!', 'Доставка 18–20 дней!', 'Доставка до 30 дней!', 'Доставка 12–35 дней!']) {
@@ -28,6 +28,27 @@ test('builds imported descriptions with Tajik first and keeps the Russian block 
   assert.ok(!result.includes('предназначенный барои'));
   assert.ok(!result.includes('Технические характеристики и модели'));
   assert.ok(!result.includes('Длинноствольное ружье Т8'));
+});
+
+test('filters merged specifications while preserving valid slash values', () => {
+  const specifications = [
+    { name: 'Материал головки пистолета', value: 'Металл + Пластик / Материал рукоятки / пластик' },
+    { name: 'Расстояние распыления / давление воды', value: '10 м / водопроводная вода' },
+    { name: 'Технические характеристики и модели', value: 'Длинное копье Т8' },
+    { name: 'Размер', value: '220/240 В' },
+    { name: 'Материал', value: 'Пластик' },
+  ];
+
+  assert.deepEqual(filterProductSpecifications(specifications), [
+    { name: 'Размер', value: '220/240 В' },
+    { name: 'Материал', value: 'Пластик' },
+  ]);
+
+  const description = buildBilingualProductDescription('', 'Водяной пистолет', specifications);
+  assert.ok(!description.includes('Материал головки пистолета'));
+  assert.ok(!description.includes('Технические характеристики и модели'));
+  assert.ok(description.includes('Пластик'));
+  assert.ok(description.includes('220, 240 В'));
 });
 
 test('removing a product color removes it from all color sources and preserves other values', () => {
