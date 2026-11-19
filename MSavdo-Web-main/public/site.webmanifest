@@ -1,14 +1,13 @@
 {
   "id": "/?mobile-admin=1",
-  "name": "MSavdo Admin — мобильная панель",
-  "short_name": "MSavdo Admin",
-  "description": "Мобильная админ-панель M.Savdo с быстрым импортом товаров из 1688.",
-  "start_url": "/?mobile-admin=1",
+  "name": "M.Savdo — интернет-магазин",
+  "short_name": "M.Savdo",
+  "description": "Товары с доставкой из Китая в Таджикистан и товары в наличии.",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait",
   "theme_color": "#111827",
   "background_color": "#f8fafc",
   "icons": [{"src":"/android-chrome-512x512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}],
-  "shortcuts": [{"name":"Открыть админку","short_name":"Админка","url":"/?mobile-admin=1"},{"name":"Импорт товара","short_name":"Импорт","url":"/?mobile-admin=1&import=1"}]
+  "shortcuts": [{"name":"Каталог товаров","short_name":"Каталог","url":"/catalog/1"}]
 }
