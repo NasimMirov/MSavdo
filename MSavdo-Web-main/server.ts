@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
-import type { LookupFunction } from 'node:net';
+import { isIP, type LookupFunction } from 'node:net';
 import { rateLimit } from 'express-rate-limit';
 import sharp from 'sharp';
 import { GoogleGenAI } from '@google/genai';
@@ -82,40 +82,64 @@ const adminAllowedOrigins = new Set([
     .filter(Boolean),
 ]);
 
+function isAllowedOrigin(req: express.Request, origin: string | undefined): boolean {
+  if (!origin) return false;
+  const sameOrigin = origin === `${req.protocol}://${req.get('host')}`;
+  return sameOrigin || adminAllowedOrigins.has(origin);
+}
+
+function isStateChangingMethod(method: string): boolean {
+  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+}
+
+const originExemptAdminRoutes = new Set([
+  '/api/admin/telegram-auth/config',
+  '/api/admin/telegram-auth/login',
+]);
+
 // ==========================================
-// НАСТРОЙКА CORS
+// ЗАЩИТНЫЕ HTTP-ЗАГОЛОВКИ И CORS
 // ==========================================
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   const isAdminApi = req.path.startsWith('/api/admin/');
-  const sameOrigin = origin === `${req.protocol}://${req.get('host')}`;
+  const allowedOrigin = isAllowedOrigin(req, origin);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  if (process.env.NODE_ENV === 'production' && req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   res.vary('Origin');
-  if (origin && (sameOrigin || adminAllowedOrigins.has(origin))) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+  if (allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', origin!);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-  } else {
+  } else if (!isAdminApi) {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With, X-Msavdo-Import-Key');
   if (req.method === 'OPTIONS') {
-    if (isAdminApi && origin && !res.getHeader('Access-Control-Allow-Origin')) {
-      return res.sendStatus(403);
-    }
+    if (isAdminApi && origin && !allowedOrigin) return res.sendStatus(403);
     return res.sendStatus(200);
+  }
+  if (isAdminApi) {
+    const routeKey = `${req.baseUrl}${req.path}`;
+    const originExempt = req.method === 'POST' && originExemptAdminRoutes.has(routeKey);
+    if (origin && !allowedOrigin) return res.status(403).json({ error: 'Источник запроса не разрешён' });
+    if (isStateChangingMethod(req.method) && !origin && !originExempt) {
+      return res.status(403).json({ error: 'Для изменения данных требуется проверка источника запроса' });
+    }
+    res.setHeader('Cache-Control', 'no-store');
   }
   next();
 });
 
-app.use('/api/admin', (req, res, next) => {
-  const origin = req.headers.origin;
-  if (!origin) return next();
-  const sameOrigin = origin === `${req.protocol}://${req.get('host')}`;
-  if (sameOrigin || adminAllowedOrigins.has(origin)) return next();
-  return res.status(403).json({ error: 'Источник запроса не разрешён' });
-});
-
-app.use(express.json({ limit: '20mb' }));
+app.use('/api/add-product', express.json({ limit: '4mb' }));
+app.use('/api/search-by-image', express.json({ limit: '12mb' }));
+app.use('/api/admin/upload-image', express.json({ limit: '12mb' }));
+app.use(express.json({ limit: '2mb' }));
 
 // ==========================================
 // ИНИЦИАЛИЗАЦИЯ GEMINI API (@google/genai)
@@ -3233,7 +3257,22 @@ function buildOrderQuote(input: unknown, code: unknown) {
   return { items, original_subtotal: originalSubtotal, product_discount: originalSubtotal - subtotal, ...result, fingerprint };
 }
 
+function publicOrderQuote(quote: ReturnType<typeof buildOrderQuote>) {
+  return {
+    total: quote.total,
+    original_subtotal: quote.original_subtotal,
+    product_discount: quote.product_discount,
+    discount: quote.discount,
+    code_applied: quote.code_applied,
+    items: quote.items.map(({ title, color, size, quantity, price_tjs, original_price_tjs, quantity_discount_min, quantity_discount_percent, delivery_type }) => ({
+      title, color, size, quantity, price_tjs, original_price_tjs, quantity_discount_min, quantity_discount_percent, delivery_type,
+    })),
+    applied: quote.applied.map(({ title, amount }) => ({ title, amount })),
+  };
+}
+
 const quoteRateLimiter = rateLimit({ windowMs: 60 * 1000, limit: 90, standardHeaders: 'draft-8', legacyHeaders: false });
+const orderCreationRateLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 12, standardHeaders: 'draft-8', legacyHeaders: false });
 app.post('/api/order-quote', quoteRateLimiter, (req, res) => {
   try { return res.json(buildOrderQuote(req.body?.items, req.body?.code ?? '')); }
   catch (error) {
@@ -3243,7 +3282,7 @@ app.post('/api/order-quote', quoteRateLimiter, (req, res) => {
 });
 
 // Создание заказа клиентом при оформлении в WhatsApp
-app.post('/api/orders', (req, res) => {
+app.post('/api/orders', orderCreationRateLimiter, (req, res) => {
   try {
     const {
       customer_name = 'Клиент WhatsApp',
@@ -3256,8 +3295,13 @@ app.post('/api/orders', (req, res) => {
       quote_fingerprint = '',
     } = req.body;
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'Корзина пуста' });
+    if (!Array.isArray(items) || items.length === 0 || items.length > 200) {
+      return res.status(400).json({ error: 'Корзина пуста или содержит слишком много позиций.' });
+    }
+    if (typeof customer_name !== 'string' || customer_name.trim().length > 120 ||
+        typeof customer_address !== 'string' || customer_address.trim().length > 500 ||
+        typeof customer_notes !== 'string' || customer_notes.trim().length > 1000) {
+      return res.status(400).json({ error: 'Проверьте имя, адрес и примечание к заказу.' });
     }
     if (typeof customer_phone !== 'string') {
       return res.status(400).json({ error: 'Укажите номер телефона для связи' });
@@ -3282,11 +3326,11 @@ app.post('/api/orders', (req, res) => {
       const legacyQuoteMatches = !quote_fingerprint && !promotion_code && quote.discount === 0 && Number(total_amount) === quote.total;
       if (quote_fingerprint !== quote.fingerprint && !legacyQuoteMatches) {
         db.exec('ROLLBACK;');
-        return res.status(409).json({ error: 'Цена или условия акции изменились. Проверьте сумму заказа ещё раз.', quote });
+        return res.status(409).json({ error: 'Цена или условия акции изменились. Проверьте сумму заказа ещё раз.', quote: publicOrderQuote(quote) });
       }
       if (promotion_code && !quote.code_applied) {
         db.exec('ROLLBACK;');
-        return res.status(400).json({ error: 'Промокод недействителен или условия акции не выполнены.', quote });
+        return res.status(400).json({ error: 'Промокод недействителен или условия акции не выполнены.' });
       }
       const prefix = `MS-${new Date().getFullYear()}-`;
       const nextSuffix = (db.prepare(`
@@ -3355,9 +3399,8 @@ app.post('/api/orders', (req, res) => {
 
     return res.status(201).json({
       success: true,
-      order_id: orderId,
       order_number: orderNumber,
-      quote,
+      quote: publicOrderQuote(quote),
       message: 'Заказ успешно зарегистрирован',
     });
   } catch (err: any) {
@@ -5407,7 +5450,14 @@ app.post('/api/admin/test-gemini', requireAdmin, async (req, res) => {
 });
 
 // 11. ПОИСК ПО ФОТО ДЛЯ КЛИЕНТОВ (КАМЕРА / ГАЛЕРЕЯ / БУФЕР ОБМЕНА)
-app.post('/api/search-by-image', async (req, res) => {
+const imageSearchRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
+app.post('/api/search-by-image', imageSearchRateLimiter, async (req, res) => {
   try {
     const { image } = req.body;
     if (!image || typeof image !== 'string') {
@@ -5648,13 +5698,38 @@ app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
 });
 
 const VIDEO_PROXY_HOSTS = ['taobao.com', 'alicdn.com', 'tbcdn.cn', '1688.com', 'tmall.com', 'alibaba.com', 'aliyuncs.com'];
+const VIDEO_PROXY_MAX_BYTES = 100 * 1024 * 1024;
 
 function isAllowedVideoHost(url: URL): boolean {
-  return url.protocol === 'https:' && VIDEO_PROXY_HOSTS.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
+  return url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443')
+    && VIDEO_PROXY_HOSTS.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
 }
 
+async function fetchVideoProxyTarget(url: URL, headers: Record<string, string>): Promise<http.IncomingMessage> {
+  const addresses = await dns.lookup(url.hostname, { all: true, verbatim: true });
+  if (!addresses.length || addresses.some(({ address }) => !isPublicIpAddress(address))) {
+    throw new Error('Video proxy host resolved to a non-public address');
+  }
+  const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
+    if (options.all) callback(null, addresses);
+    else callback(null, addresses[0].address, addresses[0].family);
+  };
+  return new Promise((resolve, reject) => {
+    const request = https.get(url, { lookup: pinnedLookup, headers, timeout: 20000 }, resolve);
+    request.on('timeout', () => request.destroy(new Error('Video proxy request timed out')));
+    request.on('error', reject);
+  });
+}
+
+const videoProxyRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+});
+
 // Видео 1688/Taobao отдаются только с их Referer, поэтому браузер не может играть их напрямую
-app.get('/api/video-proxy', async (req, res) => {
+app.get('/api/video-proxy', videoProxyRateLimiter, async (req, res) => {
   try {
     let target: URL;
     try {
@@ -5670,30 +5745,53 @@ app.get('/api/video-proxy', async (req, res) => {
     };
     if (typeof req.headers.range === 'string') headers.Range = req.headers.range;
 
-    let upstream: Response | null = null;
+    let upstream: http.IncomingMessage | null = null;
     for (let hop = 0; hop < 4; hop++) {
-      upstream = await fetch(target, { headers, redirect: 'manual', signal: AbortSignal.timeout(20000) });
-      const location = upstream.headers.get('location');
-      if (upstream.status >= 300 && upstream.status < 400 && location) {
+      upstream = await fetchVideoProxyTarget(target, headers);
+      const location = upstream.headers.location;
+      if (upstream.statusCode && upstream.statusCode >= 300 && upstream.statusCode < 400) {
+        upstream.resume();
+        if (!location || hop === 3) return res.status(502).end();
         target = new URL(location, target);
         if (!isAllowedVideoHost(target)) return res.status(400).end();
         continue;
       }
       break;
     }
-    if (!upstream || !upstream.body || upstream.status >= 400) return res.status(502).end();
+    if (!upstream || !upstream.statusCode || upstream.statusCode >= 400) {
+      upstream?.resume();
+      return res.status(502).end();
+    }
+    const contentType = String(upstream.headers['content-type'] || '');
+    const contentLength = Number(upstream.headers['content-length'] || 0);
+    if (contentLength > VIDEO_PROXY_MAX_BYTES) {
+      upstream.destroy();
+      return res.status(413).end();
+    }
+    if (contentType && !contentType.toLowerCase().startsWith('video/') && !contentType.toLowerCase().startsWith('application/octet-stream')) {
+      upstream.destroy();
+      return res.status(415).end();
+    }
 
-    res.status(upstream.status);
+    res.status(upstream.statusCode);
     for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
-      const value = upstream.headers.get(name);
+      const value = upstream.headers[name];
       if (value) res.setHeader(name, value);
     }
     res.setHeader('Cache-Control', 'public, max-age=3600');
-    const { Readable } = await import('node:stream');
-    const stream = Readable.fromWeb(upstream.body as any);
-    req.on('close', () => stream.destroy());
-    stream.on('error', () => res.end());
-    stream.pipe(res);
+    let transferred = 0;
+    res.on('close', () => {
+      if (!res.writableEnded) upstream?.destroy();
+    });
+    upstream.on('data', (chunk: Buffer) => {
+      transferred += chunk.length;
+      if (transferred > VIDEO_PROXY_MAX_BYTES) upstream?.destroy(new Error('Video proxy response too large'));
+    });
+    upstream.on('error', () => {
+      if (!res.headersSent) res.status(502);
+      res.end();
+    });
+    upstream.pipe(res);
   } catch {
     if (!res.headersSent) res.status(502).end();
   }
@@ -5819,22 +5917,32 @@ function getPublicProductImageUrls(
 }
 
 function isPublicIpAddress(address: string): boolean {
-  if (address.includes('.')) {
+  const ipVersion = isIP(address);
+  if (ipVersion === 4) {
     const octets = address.split('.').map(Number);
-    if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
     const [a, b, c] = octets;
     return !(
       a === 0 || a === 10 || a === 127 || a >= 224 ||
       (a === 100 && b >= 64 && b <= 127) ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && (b === 168 || (b === 0 && c === 0) || (b === 0 && c === 2))) ||
+      (a === 192 && (b === 168 || (b === 0 && (c === 0 || c === 2)))) ||
       (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
       (a === 203 && b === 0 && c === 113)
     );
   }
-  const firstHextet = Number.parseInt(address.split(':')[0] || '0', 16);
-  return firstHextet >= 0x2000 && firstHextet <= 0x3fff && !address.toLowerCase().startsWith('2001:db8:');
+  if (ipVersion !== 6) return false;
+  const normalized = address.toLowerCase();
+  if (normalized.startsWith('::ffff:')) {
+    const mappedIpv4 = normalized.slice('::ffff:'.length);
+    if (isIP(mappedIpv4) === 4) return isPublicIpAddress(mappedIpv4);
+    const groups = normalized.slice(2).split(':');
+    const high = Number.parseInt(groups[1], 16);
+    const low = Number.parseInt(groups[2], 16);
+    return isPublicIpAddress(`${high >>> 8}.${high & 255}.${low >>> 8}.${low & 255}`);
+  }
+  const firstHextet = Number.parseInt(normalized.split(':')[0] || '0', 16);
+  return firstHextet >= 0x2000 && firstHextet <= 0x3fff && !normalized.startsWith('2001:db8:');
 }
 
 async function downloadRemoteImage(source: string, redirects = 0): Promise<Buffer> {

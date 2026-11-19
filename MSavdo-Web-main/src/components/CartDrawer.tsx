@@ -273,7 +273,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
           console.error('[Order Checkout] Invalid error response:', error);
           throw new Error(copy.orderFailed);
         }
-        if (res.status === 409 && data?.quote) setQuote(data.quote);
+        if (res.status === 409 && data?.quote) {
+          setQuote(null);
+          setQuotedKey('');
+          setQuoteRetry((value) => value + 1);
+        }
         throw new Error(typeof data?.error === 'string' && data.error ? data.error : copy.orderFailed);
       }
       const data = await res.json();
@@ -281,11 +285,26 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         throw new Error('Сервер не вернул номер заказа');
       }
       if (!data.quote || !Array.isArray(data.quote.items) || !Array.isArray(data.quote.applied)
-        || !Number.isSafeInteger(data.quote.total)) {
+        || !Number.isSafeInteger(data.quote.total)
+        || data.quote.items.some((item: unknown) => !item || typeof item !== 'object'
+          || typeof (item as Record<string, unknown>).title !== 'string'
+          || !Number.isSafeInteger((item as Record<string, unknown>).quantity)
+          || !Number.isSafeInteger((item as Record<string, unknown>).price_tjs))) {
         throw new Error('Сервер не вернул подтверждённый расчёт заказа');
       }
       orderNumber = data.order_number;
-      confirmedQuote = data.quote;
+      confirmedQuote = {
+        ...confirmedQuote,
+        total: data.quote.total,
+        items: data.quote.items.map((item: Quote['items'][number], index: number) => ({
+          ...confirmedQuote.items[index],
+          ...item,
+        })),
+        applied: data.quote.applied.map((offer: Quote['applied'][number]) => ({
+          ...offer,
+          code: confirmedQuote.applied.find((current) => current.title === offer.title)?.code || '',
+        })),
+      };
     } catch (error) {
       console.error('[Order Checkout Error]', error);
       setSubmitError(definiteFailure && error instanceof Error ? error.message : copy.orderUnknown);

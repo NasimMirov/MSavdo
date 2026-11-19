@@ -660,14 +660,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (res.ok) {
-        setOrders((prev) =>
-          prev.map((o) => (o.id === orderId ? { ...o, status: newStatus as any } : o))
-        );
-        showNotice(`✓ Статус заказа обновлен на "${newStatus}"`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(data?.error || `Не удалось обновить статус (HTTP ${res.status})`);
       }
-    } catch (e) {
-      showNotice('Ошибка обновления статуса');
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus as any } : o))
+      );
+      showNotice(`Статус заказа обновлен на "${newStatus}"`);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : 'Ошибка обновления статуса');
     }
   };
 
@@ -3444,7 +3446,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     const q = orderSearch.toLowerCase().trim();
                     const numMatch = (o.order_number || '').toLowerCase().includes(q);
                     const nameMatch = (o.customer_name || '').toLowerCase().includes(q);
-                    const phoneMatch = (o.customer_phone || '').toLowerCase().includes(q);
+                    const phoneQuery = q.replace(/\D/g, '');
+                    const phoneMatch = phoneQuery.length > 0
+                      && (o.customer_phone || '').replace(/\D/g, '').includes(phoneQuery);
                     if (!numMatch && !nameMatch && !phoneMatch) return false;
                   }
                   return true;
