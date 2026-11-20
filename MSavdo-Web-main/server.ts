@@ -1735,8 +1735,9 @@ async function resolveCategoryWithAi(title: string): Promise<string> {
 // ==========================================
 // МИДЛВЕЙР АВТОРИЗАЦИИ АДМИНИСТРАТОРА
 // ==========================================
-const ADMIN_COOKIE_NAME = '__Host-msavdo_admin';
-const ADMIN_TELEGRAM_NONCE_COOKIE = '__Host-msavdo_telegram_nonce';
+const useSecureAdminCookies = process.env.NODE_ENV === 'production';
+const ADMIN_COOKIE_NAME = useSecureAdminCookies ? '__Host-msavdo_admin' : 'msavdo_admin';
+const ADMIN_TELEGRAM_NONCE_COOKIE = useSecureAdminCookies ? '__Host-msavdo_telegram_nonce' : 'msavdo_telegram_nonce';
 // HttpOnly, revocable sessions should survive normal mobile use without asking
 // an administrator to repeat Telegram login every time the app is reopened.
 const ADMIN_SESSION_SECONDS = 30 * 24 * 60 * 60;
@@ -2343,7 +2344,7 @@ app.post('/api/admin/telegram-auth/config', telegramConfigRateLimiter, (req, res
   db.prepare('INSERT INTO admin_telegram_nonces (nonce_hash, expires_at) VALUES (?, ?)').run(nonceHash, expiresAt);
   res.cookie(ADMIN_TELEGRAM_NONCE_COOKIE, nonce, {
     httpOnly: true,
-    secure: true,
+    secure: useSecureAdminCookies,
     sameSite: 'strict',
     path: '/',
     maxAge: TELEGRAM_LOGIN_NONCE_SECONDS * 1000,
@@ -2378,7 +2379,7 @@ app.post('/api/admin/telegram-auth/login', checkTelegramLoginIpBlock, telegramLo
     ).run(nonceHash, now);
     res.clearCookie(ADMIN_TELEGRAM_NONCE_COOKIE, {
       httpOnly: true,
-      secure: true,
+      secure: useSecureAdminCookies,
       sameSite: 'strict',
       path: '/',
     });
@@ -2414,7 +2415,7 @@ app.post('/api/admin/telegram-auth/login', checkTelegramLoginIpBlock, telegramLo
     });
     res.cookie(ADMIN_COOKIE_NAME, token, {
       httpOnly: true,
-      secure: true,
+      secure: useSecureAdminCookies,
       sameSite: 'strict',
       path: '/',
       maxAge: ADMIN_SESSION_SECONDS * 1000,
@@ -2438,7 +2439,7 @@ app.post('/api/admin/logout', requireAdmin, (req, res) => {
   }
   res.clearCookie(ADMIN_COOKIE_NAME, {
     httpOnly: true,
-    secure: true,
+    secure: useSecureAdminCookies,
     sameSite: 'strict',
     path: '/',
   });
