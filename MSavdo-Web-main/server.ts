@@ -4806,7 +4806,7 @@ app.post('/api/add-product', (req, res, next) => {
     const specsJson = JSON.stringify(specificationsToProcess);
     const prodInsert = db.prepare(`
       INSERT INTO products (title, description, original_link, category_id, base_sku, brand, manufacturer, gtin, mpn, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(finalTitle, finalDesc, original_link, categoryId, baseSku, importedBrand, importedManufacturer, importedGtin, importedMpn, importedProductStatus, finalDeliveryType, mainImage, allImages, primaryVideoUrl, JSON.stringify(importedVideos), primaryVideoUrl, specsJson);
 
     const productId = Number(prodInsert.lastInsertRowid);
@@ -5133,7 +5133,7 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
 
       const prodInsert = db.prepare(`
         INSERT INTO products (title, description, original_link, category_id, base_sku, brand, manufacturer, gtin, mpn, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         finalProduct.title,
         finalProduct.description,
