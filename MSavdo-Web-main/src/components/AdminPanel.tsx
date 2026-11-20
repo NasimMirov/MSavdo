@@ -127,7 +127,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [adminDraftCount, setAdminDraftCount] = useState(0);
   const [adminVariantCount, setAdminVariantCount] = useState(0);
   const [deletedProducts, setDeletedProducts] = useState<Array<{ id: number; title: string; base_sku: string; deleted_at: string }>>([]);
-  const [canRecoverDeletedProducts, setCanRecoverDeletedProducts] = useState(false);
+  const [deletedProductsOpen, setDeletedProductsOpen] = useState(false);
+  const [deletedProductsLoaded, setDeletedProductsLoaded] = useState(false);
+  const [deletedProductsLoading, setDeletedProductsLoading] = useState(false);
+  const [deletedProductsError, setDeletedProductsError] = useState('');
   const [restoringProductId, setRestoringProductId] = useState<number | null>(null);
   const [adminProductsError, setAdminProductsError] = useState('');
   const productsRequestRef = useRef(0);
@@ -298,6 +301,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const isProductEditorOpen = Boolean(editingProduct);
+  useEffect(() => {
+    if (!zoomedGalleryImage) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setZoomedGalleryImage(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [zoomedGalleryImage]);
+
   useEffect(() => {
     if (!isProductEditorOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -518,10 +530,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setAdminStockCount(Number(prodData.stock_count) || 0);
       setAdminDraftCount(Number(prodData.draft_count) || 0);
       setAdminVariantCount(Number(prodData.variant_count) || 0);
-      if (!append) {
-        setDeletedProducts(Array.isArray(prodData.deleted_products) ? prodData.deleted_products : []);
-        setCanRecoverDeletedProducts(Array.isArray(prodData.deleted_products));
-      }
       setAdminProductsError('');
       return true;
     } catch (error) {
@@ -531,6 +539,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return false;
     } finally {
       if (requestId === productsRequestRef.current) setIsLoadingMoreProducts(false);
+    }
+  };
+
+  const loadDeletedProducts = async () => {
+    setDeletedProductsLoading(true);
+    setDeletedProductsError('');
+    try {
+      const response = await adminFetch('/api/admin/products/deleted', { cache: 'no-store' });
+      if (response.status === 401) {
+        handleLogout();
+        return;
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setDeletedProducts(Array.isArray(data.deleted_products) ? data.deleted_products : []);
+      setDeletedProductsLoaded(true);
+    } catch (error) {
+      setDeletedProductsError(error instanceof Error ? error.message : 'ошибка сети');
+    } finally {
+      setDeletedProductsLoading(false);
     }
   };
 
@@ -886,6 +914,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newImageUrl, setNewImageUrl] = useState('');
   const [newVideoUrl, setNewVideoUrl] = useState('');
   const [dragImageIndex, setDragImageIndex] = useState<number | null>(null);
+  const [zoomedGalleryImage, setZoomedGalleryImage] = useState<string | null>(null);
   const [dragVideoIndex, setDragVideoIndex] = useState<number | null>(null);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [productSaveError, setProductSaveError] = useState('');
@@ -1722,10 +1751,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   // Удаление товара
   const handleDeleteProduct = async (id: number) => {
     if (!isAuthenticated) return;
-    if (!canRecoverDeletedProducts) {
-      showNotice('Удаление временно недоступно: сервер ещё не поддерживает восстановление товаров. Обновите данные позже.');
-      return;
-    }
     if (!confirm('Удалить товар из каталога? Его можно будет восстановить из списка последних удалённых товаров.')) return;
     try {
       const res = await adminFetch(`/api/admin/products/${id}`, {
@@ -1734,6 +1759,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
       setAdminProducts((previous) => previous.filter((product) => product.id !== id));
       setAdminProductsTotal((total) => Math.max(0, total - 1));
+      setDeletedProductsLoaded(false);
       void loadAdminProducts();
       onRefreshCatalog();
       showNotice('Товар удалён. Его можно восстановить в разделе «Недавно удалённые».');
@@ -1749,6 +1775,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       const response = await adminFetch(`/api/admin/products/${id}/restore`, { method: 'POST' });
       if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
       await loadAdminData();
+      setDeletedProductsLoaded(false);
+      if (deletedProductsOpen) void loadDeletedProducts();
       onRefreshCatalog();
       showNotice('Товар восстановлен как черновик. Проверьте его и опубликуйте.');
     } catch (error) {
@@ -2098,27 +2126,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               {adminProductsError} Показанный список может быть устаревшим. Нажмите «Обновить данные».
             </div>
           )}
-          {deletedProducts.length > 0 && (
+          {deletedProducts.length > 0 || !deletedProductsLoaded ? (
             <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
-              <h2 className="text-sm font-bold text-slate-900">Недавно удалённые товары</h2>
-              <p className="mt-1 text-xs text-slate-500">Последние 10 удалений. Товар восстанавливается как черновик вместе с вариантами и ценами.</p>
-              <ul className="mt-3 divide-y divide-slate-100">
-                {deletedProducts.map((product) => (
-                  <li key={product.id} className="flex items-center justify-between gap-3 py-2">
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold text-slate-900">{product.title}</div>
-                      <div className="text-[10px] text-slate-500">{product.base_sku} · {product.deleted_at} UTC</div>
-                    </div>
-                    <button type="button" disabled={restoringProductId !== null}
-                      onClick={() => void handleRestoreProduct(product.id)}
-                      className="shrink-0 rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-700 disabled:opacity-50">
-                      {restoringProductId === product.id ? 'Восстановление…' : 'Восстановить'}
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <button type="button" aria-expanded={deletedProductsOpen} onClick={() => {
+                const open = !deletedProductsOpen;
+                setDeletedProductsOpen(open);
+                if (open && !deletedProductsLoaded && !deletedProductsLoading) void loadDeletedProducts();
+              }} className="flex w-full items-center justify-between gap-3 text-left">
+                <span className="text-sm font-bold text-slate-900">Недавно удалённые товары{deletedProducts.length ? ` (${deletedProducts.length})` : ''}</span>
+                {deletedProductsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+              {deletedProductsOpen && <>
+                <p className="mt-1 text-xs text-slate-500">Последние 10 удалений. Товар восстанавливается как черновик вместе с вариантами и ценами.</p>
+                {deletedProductsLoading && <p className="mt-3 text-xs text-slate-500">Загрузка удалённых товаров…</p>}
+                {deletedProductsError && <p role="alert" className="mt-3 text-xs text-red-600">Не удалось загрузить удалённые товары: {deletedProductsError}</p>}
+                {deletedProductsLoaded && deletedProducts.length === 0 && <p className="mt-3 text-xs text-slate-500">Удалённых товаров нет.</p>}
+                {deletedProducts.length > 0 && <ul className="mt-3 divide-y divide-slate-100">
+                  {deletedProducts.map((product) => (
+                    <li key={product.id} className="flex items-center justify-between gap-3 py-2">
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-slate-900">{product.title}</div>
+                        <div className="text-[10px] text-slate-500">{product.base_sku} · {product.deleted_at} UTC</div>
+                      </div>
+                      <button type="button" disabled={restoringProductId !== null}
+                        onClick={() => void handleRestoreProduct(product.id)}
+                        className="shrink-0 rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-700 disabled:opacity-50">
+                        {restoringProductId === product.id ? 'Восстановление…' : 'Восстановить'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>}
+              </>}
             </section>
-          )}
+          ) : null}
           
           {/* Сводные KPI метрики каталога */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -3926,8 +3966,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 />
               </div>
 
-              <section className="rounded-2xl border border-sky-200 bg-sky-50/60 p-3.5 space-y-2">
-                <div><h4 className="text-xs font-extrabold text-slate-900">Данные производителя для Google</h4><p className="mt-1 text-[10px] text-slate-600">Перепишите данные с упаковки или страницы производителя. Не указывайте M.Savdo как бренд товара. GTIN/EAN проверяется по контрольной цифре.</p></div>
+              <details className="rounded-2xl border border-sky-200 bg-sky-50/60 p-3.5 space-y-2">
+                <summary className="cursor-pointer text-xs font-extrabold text-slate-900">Данные производителя для Google</summary>
+                <div className="mt-2"><p className="text-[10px] text-slate-600">Перепишите данные с упаковки или страницы производителя. Не указывайте M.Savdo как бренд товара. GTIN/EAN проверяется по контрольной цифре.</p></div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {[['brand','Бренд товара','Например, Xiaomi'],['manufacturer','Производитель','Компания с упаковки'],['gtin','Штрихкод GTIN / EAN','8, 12, 13 или 14 цифр'],['mpn','Номер модели производителя (MPN)','С упаковки или паспорта']].map(([key,label,placeholder]) => (
                     <label key={key} className="space-y-1 text-[11px] font-bold text-slate-700">{label}
@@ -3935,7 +3976,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </label>
                   ))}
                 </div>
-              </section>
+              </details>
 
               {/* ТИП ДОСТАВКИ */}
               <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
@@ -4151,7 +4192,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               {/* ======================================================== */}
               {/* ФОТОГАЛЕРЕЯ: ФАЙЛЫ + БУФЕР ОБМЕНА + ССЫЛКИ */}
               {/* ======================================================== */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
                     <ImageIcon className="w-4 h-4 text-emerald-600" />
@@ -4159,9 +4200,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       Фотогалерея ({editingProduct.images?.length || 0} фото):
                     </label>
                   </div>
-                  <span className="text-[10px] text-slate-500">
-                    Перетащите фото или используйте стрелки. Первое фото — главное (★)
-                  </span>
+                  <span className="text-[10px] text-slate-500">Нажмите на фото для просмотра крупным планом</span>
                 </div>
 
                 {/* Скрытый инпут файлов */}
@@ -4226,7 +4265,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           }}
                           className={`relative cursor-grab overflow-hidden rounded-xl border bg-slate-200 shadow-xs aspect-square ${isMain ? 'border-amber-400 ring-2 ring-amber-300' : 'border-slate-300'}`}
                         >
-                          <img src={img} alt="" draggable={false} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          <button type="button" onClick={() => setZoomedGalleryImage(img)} className="block h-full w-full cursor-zoom-in" aria-label={`Посмотреть фото ${idx + 1} крупно`}>
+                            <img src={img} alt="" draggable={false} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                          </button>
                           <span className="absolute top-1 left-1 rounded bg-slate-900/80 px-1.5 py-0.5 text-[9px] font-black text-white">
                             {isMain ? '★ Главное' : idx + 1}
                           </span>
@@ -4563,6 +4604,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {zoomedGalleryImage && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/90 p-4 sm:p-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Просмотр фотографии"
+          onClick={() => setZoomedGalleryImage(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setZoomedGalleryImage(null)}
+            className="absolute right-4 top-4 z-10 rounded-xl bg-white/90 p-2 text-slate-900 shadow-lg hover:bg-white"
+            aria-label="Закрыть просмотр фотографии"
+            title="Закрыть"
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img
+            src={zoomedGalleryImage}
+            alt="Увеличенный просмотр фотографии"
+            className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+            referrerPolicy="no-referrer"
+            onClick={(event) => event.stopPropagation()}
+          />
         </div>
       )}
 

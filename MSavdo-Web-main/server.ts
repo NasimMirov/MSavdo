@@ -3652,9 +3652,9 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
       SELECT p.id, p.base_sku, p.title, p.category_id, p.status, p.delivery_type,
              p.main_image, p.original_link, p.views_count, p.discount_percent,
              c.name as category_name,
-             COALESCE((SELECT COUNT(*) FROM product_variants v WHERE v.product_id = p.id), 0) AS variant_count,
-             COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs,
-             COALESCE((SELECT MAX(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS max_price_tjs,
+             COALESCE(v.variant_count, 0) AS variant_count,
+             COALESCE(v.min_price_tjs, 0) AS min_price_tjs,
+             COALESCE(v.max_price_tjs, 0) AS max_price_tjs,
              CASE
                WHEN p.specifications IS NULL OR p.specifications = '' THEN 0
                WHEN json_valid(p.specifications) AND json_type(p.specifications) = 'array' THEN json_array_length(p.specifications)
@@ -3663,22 +3663,36 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
              END AS specification_count
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
+      LEFT JOIN (
+        SELECT product_id, COUNT(*) AS variant_count,
+               MIN(CASE WHEN price_tjs > 0 THEN price_tjs END) AS min_price_tjs,
+               MAX(CASE WHEN price_tjs > 0 THEN price_tjs END) AS max_price_tjs
+        FROM product_variants GROUP BY product_id
+      ) v ON v.product_id = p.id
       WHERE COALESCE(p.status, '') != 'deleted'
       ORDER BY p.id DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset) as any[];
+    return res.json({ products: products.map((p) => ({ ...p, delivery_type: p.delivery_type || 'order' })), total, stock_count: aggregateCounts.stock_count || 0, draft_count: aggregateCounts.draft_count || 0, variant_count: aggregateCounts.variant_count, limit, offset, has_more: offset + products.length < total });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.get('/api/admin/products/deleted', requireAdmin, (_req, res) => {
+  try {
     const deletedProducts = db.prepare(`
       SELECT p.id, p.title, p.base_sku, d.deleted_at
       FROM deleted_products d JOIN products p ON p.id = d.product_id
       WHERE p.status = 'deleted'
       ORDER BY d.deletion_id DESC LIMIT 10
     `).all();
-    return res.json({ products: products.map((p) => ({ ...p, delivery_type: p.delivery_type || 'order' })), deleted_products: deletedProducts, total, stock_count: aggregateCounts.stock_count || 0, draft_count: aggregateCounts.draft_count || 0, variant_count: aggregateCounts.variant_count, limit, offset, has_more: offset + products.length < total });
+    return res.json({ deleted_products: deletedProducts });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
-
 
 app.put('/api/admin/products/:id/status', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
