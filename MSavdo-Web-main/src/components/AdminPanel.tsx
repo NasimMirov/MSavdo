@@ -527,9 +527,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setAdminProducts((current) => append ? [...current, ...prodData.products] : prodData.products);
       setAdminProductsTotal(Number.isFinite(prodData.total) ? prodData.total : prodData.products.length);
       setAdminProductsHasMore(Boolean(prodData.has_more));
-      setAdminStockCount(Number(prodData.stock_count) || 0);
-      setAdminDraftCount(Number(prodData.draft_count) || 0);
-      setAdminVariantCount(Number(prodData.variant_count) || 0);
       setAdminProductsError('');
       return true;
     } catch (error) {
@@ -539,6 +536,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return false;
     } finally {
       if (requestId === productsRequestRef.current) setIsLoadingMoreProducts(false);
+    }
+  };
+
+  const loadAdminSummary = async () => {
+    try {
+      const response = await adminFetch('/api/admin/products/summary', { cache: 'no-store' });
+      if (!response.ok) return;
+      const data = await response.json();
+      setAdminProductsTotal(Number(data.total) || 0);
+      setAdminStockCount(Number(data.stock_count) || 0);
+      setAdminDraftCount(Number(data.draft_count) || 0);
+      setAdminVariantCount(Number(data.variant_count) || 0);
+    } catch {
+      // The product list remains usable when summary counters are unavailable.
     }
   };
 
@@ -567,6 +578,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setIsLoading(true);
     try {
       const productsPromise = loadAdminProducts();
+      void loadAdminSummary();
       const settingsPromise = (async () => {
         const response = await adminFetch('/api/admin/settings');
         if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) return;

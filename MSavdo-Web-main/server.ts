@@ -435,6 +435,7 @@ db.exec(`
   );
   INSERT OR IGNORE INTO site_visit_totals (id, visits_count, unique_visitors_count) VALUES (1, 0, 0);
   CREATE INDEX IF NOT EXISTS idx_products_active_category_id ON products(status, category_id, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_products_admin_list ON products(id DESC) WHERE status IS NULL OR status != 'deleted';
   CREATE INDEX IF NOT EXISTS idx_products_active_popularity ON products(status, views_count DESC, id DESC);
   CREATE INDEX IF NOT EXISTS idx_products_active_title ON products(status, title COLLATE NOCASE);
   CREATE INDEX IF NOT EXISTS idx_variants_product_id ON product_variants(product_id);
@@ -3639,22 +3640,14 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
     const requestedOffset = Number.parseInt(String(req.query.offset || '0'), 10);
     const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 100;
     const offset = Number.isFinite(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
-    const aggregateCounts = db.prepare(`
-      SELECT COUNT(*) AS total,
-             SUM(CASE WHEN p.delivery_type = 'stock' THEN 1 ELSE 0 END) AS stock_count,
-             SUM(CASE WHEN p.status = 'draft' THEN 1 ELSE 0 END) AS draft_count,
-             (SELECT COUNT(*) FROM product_variants v JOIN products active ON active.id = v.product_id WHERE COALESCE(active.status, '') != 'deleted') AS variant_count
-      FROM products p
-      WHERE COALESCE(p.status, '') != 'deleted'
-    `).get() as { total: number; stock_count: number | null; draft_count: number | null; variant_count: number };
-    const total = aggregateCounts.total;
+    const total = (db.prepare("SELECT COUNT(*) AS total FROM products WHERE (status IS NULL OR status != 'deleted')").get() as { total: number }).total;
     const products = db.prepare(`
       SELECT p.id, p.base_sku, p.title, p.category_id, p.status, p.delivery_type,
              p.main_image, p.original_link, p.views_count, p.discount_percent,
              c.name as category_name,
-             COALESCE(v.variant_count, 0) AS variant_count,
-             COALESCE(v.min_price_tjs, 0) AS min_price_tjs,
-             COALESCE(v.max_price_tjs, 0) AS max_price_tjs,
+             (SELECT COUNT(*) FROM product_variants v WHERE v.product_id = p.id) AS variant_count,
+             COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs,
+             COALESCE((SELECT MAX(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS max_price_tjs,
              CASE
                WHEN p.specifications IS NULL OR p.specifications = '' THEN 0
                WHEN json_valid(p.specifications) AND json_type(p.specifications) = 'array' THEN json_array_length(p.specifications)
@@ -3663,22 +3656,40 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
              END AS specification_count
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      LEFT JOIN (
-        SELECT product_id, COUNT(*) AS variant_count,
-               MIN(CASE WHEN price_tjs > 0 THEN price_tjs END) AS min_price_tjs,
-               MAX(CASE WHEN price_tjs > 0 THEN price_tjs END) AS max_price_tjs
-        FROM product_variants GROUP BY product_id
-      ) v ON v.product_id = p.id
-      WHERE COALESCE(p.status, '') != 'deleted'
+      WHERE (p.status IS NULL OR p.status != 'deleted')
       ORDER BY p.id DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset) as any[];
-    return res.json({ products: products.map((p) => ({ ...p, delivery_type: p.delivery_type || 'order' })), total, stock_count: aggregateCounts.stock_count || 0, draft_count: aggregateCounts.draft_count || 0, variant_count: aggregateCounts.variant_count, limit, offset, has_more: offset + products.length < total });
+    return res.json({ products: products.map((p) => ({ ...p, delivery_type: p.delivery_type || 'order' })), total, limit, offset, has_more: offset + products.length < total });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
 });
 
+
+app.get('/api/admin/products/summary', requireAdmin, (_req, res) => {
+  try {
+    const summary = db.prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN delivery_type = 'stock' THEN 1 ELSE 0 END) AS stock_count,
+             SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END) AS draft_count
+      FROM products WHERE (status IS NULL OR status != 'deleted')
+    `).get() as { total: number; stock_count: number | null; draft_count: number | null };
+    const variantCount = (db.prepare(`
+      SELECT COUNT(*) AS count FROM product_variants v
+      JOIN products p ON p.id = v.product_id
+      WHERE (p.status IS NULL OR p.status != 'deleted')
+    `).get() as { count: number }).count;
+    return res.json({
+      total: summary.total,
+      stock_count: summary.stock_count || 0,
+      draft_count: summary.draft_count || 0,
+      variant_count: variantCount,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/admin/products/deleted', requireAdmin, (_req, res) => {
   try {
