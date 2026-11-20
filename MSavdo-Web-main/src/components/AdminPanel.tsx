@@ -301,6 +301,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const isProductEditorOpen = Boolean(editingProduct);
+  const [zoomedGalleryImage, setZoomedGalleryImage] = useState<string | null>(null);
   useEffect(() => {
     if (!zoomedGalleryImage) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -941,7 +942,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newImageUrl, setNewImageUrl] = useState('');
   const [newVideoUrl, setNewVideoUrl] = useState('');
   const [dragImageIndex, setDragImageIndex] = useState<number | null>(null);
-  const [zoomedGalleryImage, setZoomedGalleryImage] = useState<string | null>(null);
   const [dragVideoIndex, setDragVideoIndex] = useState<number | null>(null);
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [productSaveError, setProductSaveError] = useState('');
