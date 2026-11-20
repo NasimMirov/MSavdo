@@ -73,11 +73,25 @@ test("reports structured errors and unexpected server responses without hiding H
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "background.js"), "utf8"), {
     chrome, URL, AbortController, setTimeout, clearTimeout,
-    fetch: async () => response,
+    fetch: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      assert.deepEqual(
+        [body.structured_data.brand, body.structured_data.manufacturer, body.structured_data.gtin, body.structured_data.mpn],
+        ["BrightCo", "Bright Factory", "4006381333931", "BC-42"],
+      );
+      assert.deepEqual(body.structured_data.specifications, [{ name: "Brand", value: "BrightCo" }]);
+      return response;
+    },
   });
   const send = () => new Promise((resolve) => listener({
     action: "importProduct",
-    payload: { raw_text: "Product", original_link: "https://detail.1688.com/offer/123.html" },
+    payload: {
+      raw_text: "Product", original_link: "https://detail.1688.com/offer/123.html",
+      structured_data: {
+        brand: "BrightCo", manufacturer: "Bright Factory", gtin: "4006381333931", mpn: "BC-42",
+        specifications: [{ name: "Brand", value: "BrightCo" }],
+      },
+    },
   }, { url: "chrome-extension://test/popup.html" }, resolve));
 
   response = {

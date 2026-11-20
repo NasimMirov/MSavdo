@@ -19,7 +19,13 @@ test("extracts product title and SKU images when page heading is the seller's fa
         },
       },
     } } } }, global: { globalData: { model: {
-      offerDetail: { subject: title, featureAttributes: [{ name: "Material", value: "Plastic" }] },
+      offerDetail: { subject: title, featureAttributes: [
+        { name: "Material", value: "Plastic" },
+        { name: "品牌", value: "BrightCo" },
+        { name: "厂家", value: "Bright Factory" },
+        { name: "条形码", value: "4006381333931" },
+        { name: "型号", value: "BC-42" },
+      ] },
     } } } },
   };
   const script = { textContent: `window.context=(function(b,d){return d})(window.contextPath,${JSON.stringify(root)});` };
@@ -44,7 +50,12 @@ test("extracts product title and SKU images when page heading is the seller's fa
   listener({ action: "gatherProductData" }, {}, (value) => { response = value; });
   assert.equal(response.success, true);
   assert.equal(response.payload.structured_data.title, title);
-  assert.equal(response.payload.structured_data.specifications.length, 1);
+  assert.equal(response.payload.structured_data.specifications.length, 5);
+  assert.equal(response.payload.structured_data.brand, "BrightCo");
+  assert.equal(response.payload.structured_data.manufacturer, "Bright Factory");
+  assert.equal(response.payload.structured_data.gtin, "4006381333931");
+  assert.equal(response.payload.structured_data.mpn, "BC-42");
+  assert.equal(response.payload.structured_data.specifications.some((item) => item.name === "品牌"), true);
   assert.equal(response.payload.structured_data.variants.length, 2);
   assert.equal(response.payload.structured_data.variants[0].color, "Large with solar panel");
   assert.equal(response.payload.structured_data.variants[0].image_url, "https://example.com/large.jpg");

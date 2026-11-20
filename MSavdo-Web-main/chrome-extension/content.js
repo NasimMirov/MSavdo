@@ -641,6 +641,9 @@
       if (specifications.length >= 100) break;
     }
 
+    const findSpecification = (labels) => specifications.find((item) =>
+      labels.some((label) => new RegExp(`^(?:${label})$`, "i").test(item.name.trim()))
+    )?.value || "";
     const variants = [];
     if (skuMap && typeof skuMap === "object") {
       const skuEntries = Array.isArray(skuMap)
@@ -721,6 +724,10 @@
       category_hint: categoryHint,
       title_candidates: [...new Set([title, ...titleCandidates.map(cleanStructuredText).filter(Boolean)])].slice(0, 5),
       specifications,
+      brand: findSpecification(["бренд", "торговая марка", "brand", "品牌", "商标"]),
+      manufacturer: findSpecification(["manufacturer", "maker", "producer", "factory", "производитель", "изготовитель", "厂家"]),
+      gtin: findSpecification(["gtin", "ean", "ean-?13", "barcode", "global trade item number", "штрихкод", "条形码", "条码"]),
+      mpn: findSpecification(["mpn", "manufacturer part number", "model number", "артикул производителя", "номер модели", "型号"]),
       variants,
       images: Array.from(images).slice(0, 32),
       video_urls: Array.from(videoUrls).slice(0, MAX_VIDEOS),
@@ -791,6 +798,10 @@
       category_hint: "",
       title_candidates: [],
       specifications: [],
+      brand: "",
+      manufacturer: "",
+      gtin: "",
+      mpn: "",
       variants: [],
       images: [],
       video_urls: [],
@@ -835,6 +846,13 @@
       if (!mergedSpecs.has(key)) mergedSpecs.set(key, specification);
     }
     structuredData.specifications = Array.from(mergedSpecs.values()).slice(0, 100);
+    const specificationValue = (labels) => structuredData.specifications.find((item) =>
+      labels.some((label) => new RegExp(`^(?:${label})$`, "i").test(item.name.trim()))
+    )?.value || "";
+    structuredData.brand ||= specificationValue(["бренд", "торговая марка", "brand", "品牌", "商标"]);
+    structuredData.manufacturer ||= specificationValue(["manufacturer", "maker", "producer", "factory", "производитель", "изготовитель", "厂家"]);
+    structuredData.gtin ||= specificationValue(["gtin", "ean", "ean-?13", "barcode", "global trade item number", "штрихкод", "条形码", "条码"]);
+    structuredData.mpn ||= specificationValue(["mpn", "manufacturer part number", "model number", "артикул производителя", "номер модели", "型号"]);
     structuredData.title = chooseBestTitle([
       domData.title,
       ...domData.title_candidates,

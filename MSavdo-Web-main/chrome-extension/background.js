@@ -160,6 +160,10 @@ async function handleImportProduct(payload, sender) {
         .filter((title) => typeof title === "string")
         .slice(0, 5)
         .map((title) => title.slice(0, 500)),
+      brand: typeof sourceStructuredData.brand === "string" ? sourceStructuredData.brand.slice(0, 100) : "",
+      manufacturer: typeof sourceStructuredData.manufacturer === "string" ? sourceStructuredData.manufacturer.slice(0, 150) : "",
+      gtin: typeof sourceStructuredData.gtin === "string" ? sourceStructuredData.gtin.slice(0, 32) : "",
+      mpn: typeof sourceStructuredData.mpn === "string" ? sourceStructuredData.mpn.slice(0, 100) : "",
       specifications: (Array.isArray(sourceStructuredData.specifications) ? sourceStructuredData.specifications : [])
         .filter((item) => item && typeof item.name === "string" && typeof item.value === "string")
         .slice(0, 100)

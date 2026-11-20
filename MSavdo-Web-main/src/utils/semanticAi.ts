@@ -633,8 +633,8 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
     const structuredMpn = findFieldValue(nestedObjects, ['mpn', 'model', 'modelNumber', 'model_number', 'manufacturerPartNumber']);
     result.brand = stringValue(structuredBrand) || findSpecificationValue(structuredSpecs, /^(?:бренд|торговая марка|brand|品牌|商标)$/iu) || undefined;
     result.manufacturer = stringValue(structuredManufacturer) || findSpecificationValue(structuredSpecs, /^(?:производитель|изготовитель|manufacturer|maker|producer|厂家)$/iu) || undefined;
-    result.gtin = normalizeImportedGtin(stringValue(structuredGtin) || findSpecificationValue(structuredSpecs, /^(?:gtin|ean|ean-?13|штрихкод|barcode|global trade item number)$/iu)) || undefined;
-    result.mpn = stringValue(structuredMpn) || findSpecificationValue(structuredSpecs, /^(?:mpn|номер модели|модель|manufacturer part number|model number)$/iu) || undefined;
+    result.gtin = normalizeImportedGtin(stringValue(structuredGtin) || findSpecificationValue(structuredSpecs, /^(?:gtin|ean|ean-?13|штрихкод|barcode|global trade item number|条形码|条码)$/iu)) || undefined;
+    result.mpn = stringValue(structuredMpn) || findSpecificationValue(structuredSpecs, /^(?:mpn|номер модели|модель|manufacturer part number|model number|型号)$/iu) || undefined;
   }
 
   const metaField = (names: string[]): string => {
@@ -710,8 +710,8 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
 
   result.brand ||= findSpecificationValue(result.specifications, /^(?:бренд|торговая марка|brand|品牌|商标)$/iu) || undefined;
   result.manufacturer ||= findSpecificationValue(result.specifications, /^(?:производитель|изготовитель|manufacturer|maker|producer|厂家)$/iu) || undefined;
-  result.gtin ||= normalizeImportedGtin(findSpecificationValue(result.specifications, /^(?:gtin|ean|ean-?13|штрихкод|barcode|global trade item number)$/iu)) || undefined;
-  result.mpn ||= findSpecificationValue(result.specifications, /^(?:mpn|номер модели|модель|manufacturer part number|model number)$/iu) || undefined;
+  result.gtin ||= normalizeImportedGtin(findSpecificationValue(result.specifications, /^(?:gtin|ean|ean-?13|штрихкод|barcode|global trade item number|条形码|条码)$/iu)) || undefined;
+  result.mpn ||= findSpecificationValue(result.specifications, /^(?:mpn|номер модели|модель|manufacturer part number|model number|型号)$/iu) || undefined;
 
   // Создаем концентрированный сниппет для ИИ Gemini
   let snippet = '';

@@ -71,6 +71,25 @@ test('extracts Google manufacturer fields from translated specifications', () =>
   assert.equal(parsed.mpn, 'MDY-11-EZ');
 });
 
+test('extracts Google manufacturer fields from Chinese-labeled specifications', () => {
+  const parsed = extractStructuredFromHtmlOrJson(`window.context = {
+    "data": {
+      "subject": "Товар",
+      "featureAttributes": [
+        { "name": "品牌", "value": "Xiaomi" },
+        { "name": "厂家", "value": "Xiaomi Technology" },
+        { "name": "条形码", "value": "4006381333931" },
+        { "name": "型号", "value": "MDY-11-EZ" }
+      ]
+    }
+  };`);
+
+  assert.equal(parsed.brand, 'Xiaomi');
+  assert.equal(parsed.manufacturer, 'Xiaomi Technology');
+  assert.equal(parsed.gtin, '4006381333931');
+  assert.equal(parsed.mpn, 'MDY-11-EZ');
+});
+
 test('rejects company names as product titles', () => {
   assert.equal(isLikelyProductTitle('ACME Company Limited'), false);
   assert.equal(isLikelyProductTitle('Мужская хлопковая футболка'), true);

@@ -4539,6 +4539,10 @@ app.post('/api/add-product', (req, res, next) => {
       preserve_reviewed_data = false,
       preserve_source_title = false,
       automatic_ai = false,
+      brand = '',
+      manufacturer = '',
+      gtin = '',
+      mpn = '',
     } = req.body;
 
     if (typeof raw_html_text !== 'string' || typeof raw_text !== 'string') {
@@ -4777,10 +4781,18 @@ app.post('/api/add-product', (req, res, next) => {
     }
     finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, specificationsToProcess, finalDeliveryType, finalCategory);
     const categoryId = resolveCategoryId(finalCategory);
-    const importedBrand = normalizeOptionalProductText(structuredMedia.brand, 100);
-    const importedManufacturer = normalizeOptionalProductText(structuredMedia.manufacturer, 150);
-    const importedGtin = normalizeGtin(structuredMedia.gtin);
-    const importedMpn = normalizeOptionalProductText(structuredMedia.mpn, 100);
+    const importedBrand = normalizeOptionalProductText(brand, 100)
+      || normalizeOptionalProductText(structuredMedia.brand, 100)
+      || normalizeOptionalProductText(specificationsToProcess.find((item) => /^(?:бренд|торговая марка|brand|品牌|商标)$/iu.test(item.name.trim()))?.value, 100);
+    const importedManufacturer = normalizeOptionalProductText(manufacturer, 150)
+      || normalizeOptionalProductText(structuredMedia.manufacturer, 150)
+      || normalizeOptionalProductText(specificationsToProcess.find((item) => /^(?:производитель|изготовитель|manufacturer|maker|producer|厂家)$/iu.test(item.name.trim()))?.value, 150);
+    const importedGtin = normalizeGtin(gtin)
+      || normalizeGtin(structuredMedia.gtin)
+      || normalizeGtin(specificationsToProcess.find((item) => /^(?:gtin|ean|ean-?13|штрихкод|barcode|global trade item number|条形码|条码)$/iu.test(item.name.trim()))?.value);
+    const importedMpn = normalizeOptionalProductText(mpn, 100)
+      || normalizeOptionalProductText(structuredMedia.mpn, 100)
+      || normalizeOptionalProductText(specificationsToProcess.find((item) => /^(?:mpn|номер модели|модель|manufacturer part number|model number|型号)$/iu.test(item.name.trim()))?.value, 100);
 
     // Генерируем уникальный артикул базового товара
     const baseSku = generateBaseSku(categoryId);
