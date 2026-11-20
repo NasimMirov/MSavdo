@@ -1,6 +1,5 @@
 const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
-const defaultApiBaseUrl = import.meta.env.DEV ? '' : 'https://api.msavdo.shop';
-const apiBaseUrl = (configuredApiBaseUrl || defaultApiBaseUrl).replace(/\/+$/, '');
+const apiBaseUrl = import.meta.env.DEV ? (configuredApiBaseUrl || '') : '';
 
 export function apiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) return path;

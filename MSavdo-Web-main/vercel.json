@@ -12,6 +12,7 @@
     }
   ],
   "rewrites": [
+    { "source": "/api/:path*", "destination": "https://api.msavdo.shop/api/:path*" },
     { "source": "/product/:path*", "destination": "https://api.msavdo.shop/product/:path*" },
     { "source": "/catalog/:path*", "destination": "https://api.msavdo.shop/catalog/:path*" },
     { "source": "/sitemap.xml", "destination": "https://api.msavdo.shop/sitemap.xml" },
