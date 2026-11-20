@@ -32,6 +32,10 @@ export interface SemanticAnalysisResult {
 export interface ExtractedHtmlContext {
   title?: string;
   categoryHint?: string;
+  brand?: string;
+  manufacturer?: string;
+  gtin?: string;
+  mpn?: string;
   images: string[];
   videoUrl?: string;
   videoUrls: string[];
@@ -155,6 +159,22 @@ function findFieldValue(objects: Record<string, any>[], fieldNames: string[]): u
     }
   }
   return undefined;
+}
+
+function findSpecificationValue(
+  specifications: Array<{ name: string; value: string }>,
+  names: RegExp,
+): string {
+  return specifications.find((specification) => names.test(specification.name.trim()))?.value.trim() || '';
+}
+
+function normalizeImportedGtin(value: string): string {
+  const digits = value.replace(/[\s-]/g, '');
+  if (!/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(digits)) return '';
+  const checkDigit = Number(digits.at(-1));
+  const body = digits.slice(0, -1);
+  const sum = [...body].reverse().reduce((total, digit, index) => total + Number(digit) * (index % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === checkDigit ? digits : '';
 }
 
 export function isLikelyProductTitle(value: unknown): value is string {
@@ -605,7 +625,29 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
     const category = productCategory?.categoryName
       ?? findFieldValue(nestedObjects, ['categoryName', 'category_name', 'category']);
     result.categoryHint = stringValue(category) || undefined;
+
+    const structuredSpecs = result.specifications;
+    const structuredBrand = findFieldValue(nestedObjects, ['brand', 'brandName', 'brand_name']);
+    const structuredManufacturer = findFieldValue(nestedObjects, ['manufacturer', 'manufacturerName', 'manufacturer_name', 'maker', 'producer']);
+    const structuredGtin = findFieldValue(nestedObjects, ['gtin', 'gtin8', 'gtin12', 'gtin13', 'gtin14', 'ean', 'ean13', 'barcode']);
+    const structuredMpn = findFieldValue(nestedObjects, ['mpn', 'model', 'modelNumber', 'model_number', 'manufacturerPartNumber']);
+    result.brand = stringValue(structuredBrand) || findSpecificationValue(structuredSpecs, /^(?:бренд|торговая марка|brand|品牌|商标)$/iu) || undefined;
+    result.manufacturer = stringValue(structuredManufacturer) || findSpecificationValue(structuredSpecs, /^(?:производитель|изготовитель|manufacturer|maker|producer|厂家)$/iu) || undefined;
+    result.gtin = normalizeImportedGtin(stringValue(structuredGtin) || findSpecificationValue(structuredSpecs, /^(?:gtin|ean|ean-?13|штрихкод|barcode|global trade item number)$/iu)) || undefined;
+    result.mpn = stringValue(structuredMpn) || findSpecificationValue(structuredSpecs, /^(?:mpn|номер модели|модель|manufacturer part number|model number)$/iu) || undefined;
   }
+
+  const metaField = (names: string[]): string => {
+    for (const name of names) {
+      const match = rawInput.match(new RegExp(`<meta[^>]+(?:name|property)=["']${name}["'][^>]+content=["']([^"']+)["']`, 'i'));
+      if (match?.[1]) return decodeHtmlEntities(match[1]);
+    }
+    return '';
+  };
+  result.brand ||= metaField(['product:brand', 'brand']);
+  result.manufacturer ||= metaField(['product:manufacturer', 'manufacturer']);
+  result.gtin ||= normalizeImportedGtin(metaField(['product:gtin', 'gtin', 'ean', 'barcode']));
+  result.mpn ||= metaField(['product:mpn', 'mpn', 'model']);
 
   const videoUrlMatches = rawInput.matchAll(/(?:videoUrl|playUrl|video_url|videoAddress|mediaUrl)\s*["']?\s*[:=]\s*["']([^"']+)["']/gi);
   for (const match of videoUrlMatches) {
@@ -665,6 +707,11 @@ export function extractStructuredFromHtmlOrJson(rawInput: string): ExtractedHtml
       }
     }
   }
+
+  result.brand ||= findSpecificationValue(result.specifications, /^(?:бренд|торговая марка|brand|品牌|商标)$/iu) || undefined;
+  result.manufacturer ||= findSpecificationValue(result.specifications, /^(?:производитель|изготовитель|manufacturer|maker|producer|厂家)$/iu) || undefined;
+  result.gtin ||= normalizeImportedGtin(findSpecificationValue(result.specifications, /^(?:gtin|ean|ean-?13|штрихкод|barcode|global trade item number)$/iu)) || undefined;
+  result.mpn ||= findSpecificationValue(result.specifications, /^(?:mpn|номер модели|модель|manufacturer part number|model number)$/iu) || undefined;
 
   // Создаем концентрированный сниппет для ИИ Gemini
   let snippet = '';

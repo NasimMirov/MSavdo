@@ -4559,6 +4559,10 @@ app.post('/api/add-product', (req, res, next) => {
       if (typeof structured_data.category_hint === 'string') {
         structuredMedia.categoryHint = structured_data.category_hint.trim().slice(0, 500);
       }
+      if (typeof structured_data.brand === 'string') structuredMedia.brand = structured_data.brand.trim().slice(0, 100);
+      if (typeof structured_data.manufacturer === 'string') structuredMedia.manufacturer = structured_data.manufacturer.trim().slice(0, 150);
+      if (typeof structured_data.gtin === 'string') structuredMedia.gtin = structured_data.gtin.trim().slice(0, 32);
+      if (typeof structured_data.mpn === 'string') structuredMedia.mpn = structured_data.mpn.trim().slice(0, 100);
       if (Array.isArray(structured_data.specifications)) {
         structuredMedia.specifications = structured_data.specifications
           .filter((item: any) => item && typeof item.name === 'string' && typeof item.value === 'string')
@@ -4773,6 +4777,10 @@ app.post('/api/add-product', (req, res, next) => {
     }
     finalDesc = buildBilingualProductDescription(finalDesc, finalTitle, specificationsToProcess, finalDeliveryType, finalCategory);
     const categoryId = resolveCategoryId(finalCategory);
+    const importedBrand = normalizeOptionalProductText(structuredMedia.brand, 100);
+    const importedManufacturer = normalizeOptionalProductText(structuredMedia.manufacturer, 150);
+    const importedGtin = normalizeGtin(structuredMedia.gtin);
+    const importedMpn = normalizeOptionalProductText(structuredMedia.mpn, 100);
 
     // Генерируем уникальный артикул базового товара
     const baseSku = generateBaseSku(categoryId);
@@ -4797,9 +4805,9 @@ app.post('/api/add-product', (req, res, next) => {
     // Сохраняем товар в базу со всеми фото, видео и характеристиками
     const specsJson = JSON.stringify(specificationsToProcess);
     const prodInsert = db.prepare(`
-      INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(finalTitle, finalDesc, original_link, categoryId, baseSku, importedProductStatus, finalDeliveryType, mainImage, allImages, primaryVideoUrl, JSON.stringify(importedVideos), primaryVideoUrl, specsJson);
+      INSERT INTO products (title, description, original_link, category_id, base_sku, brand, manufacturer, gtin, mpn, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(finalTitle, finalDesc, original_link, categoryId, baseSku, importedBrand, importedManufacturer, importedGtin, importedMpn, importedProductStatus, finalDeliveryType, mainImage, allImages, primaryVideoUrl, JSON.stringify(importedVideos), primaryVideoUrl, specsJson);
 
     const productId = Number(prodInsert.lastInsertRowid);
 
@@ -4906,6 +4914,10 @@ app.post('/api/add-product', (req, res, next) => {
         volume_m3: productVolumeM3,
         estimated_shipping_tjs: calculatePriceTjs(0, finalWeight, productVolumeM3),
         delivery_type: finalDeliveryType,
+        brand: importedBrand || '',
+        manufacturer: importedManufacturer || '',
+        gtin: importedGtin || '',
+        mpn: importedMpn || '',
         youtube_url: cleanYoutubeUrl,
         specifications: specificationsToProcess,
         variants_count: createdVariants.length,
@@ -5105,6 +5117,10 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       category_id: resolveCategoryId(analysis.category_name),
       delivery_type: delivery_type === 'stock' ? 'stock' : 'order',
       status: 'draft',
+      brand: normalizeOptionalProductText(structured.brand, 100) || '',
+      manufacturer: normalizeOptionalProductText(structured.manufacturer, 150) || '',
+      gtin: normalizeGtin(structured.gtin) || '',
+      mpn: normalizeOptionalProductText(structured.mpn, 100) || '',
     };
 
     // Если запрошено прямое сохранение в каталог
@@ -5116,14 +5132,18 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
       const specsJson = JSON.stringify(combinedSpecs);
 
       const prodInsert = db.prepare(`
-        INSERT INTO products (title, description, original_link, category_id, base_sku, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO products (title, description, original_link, category_id, base_sku, brand, manufacturer, gtin, mpn, status, delivery_type, main_image, images, video_url, video_urls, youtube_url, specifications)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         finalProduct.title,
         finalProduct.description,
         normalizedOriginalLink,
         categoryId,
         baseSku,
+        finalProduct.brand,
+        finalProduct.manufacturer,
+        finalProduct.gtin,
+        finalProduct.mpn,
         finalProduct.status,
         finalProduct.delivery_type,
         mainImg,

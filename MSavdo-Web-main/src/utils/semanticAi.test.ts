@@ -30,18 +30,45 @@ test('prefers the product h1 over the company page title', () => {
   assert.equal(parsed.title, 'Умный датчик температуры');
 });
 
-test('extracts the source product category from structured marketplace data', () => {
+test('extracts the source category and Google manufacturer fields', () => {
   const parsed = extractStructuredFromHtmlOrJson(`window.context = {
     "company": { "categoryName": "Женская одежда" },
     "data": {
       "offerDetail": {
         "subject": "Понижающий DC-DC преобразователь",
-        "categoryName": "Источники питания и DC-DC модули"
+        "categoryName": "Источники питания и DC-DC модули",
+        "brand": "Xiaomi",
+        "manufacturer": "Xiaomi Technology",
+        "gtin": "4006381333931",
+        "mpn": "MDY-11-EZ"
       }
     }
   };`);
 
   assert.equal(parsed.categoryHint, 'Источники питания и DC-DC модули');
+  assert.equal(parsed.brand, 'Xiaomi');
+  assert.equal(parsed.manufacturer, 'Xiaomi Technology');
+  assert.equal(parsed.gtin, '4006381333931');
+  assert.equal(parsed.mpn, 'MDY-11-EZ');
+});
+
+test('extracts Google manufacturer fields from translated specifications', () => {
+  const parsed = extractStructuredFromHtmlOrJson(`window.context = {
+    "data": {
+      "subject": "Товар",
+      "featureAttributes": [
+        { "name": "Бренд", "value": "Xiaomi" },
+        { "name": "Производитель", "value": "Xiaomi Technology" },
+        { "name": "EAN", "value": "4006381333931" },
+        { "name": "Номер модели", "value": "MDY-11-EZ" }
+      ]
+    }
+  };`);
+
+  assert.equal(parsed.brand, 'Xiaomi');
+  assert.equal(parsed.manufacturer, 'Xiaomi Technology');
+  assert.equal(parsed.gtin, '4006381333931');
+  assert.equal(parsed.mpn, 'MDY-11-EZ');
 });
 
 test('rejects company names as product titles', () => {

@@ -303,6 +303,10 @@ export const ImportProductModal: React.FC<ImportProductModalProps> = ({
         body: JSON.stringify({
           title: parsedPreview.title,
           description: parsedPreview.description,
+          brand: parsedPreview.brand || '',
+          manufacturer: parsedPreview.manufacturer || '',
+          gtin: parsedPreview.gtin || '',
+          mpn: parsedPreview.mpn || '',
           category_name: parsedPreview.category_name,
           weight_kg: parsedPreview.weight_kg,
           price_cny: parsedPreview.variants?.[0]?.price_cny,
