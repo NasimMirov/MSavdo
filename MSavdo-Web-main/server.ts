@@ -3644,16 +3644,7 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
     const products = db.prepare(`
       SELECT p.id, p.base_sku, p.title, p.category_id, p.status, p.delivery_type,
              p.main_image, p.original_link, p.views_count, p.discount_percent,
-             c.name as category_name,
-             (SELECT COUNT(*) FROM product_variants v WHERE v.product_id = p.id) AS variant_count,
-             COALESCE((SELECT MIN(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS min_price_tjs,
-             COALESCE((SELECT MAX(v.price_tjs) FROM product_variants v WHERE v.product_id = p.id AND v.price_tjs > 0), 0) AS max_price_tjs,
-             CASE
-               WHEN p.specifications IS NULL OR p.specifications = '' THEN 0
-               WHEN json_valid(p.specifications) AND json_type(p.specifications) = 'array' THEN json_array_length(p.specifications)
-               WHEN json_valid(p.specifications) AND json_type(p.specifications) = 'object' THEN (SELECT COUNT(*) FROM json_each(p.specifications))
-               ELSE 0
-             END AS specification_count
+             c.name as category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       WHERE (p.status IS NULL OR p.status != 'deleted')
@@ -3661,6 +3652,38 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
       LIMIT ? OFFSET ?
     `).all(limit, offset) as any[];
     return res.json({ products: products.map((p) => ({ ...p, delivery_type: p.delivery_type || 'order' })), total, limit, offset, has_more: offset + products.length < total });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/admin/products/metrics', requireAdmin, (req, res) => {
+  try {
+    const ids = String(req.query.ids || '').split(',').map(Number);
+    if (!ids.length || ids.length > 100 || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+      return res.status(400).json({ error: 'Некорректный список товаров.' });
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    const variants = db.prepare(`
+      SELECT product_id, COUNT(*) AS variant_count,
+             COALESCE(MIN(CASE WHEN price_tjs > 0 THEN price_tjs END), 0) AS min_price_tjs,
+             COALESCE(MAX(CASE WHEN price_tjs > 0 THEN price_tjs END), 0) AS max_price_tjs
+      FROM product_variants WHERE product_id IN (${placeholders}) GROUP BY product_id
+    `).all(...ids) as any[];
+    const products = db.prepare(`SELECT id, specifications FROM products WHERE id IN (${placeholders})`).all(...ids) as any[];
+    const metrics = Object.fromEntries(ids.map((id) => [id, { variant_count: 0, min_price_tjs: 0, max_price_tjs: 0, specification_count: 0 }]));
+    for (const variant of variants) {
+      Object.assign(metrics[variant.product_id], variant);
+    }
+    for (const product of products) {
+      try {
+        const specs = JSON.parse(product.specifications || '[]');
+        metrics[product.id].specification_count = Array.isArray(specs) ? specs.length : specs && typeof specs === 'object' ? Object.keys(specs).length : 0;
+      } catch {
+        metrics[product.id].specification_count = 0;
+      }
+    }
+    return res.json({ metrics });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }

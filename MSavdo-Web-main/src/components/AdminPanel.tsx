@@ -506,6 +506,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     localStorage.removeItem('msavdo_admin_token');
   };
 
+  const loadAdminProductMetrics = async (products: any[]) => {
+    const ids = products.map((product) => Number(product.id)).filter((id) => Number.isSafeInteger(id) && id > 0);
+    if (!ids.length) return;
+    try {
+      const response = await adminFetch(`/api/admin/products/metrics?ids=${ids.join(',')}`, { cache: 'no-store' });
+      if (!response.ok) return;
+      const data = await response.json();
+      const metrics = data && typeof data.metrics === 'object' ? data.metrics : {};
+      setAdminProducts((current) => current.map((product) => metrics[product.id] ? { ...product, ...metrics[product.id] } : product));
+    } catch {
+      // The basic catalog remains usable when metrics are unavailable.
+    }
+  };
+
   const loadAdminProducts = async (append = false) => {
     const requestId = ++productsRequestRef.current;
     if (append) setIsLoadingMoreProducts(true);
@@ -528,6 +542,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setAdminProductsTotal(Number.isFinite(prodData.total) ? prodData.total : prodData.products.length);
       setAdminProductsHasMore(Boolean(prodData.has_more));
       setAdminProductsError('');
+      void loadAdminProductMetrics(prodData.products);
       return true;
     } catch (error) {
       if (requestId === productsRequestRef.current) {
