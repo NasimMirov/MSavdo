@@ -940,10 +940,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setNewImageUrl('');
     try {
       const response = await adminFetch(`/api/admin/products/${p.id}`, { cache: 'no-store' });
-      if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) {
-        throw new Error('Не удалось загрузить полные данные товара.');
+      const isJson = (response.headers.get('content-type') || '').includes('application/json');
+      const details = isJson ? await response.json() : null;
+      if (response.status === 401) {
+        handleLogout();
+        throw new Error('Сессия администратора истекла. Войдите снова.');
       }
-      const details = await response.json();
+      if (!response.ok) {
+        const message = typeof details?.error === 'string' ? details.error : 'Не удалось загрузить товар.';
+        throw new Error(`${message} (HTTP ${response.status})`);
+      }
+      if (!isJson) throw new Error(`Сервер вернул неверный формат данных (HTTP ${response.status}).`);
       handleOpenEditModal({ ...p, ...details });
     } catch (error) {
       showNotice(error instanceof Error ? error.message : 'Не удалось загрузить товар для редактирования.');

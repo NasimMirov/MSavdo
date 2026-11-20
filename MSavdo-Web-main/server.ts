@@ -4771,7 +4771,8 @@ app.post('/api/add-product', (req, res, next) => {
     }
 
     for (const v of variantsToProcess) {
-      const vCny = 0;
+      const parsedCny = Number(v.price_cny);
+      const vCny = Number.isFinite(parsedCny) && parsedCny > 0 ? parsedCny : 0;
       const vWeight = normalizeWeightKg(v.weight_kg) || finalWeight;
       const vVolume = Number(v.volume_m3) > 0 ? Number(v.volume_m3) : productVolumeM3;
       const vPriceTjs = 0;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeImportVariants } from './importVariants.js';
+import { classifyImportVariant, normalizeImportVariants } from './importVariants.js';
 
 test('preserves every source SKU and its identity regardless of category', () => {
   const source = Array.from({ length: 600 }, (_, index) => ({
