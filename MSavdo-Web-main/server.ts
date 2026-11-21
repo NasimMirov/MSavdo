@@ -6399,7 +6399,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       <attrs>${xmlAttributes.join('')}</attrs>
       <geometry></geometry>
       <title>${escapeXml(title)}</title>
-      <chosen_phone></chosen_phone>
+      <chosen_phone>${escapeXml(String(getSetting('whatsapp_phone', '+992038444431')).replace(/\D/g, ''))}</chosen_phone>
 `;
       const payloadHash = crypto.createHash('sha256').update(itemPayload).digest('hex');
       const previous = getSomonFeedState.get(product.id) as { payload_hash: string; last_update: string } | undefined;
