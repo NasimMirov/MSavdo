@@ -2,9 +2,9 @@
 
 The XML feed uses Somon's official location endpoint:
 
-- Bokhtar (Kurgan-Tyube): ID `513`, slug `kurgan_tyube`
-- The feed sends this location as `<district>513</district>`, as required by the XML guide.
-- The feed does not send a separate `<city>` element.
+- Bokhtar (Kurgan-Tyube): city ID `513`, slug `kurgan_tyube`
+- The feed sends this location as `<city>513</city>`.
+- Bokhtar has no district entries in the official guide, so the feed omits `<district>`.
 
 Somon documentation defines WhatsApp as its own `<whatsapp>` field. The feed
 populates it with the site's configured international phone number; this does not

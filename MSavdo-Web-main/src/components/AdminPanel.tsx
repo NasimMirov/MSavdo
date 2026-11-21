@@ -333,7 +333,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     cny_tjs_rate: '1.45',
     delivery_per_kg_tjs: '30',
     somon_city_id: '513',
-    somon_district_id: '139',
+    somon_district_id: '',
     somon_category_config: {} as Record<string, { rubric_id: string; attributes_json: string }>,
   });
   const [settingsSaved, setSettingsSaved] = useState(false);
@@ -605,7 +605,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           cny_tjs_rate: data.cny_tjs_rate || '1.45',
           delivery_per_kg_tjs: data.delivery_per_kg_tjs || '30',
           somon_city_id: data.somon_city_id || '513',
-          somon_district_id: data.somon_district_id || '139',
+          somon_district_id: data.somon_district_id || '',
           somon_category_config: data.somon_category_config || {},
         });
       })();
@@ -3206,7 +3206,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   onChange={() => setSettings({
                     ...settings,
                     somon_city_id: '513',
-                    somon_district_id: '513',
+                    somon_district_id: '',
                   })}
                   className="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm font-semibold"
                 >

@@ -5394,7 +5394,7 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
     delivery_per_kg_tjs: '30',
     cny_tjs_rate: '1.45',
-    somon_district_id: '513',
+    somon_district_id: '',
     somon_city_id: '513',
     somon_category_config: somonCategoryConfig,
     tokenplan_key_configured: Boolean(getSetting('tokenplan_api_key_encrypted', '')),
@@ -5452,7 +5452,7 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
       return res.status(400).json({ error: 'Для публикации в Somon выбран город Бохтар' });
     }
     setSetting('somon_city_id', '513');
-    setSetting('somon_district_id', '513');
+    setSetting('somon_district_id', '');
     if (somon_category_config !== undefined) {
       if (!somon_category_config || typeof somon_category_config !== 'object' || Array.isArray(somon_category_config)) {
         return res.status(400).json({ error: 'Укажите корректные настройки категорий Somon' });
@@ -6190,7 +6190,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    const districtId = '513';
+    const cityId = '513';
     const rows = db.prepare(`
       SELECT p.id, p.title, p.category_id, p.main_image, p.images,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
@@ -6226,7 +6226,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     return res.json({
       source: 'https://somon.tj/business-xml-guide/',
       guide_snapshot: '/business-xml-guide/',
-      city_id: null, district_id: districtId,
+      city_id: cityId, district_id: null,
       total_active: rows.length, publishable, skipped: rows.length - publishable, reasons,
       constraints: { title_max_length: 70, max_images: 16, image_extensions: ['.jpg', '.jpeg', '.png'], integer_price: true },
     });
@@ -6256,7 +6256,7 @@ app.get('/somon-feed.xml', (_req, res) => {
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
       : {};
-    const districtId = '513';
+    const cityId = '513';
 
     const products = db.prepare(`
       SELECT p.id, p.title, p.description, p.delivery_type, p.category_id, p.main_image, p.images,
@@ -6387,7 +6387,7 @@ app.get('/somon-feed.xml', (_req, res) => {
       <images>${imageXml}</images>
       <status>active</status>
       <rubric>${rubricId}</rubric>
-      <district>${districtId}</district>
+      <city>${cityId}</city>
       <description>${escapeXml(description)}</description>
       <price>${Math.max(0, Math.round(Number(product.price_tjs)))}</price>
       <phone_hide>0</phone_hide>
