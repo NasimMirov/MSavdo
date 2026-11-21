@@ -41,6 +41,7 @@ import {
   MessageSquare,
   Percent,
   Star,
+  Instagram,
 } from 'lucide-react';
 import { ImportProductModal } from './ImportProductModal';
 import { ExportCodeModal } from './ExportCodeModal';
@@ -349,6 +350,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [tokenPlanKeyConfigured, setTokenPlanKeyConfigured] = useState(false);
   const [tokenPlanKeyMessage, setTokenPlanKeyMessage] = useState('');
   const [tokenPlanKeySaving, setTokenPlanKeySaving] = useState(false);
+  const [instagramSettings, setInstagramSettings] = useState({ user_id: '', access_token: '', auto_publish: false });
+  const [instagramConfigured, setInstagramConfigured] = useState(false);
+  const [instagramJobs, setInstagramJobs] = useState<any[]>([]);
+  const [instagramMessage, setInstagramMessage] = useState('');
+  const [instagramSaving, setInstagramSaving] = useState(false);
   const [extensionImportKey, setExtensionImportKey] = useState('');
   const [extensionKeyMessage, setExtensionKeyMessage] = useState('');
   const [extensionKeySaving, setExtensionKeySaving] = useState(false);
@@ -595,11 +601,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     try {
       const productsPromise = loadAdminProducts();
       void loadAdminSummary();
+      const instagramPromise = loadInstagramStatus();
       const settingsPromise = (async () => {
         const response = await adminFetch('/api/admin/settings');
         if (!response.ok || !(response.headers.get('content-type') || '').includes('application/json')) return;
         const data = await response.json();
         setTokenPlanKeyConfigured(data.tokenplan_key_configured === true);
+        setInstagramSettings((current) => ({ ...current, user_id: data.instagram_user_id || '', auto_publish: data.instagram_auto_publish === true }));
+        setInstagramConfigured(data.instagram_configured === true);
         setSettings({
           whatsapp_phone: data.whatsapp_phone || '992444431',
           cny_tjs_rate: data.cny_tjs_rate || '1.45',
@@ -610,7 +619,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         });
       })();
       const categoriesPromise = apiFetch('/api/categories');
-      const [, categoriesResult] = await Promise.all([productsPromise, Promise.all([settingsPromise, categoriesPromise]).then(([_, categories]) => categories)]);
+      const [, categoriesResult] = await Promise.all([productsPromise, Promise.all([settingsPromise, categoriesPromise, instagramPromise]).then(([_, categories]) => categories)]);
       if (categoriesResult.ok && (categoriesResult.headers.get('content-type') || '').includes('application/json')) {
         const data = await categoriesResult.json();
         setCategories(data.tree || []);
@@ -868,6 +877,56 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     } catch (err) {
       console.error('Ошибка сохранения настроек:', err);
+    }
+  };
+
+  const loadInstagramStatus = async () => {
+    try {
+      const response = await adminFetch('/api/admin/instagram', { cache: 'no-store' });
+      if (!response.ok) return;
+      const data = await response.json();
+      setInstagramConfigured(data.configured === true);
+      setInstagramSettings((current) => ({ ...current, user_id: data.user_id || '', auto_publish: data.auto_publish === true }));
+      setInstagramJobs(Array.isArray(data.jobs) ? data.jobs : []);
+    } catch {
+      setInstagramMessage('Не удалось загрузить статус Instagram.');
+    }
+  };
+
+  const saveInstagramSettings = async () => {
+    setInstagramSaving(true);
+    setInstagramMessage('');
+    try {
+      const response = await adminFetch('/api/admin/instagram/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(instagramSettings),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось сохранить Instagram настройки.');
+      setInstagramSettings((current) => ({ ...current, access_token: '' }));
+      setInstagramConfigured(true);
+      setInstagramMessage('Настройки Instagram сохранены. Новые активные товары будут публиковаться автоматически.');
+      await loadInstagramStatus();
+    } catch (error) {
+      setInstagramMessage(error instanceof Error ? error.message : 'Не удалось сохранить Instagram настройки.');
+    } finally {
+      setInstagramSaving(false);
+    }
+  };
+
+  const testInstagramConnection = async () => {
+    setInstagramSaving(true);
+    setInstagramMessage('Проверка подключения Instagram…');
+    try {
+      const response = await adminFetch('/api/admin/instagram/test', { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Instagram недоступен.');
+      setInstagramMessage(`Подключение работает: @${data.username || data.id}.`);
+    } catch (error) {
+      setInstagramMessage(error instanceof Error ? error.message : 'Instagram недоступен.');
+    } finally {
+      setInstagramSaving(false);
     }
   };
 
@@ -3084,6 +3143,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               {backupDownloading ? 'Создание и скачивание…' : 'Скачать резервную копию'}
             </button>
             {backupError && <p role="alert" className="text-xs text-red-700">{backupError}</p>}
+          </section>
+          <section className="space-y-3 rounded-2xl border border-pink-200 bg-pink-50 p-4">
+            <h3 className="flex items-center gap-2 font-bold text-slate-800"><Instagram className="h-4 w-4 text-pink-600" /> Автопубликация товаров в Instagram</h3>
+            <p className="text-xs text-slate-600">Работает для Instagram Business или Creator через официальный Meta Graph API. После активации товара сервер автоматически создаёт публикацию с первым фото, ценой и ссылкой на товар.</p>
+            <label className="block text-xs font-bold text-slate-700">Instagram professional account ID
+              <input value={instagramSettings.user_id} onChange={(event) => setInstagramSettings({ ...instagramSettings, user_id: event.target.value })} inputMode="numeric" placeholder="Например: 17841400000000000" className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm font-normal" />
+            </label>
+            <label className="block text-xs font-bold text-slate-700">Долгоживущий access token
+              <input type="password" autoComplete="off" value={instagramSettings.access_token} onChange={(event) => setInstagramSettings({ ...instagramSettings, access_token: event.target.value })} placeholder={instagramConfigured ? 'Оставьте пустым, чтобы сохранить текущий токен' : 'Вставьте токен Meta'} className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm font-normal" />
+            </label>
+            <label className="flex items-center gap-2 text-xs font-bold text-slate-700"><input type="checkbox" checked={instagramSettings.auto_publish} onChange={(event) => setInstagramSettings({ ...instagramSettings, auto_publish: event.target.checked })} /> Публиковать новые активные товары автоматически</label>
+            <div className="flex flex-wrap gap-2"><button type="button" disabled={instagramSaving} onClick={() => void saveInstagramSettings()} className="rounded-xl bg-pink-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{instagramSaving ? 'Сохранение…' : 'Сохранить настройки'}</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void testInstagramConnection()} className="rounded-xl border border-pink-300 px-4 py-2 text-xs font-bold text-pink-800 disabled:opacity-50">Проверить подключение</button></div>
+            {instagramMessage && <p role="status" className="text-xs text-slate-700">{instagramMessage}</p>}
+            {instagramJobs.length > 0 && <div className="space-y-1 text-xs"><div className="font-bold text-slate-700">Последние публикации</div>{instagramJobs.slice(0, 8).map((job) => <div key={job.product_id} className="flex items-center justify-between gap-2 border-b border-pink-100 py-1"><span className="truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status === 'published' ? 'Опубликован' : job.status === 'failed' ? `Ошибка: ${job.error || 'проверить'}` : job.status === 'publishing' ? 'Публикуется' : 'В очереди'}</span></div>)}</div>}
           </section>
           <section className="space-y-2 rounded-2xl border border-purple-200 bg-purple-50 p-4">
             <label htmlFor="tokenplan-key" className="block font-bold text-slate-800">Ключ TokenPlan для редактора товара</label>

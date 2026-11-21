@@ -306,6 +306,14 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS idx_product_reviews_visible ON product_reviews(product_id, status, created_at);
+  CREATE TABLE IF NOT EXISTS instagram_publications (
+    product_id INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'publishing', 'published', 'failed')),
+    media_id TEXT,
+    error TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 function normalizeVideoUrls(value: unknown, fallback = ''): string[] {
@@ -1054,6 +1062,27 @@ function readTokenPlanKey(): string {
   }
 }
 
+function encryptInstagramToken(value: string): string {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', tokenPlanEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+  return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), encrypted.toString('base64url')].join('.');
+}
+
+function readInstagramToken(): string {
+  const stored = getSetting('instagram_access_token_encrypted', '');
+  if (!stored) throw new Error('Добавьте Instagram access token в настройках админки.');
+  try {
+    const [version, iv, tag, data] = stored.split('.');
+    if (version !== 'v1' || !iv || !tag || !data) throw new Error('Invalid encrypted token');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', tokenPlanEncryptionKey(), Buffer.from(iv, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tag, 'base64url'));
+    return Buffer.concat([decipher.update(Buffer.from(data, 'base64url')), decipher.final()]).toString('utf8');
+  } catch {
+    throw new Error('Не удалось прочитать Instagram token. Сохраните его заново.');
+  }
+}
+
 function validExtensionImportKey(req: express.Request): boolean {
   const token = req.get('X-Msavdo-Import-Key') || '';
   const stored = getSetting('extension_import_key_hash', '');
@@ -1081,6 +1110,156 @@ app.get('/api/extension/import-access', (req, res) => {
     ? res.json({ success: true })
     : res.status(401).json({ error: 'Ключ привязки недействителен. Создайте новый ключ в настройках админки.' });
 });
+
+const instagramGraphVersion = (process.env.INSTAGRAM_GRAPH_API_VERSION || 'v22.0').trim();
+const instagramGraphBase = `https://graph.facebook.com/${instagramGraphVersion}`;
+let instagramWorkerRunning = false;
+
+function queueInstagramProduct(productId: number): void {
+  db.prepare(`
+    INSERT INTO instagram_publications (product_id, status, error, updated_at)
+    VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP)
+    ON CONFLICT(product_id) DO UPDATE SET
+      status = CASE WHEN instagram_publications.status = 'published' THEN 'published' ELSE 'queued' END,
+      error = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.error ELSE NULL END,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(productId);
+}
+
+function instagramCaption(product: { id: number; title: string; description: string | null; price_tjs: number | null; slug?: string }): string {
+  const siteUrl = (process.env.PUBLIC_SITE_URL || 'https://msavdo.shop').replace(/\/$/, '');
+  const description = cleanProductDescription(String(product.description || ''))
+    .replace(/Ключевые слова для поиска:[\s\S]*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 700);
+  const price = Number.isFinite(Number(product.price_tjs)) && Number(product.price_tjs) > 0 ? `Цена: ${Math.round(Number(product.price_tjs))} TJS` : '';
+  return [product.title.trim(), price, description, `Заказать: ${siteUrl}/product/${product.id}`, '#msavdo #товары #Таджикистан']
+    .filter(Boolean).join('\n\n').slice(0, 2200);
+}
+
+async function instagramRequest(pathname: string, method: 'GET' | 'POST', params: Record<string, string>): Promise<Record<string, unknown>> {
+  const url = new URL(`${instagramGraphBase}${pathname}`);
+  const { access_token: accessToken, ...requestParams } = params;
+  if (method === 'GET') Object.entries(requestParams).forEach(([key, value]) => url.searchParams.set(key, value));
+  const response = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Authorization: `Bearer ${accessToken}` },
+    body: method === 'POST' ? new URLSearchParams(requestParams) : undefined,
+    signal: AbortSignal.timeout(30000),
+  });
+  const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+  if (!response.ok || body.error) {
+    const error = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : {};
+    throw new Error(`Instagram API HTTP ${response.status}: ${String(error.message || body.error || 'неизвестная ошибка')}`);
+  }
+  return body;
+}
+
+async function publishInstagramProduct(productId: number): Promise<void> {
+  const row = db.prepare(`
+    SELECT p.id, p.title, p.description,
+           MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
+           p.main_image, p.images, GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images
+    FROM products p LEFT JOIN product_variants v ON v.product_id = p.id
+    WHERE p.id = ? AND p.status = 'active' GROUP BY p.id
+  `).get(productId) as { id: number; title: string; description: string | null; price_tjs: number | null; main_image: string | null; images: string | null; variant_images: string | null } | undefined;
+  if (!row) throw new Error('Активный товар не найден.');
+  const image = getPublicProductImageUrls(row.id, row.main_image, row.images, row.variant_images ? row.variant_images.split(',') : [], 1)[0];
+  if (!image) throw new Error('У товара нет публичного изображения для Instagram.');
+  const instagramUserId = getSetting('instagram_user_id', '').trim();
+  if (!instagramUserId) throw new Error('Не указан Instagram professional account ID.');
+  const token = readInstagramToken();
+  const container = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media`, 'POST', {
+    image_url: image,
+    caption: instagramCaption(row),
+    access_token: token,
+  });
+  const creationId = typeof container.id === 'string' ? container.id : '';
+  if (!creationId) throw new Error('Instagram не вернул media container ID.');
+  let published = false;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const status = await instagramRequest(`/${encodeURIComponent(creationId)}`, 'GET', { fields: 'status_code', access_token: token });
+    if (status.status_code === 'ERROR') throw new Error('Instagram не смог обработать изображение.');
+    if (status.status_code === 'FINISHED') { published = true; break; }
+  }
+  if (!published) throw new Error('Instagram не завершил обработку изображения вовремя.');
+  const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: creationId, access_token: token });
+  const mediaId = typeof result.id === 'string' ? result.id : creationId;
+  db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
+}
+
+async function processInstagramQueue(): Promise<void> {
+  if (instagramWorkerRunning || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
+  instagramWorkerRunning = true;
+  try {
+    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE status IN ('queued', 'failed') AND attempts < 5 ORDER BY updated_at ASC LIMIT 3`).all() as Array<{ product_id: number; attempts: number }>;
+    for (const job of jobs) {
+      db.prepare("UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(job.product_id);
+      try {
+        await publishInstagramProduct(job.product_id);
+      } catch (error) {
+        db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram', job.product_id);
+      }
+    }
+  } finally {
+    instagramWorkerRunning = false;
+  }
+}
+
+app.get('/api/admin/instagram', requireAdmin, (_req, res) => {
+  const jobs = db.prepare(`
+    SELECT i.product_id, i.status, i.media_id, i.error, i.attempts, i.updated_at, p.title
+    FROM instagram_publications i JOIN products p ON p.id = i.product_id
+    ORDER BY i.updated_at DESC LIMIT 30
+  `).all();
+  return res.json({
+    configured: Boolean(getSetting('instagram_user_id', '').trim() && getSetting('instagram_access_token_encrypted', '')),
+    auto_publish: getSetting('instagram_auto_publish', '0') === '1',
+    user_id: getSetting('instagram_user_id', ''),
+    jobs,
+  });
+});
+
+app.post('/api/admin/instagram/settings', requireAdmin, async (req, res) => {
+  const userId = String(req.body?.user_id || '').trim();
+  const token = String(req.body?.access_token || '').trim();
+  const autoPublish = req.body?.auto_publish === true;
+  if (!/^\d{5,30}$/.test(userId)) return res.status(400).json({ error: 'Укажите корректный Instagram professional account ID.' });
+  if (token && token.length > 4096) return res.status(400).json({ error: 'Instagram access token слишком длинный.' });
+  if (!token && !getSetting('instagram_access_token_encrypted', '')) return res.status(400).json({ error: 'Вставьте Instagram access token.' });
+  try {
+    if (token) setSetting('instagram_access_token_encrypted', encryptInstagramToken(token));
+    setSetting('instagram_user_id', userId);
+    setSetting('instagram_auto_publish', autoPublish ? '1' : '0');
+    return res.json({ success: true, configured: true, auto_publish: autoPublish });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось сохранить Instagram настройки.' });
+  }
+});
+
+app.post('/api/admin/instagram/test', requireAdmin, async (_req, res) => {
+  try {
+    const userId = getSetting('instagram_user_id', '').trim();
+    if (!/^\d{5,30}$/.test(userId)) throw new Error('Сначала укажите Instagram professional account ID.');
+    const body = await instagramRequest(`/${encodeURIComponent(userId)}`, 'GET', { fields: 'id,username', access_token: readInstagramToken() });
+    return res.json({ success: true, id: body.id, username: body.username || '' });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Instagram недоступен.' });
+  }
+});
+
+app.post('/api/admin/instagram/queue/:id', requireAdmin, (req, res) => {
+  const productId = Number(req.params.id);
+  const product = db.prepare("SELECT id FROM products WHERE id = ? AND status = 'active'").get(productId) as { id: number } | undefined;
+  if (!product) return res.status(404).json({ error: 'Активный товар не найден.' });
+  queueInstagramProduct(productId);
+  void processInstagramQueue();
+  return res.json({ success: true, product_id: productId });
+});
+
+setInterval(() => { void processInstagramQueue(); }, 30000);
 
 if (!db.prepare('SELECT value FROM settings WHERE key = ?').get('cny_tjs_rate')) {
   setSetting('cny_tjs_rate', '1.45');
@@ -3745,6 +3924,10 @@ app.put('/api/admin/products/:id/status', requireAdmin, (req, res) => {
     if (!count.count || price.count !== count.count) return res.status(400).json({ error: 'Перед публикацией укажите цену продажи больше нуля для каждого варианта.' });
   }
   db.prepare('UPDATE products SET status = ? WHERE id = ?').run(status, id);
+  if (status === 'active' && getSetting('instagram_auto_publish', '0') === '1') {
+    queueInstagramProduct(id);
+    void processInstagramQueue();
+  }
   return res.json({ success: true, status });
 });
 
@@ -4021,6 +4204,10 @@ app.post('/api/admin/products', requireAdmin, async (req, res) => {
     `).run(cleanTitle, cleanDesc, cleanSourceLink, categoryId, baseSku, normalizeOptionalProductText(brand, 100), normalizeOptionalProductText(manufacturer, 150), normalizeGtin(gtin), normalizeOptionalProductText(mpn, 100), cleanStatus, cleanDelivery, mImage, allImages, cleanVideo, JSON.stringify(cleanVideos), cleanVideo, cleanSpecs);
 
     const productId = Number(insertProd.lastInsertRowid);
+
+    if (cleanStatus === 'active' && getSetting('instagram_auto_publish', '0') === '1') {
+      queueInstagramProduct(productId);
+    }
 
     // Сохранение вариантов
     const insertVar = db.prepare(`
@@ -4316,6 +4503,10 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       }
     }
     db.exec('COMMIT;');
+    if (cleanStatus === 'active' && getSetting('instagram_auto_publish', '0') === '1') {
+      queueInstagramProduct(id);
+      void processInstagramQueue();
+    }
     } catch (error) {
       db.exec('ROLLBACK;');
       throw error;
@@ -5398,6 +5589,9 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     somon_city_id: '513',
     somon_category_config: somonCategoryConfig,
     tokenplan_key_configured: Boolean(getSetting('tokenplan_api_key_encrypted', '')),
+    instagram_configured: Boolean(getSetting('instagram_user_id', '').trim() && getSetting('instagram_access_token_encrypted', '')),
+    instagram_user_id: getSetting('instagram_user_id', ''),
+    instagram_auto_publish: getSetting('instagram_auto_publish', '0') === '1',
   });
 });
 
