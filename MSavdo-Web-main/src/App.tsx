@@ -8,7 +8,7 @@ import { Product, Category, CartItem } from './types';
 import { ProductCard } from './components/ProductCard';
 import { ProductShareButton } from './components/ProductShareButton';
 import { ToastContainer, ToastItem } from './components/Toast';
-import { apiFetch } from './api';
+import { apiFetch, apiUrl } from './api';
 import { useI18n } from './i18n';
 import { addCartItem, mergeCartItems, MAX_CART_QUANTITY } from './utils/cart';
 import { readInitialCatalogCache, writeInitialCatalogCache } from './utils/catalogCache';
@@ -45,11 +45,17 @@ type VideoFeedProduct = Pick<Product, 'id' | 'title' | 'main_image' | 'images' |
 
 type VideoFeedItem = { product: VideoFeedProduct; src: string };
 
-function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; onOpenProduct: (product: Product) => void; onBack: () => void }) {
+const isRemoteVideoSource = (src: string) => /^https:\/\/[^/]*(taobao|alicdn|tbcdn|1688|tmall|alibaba|aliyuncs)\./i.test(src);
+
+const getVideoSource = (src: string) => isRemoteVideoSource(src)
+  ? apiUrl(`/api/video-proxy?url=${encodeURIComponent(src)}`)
+  : src;
+
+function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { products: Product[]; initialProductId?: number; onOpenProduct: (product: Product) => void; onBack: () => void }) {
   const [feedVideos, setFeedVideos] = useState<VideoFeedItem[] | null>(null);
   const [hasMoreVideos, setHasMoreVideos] = useState(false);
   const [nextVideoOffset, setNextVideoOffset] = useState(0);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(() => Math.max(0, initialProductId ? products.findIndex((product) => product.id === initialProductId) : 0));
   const [playbackRate, setPlaybackRate] = useState(1);
   const [playing, setPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
@@ -100,7 +106,7 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
     setGalleryIndex(0);
     const interval = window.setInterval(() => {
       if (galleryImages.length > 1) setGalleryIndex((index) => (index + 1) % galleryImages.length);
-    }, 4200);
+    }, 1400);
     return () => window.clearInterval(interval);
   }, [activeIndex, galleryImages.length]);
 
@@ -110,20 +116,24 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
     videoRefs.current.forEach((video, index) => {
       if (!video) return;
       video.playbackRate = playbackRate;
-      video.preload = index === activeIndex ? 'auto' : index === activeIndex + 1 ? 'auto' : index === activeIndex - 1 ? 'metadata' : 'none';
-      if (index === activeIndex && playing) {
-        if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
-          void video.play().catch(() => {
-            setPlaying(false);
-            setMediaState('blocked');
-          });
-        }
+      video.preload = index === activeIndex || index === activeIndex + 1 ? 'auto' : index === activeIndex - 1 ? 'metadata' : 'none';
+      if (index === activeIndex && playing && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        void video.play().catch(() => {
+          setPlaying(false);
+          setMediaState('blocked');
+        });
       } else if (index !== activeIndex) {
         video.pause();
         video.currentTime = 0;
       }
     });
   }, [activeIndex, videos.length, playbackRate, playing]);
+
+  useEffect(() => {
+    if (!initialProductId || !videos.length) return;
+    const targetIndex = videos.findIndex((item) => item.product.id === initialProductId);
+    if (targetIndex >= 0 && targetIndex !== activeIndex) setActiveIndex(targetIndex);
+  }, [initialProductId, videos.length, activeIndex]);
 
   useEffect(() => () => {
     if (controlsTimer.current) window.clearTimeout(controlsTimer.current);
@@ -171,7 +181,7 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
   const windowEnd = Math.min(videos.length, activeIndex + 2);
   const visibleVideos = videos.slice(windowStart, windowEnd).map((item, offset) => ({ ...item, index: windowStart + offset }));
 
-  return <section className="relative h-[calc(100dvh-3.5rem)] min-h-[20rem] w-full overflow-hidden bg-slate-950 sm:mx-auto sm:h-[calc(100dvh-4.75rem)] sm:max-w-2xl sm:rounded-2xl">
+  return <section className="relative h-[100dvh] min-h-0 w-full overflow-hidden bg-slate-950 sm:mx-auto sm:max-w-2xl sm:rounded-none">
     <div className="h-full overflow-hidden overscroll-none touch-pan-y" tabIndex={0} onWheel={handleWheel} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}
       onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'PageDown') { event.preventDefault(); move(1); } if (event.key === 'ArrowUp' || event.key === 'PageUp') { event.preventDefault(); move(-1); } }}>
       <div className="relative h-full w-full">
@@ -184,7 +194,7 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
           const isActive = index === activeIndex;
           return <article key={`${product.id}-${src}`} className={`absolute inset-0 flex h-full w-full items-center justify-center bg-slate-950 transition-transform duration-500 ease-out ${transitioning ? '' : 'will-change-transform'}`} style={{ transform: `translateY(${(index - activeIndex) * 100}%)` }} onClick={isActive ? revealControls : undefined}>
             {product.main_image && isActive && <img src={product.main_image} alt="" className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${mediaState === 'ready' ? 'opacity-0' : 'opacity-80'}`} />}
-            {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${isActive ? 1 : 0}&controls=1&playsinline=1&rel=0`} className="absolute inset-0 h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={src} poster={product.main_image || undefined} playsInline loop controls={isActive && showControls} preload={isActive ? 'auto' : index === activeIndex + 1 ? 'auto' : 'metadata'} onLoadStart={() => isActive && setMediaState('loading')} onLoadedData={(event) => { if (!isActive) return; setMediaState('ready'); setDuration(event.currentTarget.duration || 0); if (playing) void event.currentTarget.play().catch(() => { setPlaying(false); setMediaState('blocked'); }); }} onCanPlay={() => isActive && setMediaState('ready')} onWaiting={() => isActive && setMediaState('loading')} onStalled={() => isActive && setMediaState('loading')} onError={() => isActive && setMediaState('error')} onTimeUpdate={(event) => { if (isActive) setCurrentTime(event.currentTarget.currentTime); }} onPlay={() => isActive && setPlaying(true)} onPause={() => isActive && setPlaying(false)} className="absolute inset-0 h-full w-full object-contain" />}
+            {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${isActive ? 1 : 0}&controls=1&playsinline=1&rel=0`} className="absolute inset-0 h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={getVideoSource(src)} poster={product.main_image || undefined} playsInline loop controls={isActive && showControls} preload={index === activeIndex || index === activeIndex + 1 ? 'auto' : index === activeIndex - 1 ? 'metadata' : 'none'} onLoadStart={() => isActive && setMediaState('loading')} onLoadedData={(event) => { if (!isActive) return; setMediaState('ready'); setDuration(event.currentTarget.duration || 0); if (playing) void event.currentTarget.play().catch(() => { setPlaying(false); setMediaState('blocked'); }); }} onCanPlay={() => isActive && setMediaState('ready')} onWaiting={() => isActive && setMediaState('loading')} onStalled={() => isActive && setMediaState('loading')} onError={() => isActive && setMediaState('error')} onTimeUpdate={(event) => { if (isActive) setCurrentTime(event.currentTarget.currentTime); }} onPlay={() => isActive && setPlaying(true)} onPause={() => isActive && setPlaying(false)} className="absolute inset-0 h-full w-full object-contain" />}
             {isActive && mediaState !== 'ready' && !youtubeId && <div className="absolute inset-0 z-[1] flex items-center justify-center bg-slate-950/10">{mediaState === 'blocked' ? <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRefs.current[index]; if (video) void video.play().then(() => { setPlaying(true); setMediaState('ready'); }).catch(() => setMediaState('blocked')); }} className="rounded-full border border-white/30 bg-black/55 px-5 py-3 text-sm font-bold text-white backdrop-blur">Нажмите, чтобы смотреть</button> : mediaState === 'error' ? <div className="rounded-full bg-black/55 px-4 py-2 text-sm font-semibold text-white">Видео временно недоступно</div> : <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-label="Загрузка видео" />}</div>}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent" />
             <div className="absolute inset-x-0 top-0 z-10 flex items-start justify-between p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
@@ -195,11 +205,11 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
               </div>
             </div>
             {!youtubeId && isActive && showControls && duration > 0 && <div className="absolute inset-x-3 bottom-[max(6rem,calc(env(safe-area-inset-bottom)+5.5rem))] z-10 sm:inset-x-4"><label className="block rounded-full bg-black/45 px-3 py-1.5 backdrop-blur-sm" aria-label="Позиция видео"><span className="sr-only">Позиция видео</span><input type="range" min="0" max={duration} step="0.1" value={currentTime} onChange={(event) => { const nextTime = Number(event.target.value); const video = videoRefs.current[index]; if (video) video.currentTime = nextTime; setCurrentTime(nextTime); }} className="h-1.5 w-full accent-emerald-400" /></label></div>}
-            <div className="absolute inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-10 sm:inset-x-4">
-              <button type="button" onClick={() => fullProduct && onOpenProduct(fullProduct)} className="relative flex w-full items-center gap-3 overflow-hidden rounded-2xl border border-white/20 bg-slate-950/75 p-3 text-left text-white shadow-[0_12px_42px_rgba(0,0,0,0.42)] backdrop-blur-xl transition hover:border-emerald-300/50">
-                <span className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-white/10 ring-1 ring-white/20">{galleryImages.map((image, imageIndex) => <img key={image} src={image} alt="" loading={index <= activeIndex + 1 ? 'eager' : 'lazy'} className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 motion-reduce:transition-none ${imageIndex === galleryIndex ? 'opacity-100' : 'opacity-0'}`} />)}{galleryImages.length > 1 && <span className="absolute bottom-1 right-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[9px] font-bold">{galleryIndex + 1}/{galleryImages.length}</span>}</span>
-                <span className="min-w-0 flex-1"><span className="block line-clamp-2 text-sm font-semibold leading-snug">{product.title}</span><span className="mt-1 block text-base font-extrabold tracking-tight">{priceLabel}</span><span className={`mt-0.5 inline-flex items-center gap-1.5 text-[11px] font-semibold ${inStock ? 'text-emerald-300' : 'text-amber-200'}`}><span className={`h-1.5 w-1.5 rounded-full ${inStock ? 'bg-emerald-400' : 'bg-amber-300'}`} />{deliveryLabel}</span></span>
-                <span className="shrink-0 rounded-xl bg-emerald-400 px-3 py-2.5 text-xs font-extrabold text-slate-950 shadow-lg shadow-emerald-950/20">Посмотреть<br />товар</span>
+            <div className="absolute inset-x-2 bottom-[max(0.5rem,env(safe-area-inset-bottom))] z-10 sm:inset-x-4">
+              <button type="button" onClick={() => fullProduct && onOpenProduct(fullProduct)} className="relative flex max-h-24 w-full items-center gap-2 overflow-hidden rounded-xl border border-white/15 bg-slate-950/80 p-2 text-left text-white shadow-[0_8px_26px_rgba(0,0,0,0.36)] backdrop-blur-xl transition hover:border-emerald-300/50">
+                <span className="relative h-11 w-11 shrink-0 overflow-hidden rounded-lg bg-white/10 ring-1 ring-white/20">{galleryImages.map((image, imageIndex) => <img key={image} src={image} alt="" loading={imageIndex <= galleryIndex + 1 ? 'eager' : 'lazy'} className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-200 motion-reduce:transition-none ${imageIndex === galleryIndex ? 'opacity-100' : 'opacity-0'}`} />)}{galleryImages.length > 1 && <span className="absolute bottom-0.5 right-0.5 rounded-full bg-black/60 px-1 py-0.5 text-[8px] font-bold">{galleryIndex + 1}/{galleryImages.length}</span>}</span>
+                <span className="min-w-0 flex-1"><span className="block line-clamp-1 text-[11px] font-semibold leading-tight">{product.title}</span><span className="mt-1 flex items-center gap-2"><span className="text-xs font-extrabold tracking-tight">{priceLabel}</span><span className={`inline-flex items-center gap-1 text-[9px] font-semibold ${inStock ? 'text-emerald-300' : 'text-amber-200'}`}><span className={`h-1.5 w-1.5 rounded-full ${inStock ? 'bg-emerald-400' : 'bg-amber-300'}`} />{deliveryLabel}</span></span></span>
+                <span className="shrink-0 rounded-lg bg-emerald-400 px-2 py-1.5 text-[10px] font-extrabold text-slate-950">Товар</span>
               </button>
             </div>
           </article>;
@@ -233,6 +243,8 @@ function getCategoryIllustration(name: string): string {
 export default function App() {
   const { t } = useI18n();
   const [currentView, setCurrentView] = useState<'catalog' | 'rules' | 'admin' | 'faq' | 'video'>('catalog');
+  const [videoFeedProductId, setVideoFeedProductId] = useState<number | undefined>();
+  const videoHistoryEntry = useRef(false);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -361,6 +373,41 @@ export default function App() {
   const whatsappHelpUrl = `https://wa.me/${whatsappPhone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
     'Ассаламу Алайкум!'
   )}`;
+
+  const openVideoFeed = (productId?: number) => {
+    const currentState = window.history.state && typeof window.history.state === 'object' ? { ...window.history.state } : {};
+    delete currentState.msavdoProductModal;
+    delete currentState.msavdoPhotoZoom;
+    window.history.replaceState(currentState, '', window.location.href);
+    setSelectedProduct(null);
+    setVideoFeedProductId(productId);
+    if (currentView !== 'video') {
+      window.history.pushState({ ...currentState, msavdoVideoFeed: true }, '', window.location.href);
+      videoHistoryEntry.current = true;
+    }
+    setCurrentView('video');
+  };
+
+  const closeVideoFeed = () => {
+    if (videoHistoryEntry.current && window.history.state?.msavdoVideoFeed) {
+      window.history.back();
+      return;
+    }
+    setCurrentView('catalog');
+    setVideoFeedProductId(undefined);
+  };
+
+  useEffect(() => {
+    const closeOnBack = (event: PopStateEvent) => {
+      if (currentView === 'video' && !event.state?.msavdoVideoFeed) {
+        videoHistoryEntry.current = false;
+        setCurrentView('catalog');
+        setVideoFeedProductId(undefined);
+      }
+    };
+    window.addEventListener('popstate', closeOnBack);
+    return () => window.removeEventListener('popstate', closeOnBack);
+  }, [currentView]);
 
   // Открытие карточки товара с автоматическим счетчиком просмотров
   const handleOpenProduct = (p: Product) => {
@@ -839,7 +886,7 @@ export default function App() {
     ) : null;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-amber-400 selection:text-black font-sans pb-16 md:pb-0">
+    <div className={`min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-amber-400 selection:text-black font-sans ${currentView === 'video' ? 'overflow-hidden' : 'pb-16 md:pb-0'}`}>
       
       {/* Глобальные UI-уведомления (Toasts) */}
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
@@ -848,7 +895,7 @@ export default function App() {
       {/* 1. ШАПКА МАГАЗИНА: ЖЕЛТО-ЧЕРНЫЙ СТИЛЬ M.SAVDO */}
       {/* Строгая клиентская изоляция: никаких кнопок импорта или ссылок на Китай */}
       {/* ======================================================== */}
-      <header className="sticky top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md">
+      <header className={`${currentView === 'video' ? 'hidden' : 'sticky'} top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md`}>
         <div className="mx-auto flex min-h-14 max-w-7xl flex-wrap items-center gap-2 px-3 py-2 sm:min-h-[76px] sm:flex-nowrap sm:gap-6 sm:px-6 lg:px-8">
           
           <div 
@@ -951,7 +998,7 @@ export default function App() {
               <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
                 <button
                   type="button"
-                  onClick={() => setCurrentView('video')}
+                  onClick={() => openVideoFeed()}
                   aria-label={t('menuVideoFeed')}
                   title={t('menuVideoFeed')}
                   className={`hidden h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition sm:flex ${currentView === 'video' ? 'bg-slate-950 text-white' : 'bg-white/70 text-slate-900 hover:bg-white'}`}
@@ -975,7 +1022,8 @@ export default function App() {
         <Suspense fallback={null}>
           <SettingsModal isOpen onClose={closeSettings} onNavigate={(destination) => {
             setIsSettingsOpen(false);
-            setCurrentView(destination);
+            if (destination === 'video') openVideoFeed();
+            else setCurrentView(destination);
           }} />
         </Suspense>
       )}
@@ -983,7 +1031,7 @@ export default function App() {
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}
       {/* ======================================================== */}
-      <main className={`flex w-full max-w-7xl flex-1 flex-col px-2.5 sm:mx-auto sm:px-6 lg:px-8 ${currentView === 'video' ? 'h-[calc(100dvh-3.5rem)] min-h-0 px-0 pb-[env(safe-area-inset-bottom)] pt-0 sm:h-[calc(100dvh-4.75rem)] sm:px-6 sm:py-4' : `pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}`}>
+      <main className={`flex w-full max-w-7xl flex-1 flex-col px-2.5 sm:mx-auto sm:px-6 lg:px-8 ${currentView === 'video' ? 'h-[100dvh] min-h-0 max-w-none px-0 pb-0 pt-0 sm:h-[100dvh] sm:px-0 sm:py-0' : `pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}`}>
         
         {currentView === 'faq' && (
           <section className="mx-auto max-w-3xl space-y-4 py-5">
@@ -996,7 +1044,7 @@ export default function App() {
         )}
 
         {currentView === 'video' && (
-          <VideoFeed products={products} onOpenProduct={handleOpenProduct} onBack={() => setCurrentView('catalog')} />
+          <VideoFeed products={products} initialProductId={videoFeedProductId} onOpenProduct={handleOpenProduct} onBack={closeVideoFeed} />
         )}
 
         {/* ЭКРАН 1: ПРАВИЛА СЕРВИСА */}
@@ -1395,6 +1443,7 @@ export default function App() {
             product={selectedProduct}
             onClose={() => setSelectedProduct(null)}
             onAddToCart={handleAddToCart}
+            onOpenVideoFeed={(productId) => openVideoFeed(productId)}
             onOrderNow={(item) => {
               if (handleAddToCart(item)) {
                 setSelectedProduct(null);
@@ -1496,7 +1545,7 @@ export default function App() {
           type="button"
           onClick={() => {
             window.dispatchEvent(new Event('msavdo:primary-image-ready'));
-            setCurrentView('video');
+            openVideoFeed();
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           className={`flex flex-col items-center gap-1 ${currentView === 'video' ? 'text-fuchsia-400' : 'text-zinc-400'}`}

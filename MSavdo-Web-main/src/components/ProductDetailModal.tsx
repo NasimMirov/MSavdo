@@ -13,6 +13,7 @@ interface ProductDetailModalProps {
   onClose: () => void;
   onAddToCart: (item: CartItem) => boolean;
   onOrderNow: (item: CartItem) => void;
+  onOpenVideoFeed?: (productId: number) => void;
   onSelectRelatedProduct: (product: Product) => void;
 }
 
@@ -21,6 +22,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
   onClose,
   onAddToCart,
   onOrderNow,
+  onOpenVideoFeed,
   onSelectRelatedProduct,
 }) => {
   const { t } = useI18n();
@@ -426,7 +428,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 }
               }}
             >
-              {currentMedia?.type === 'video' ? (
+              {currentMedia?.type === 'video' && onOpenVideoFeed ? (
+                <button type="button" onClick={() => onOpenVideoFeed(product.id)} className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/20" aria-label={t('videoReview')}>
+                  <span className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500 text-slate-950 shadow-lg"><Play className="ml-0.5 h-5 w-5 fill-current" /></span>
+                </button>
+              ) : currentMedia?.type === 'video' ? (
                 (() => {
                   const targetVideo = currentMedia.src;
                   const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/;
@@ -505,6 +511,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    if (onOpenVideoFeed) {
+                      onOpenVideoFeed(product.id);
+                      return;
+                    }
                     const firstVideoIndex = mediaSlides.findIndex((slide) => slide.type === 'video');
                     if (firstVideoIndex >= 0) setSelectedMediaIndex(firstVideoIndex);
                     setIsPhotoZoomed(false);
@@ -540,6 +550,10 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                     <button
                       key={`${slide.type}-${slide.src}`}
                       onClick={() => {
+                        if (slide.type === 'video' && onOpenVideoFeed) {
+                          onOpenVideoFeed(product.id);
+                          return;
+                        }
                         setSelectedMediaIndex(idx);
                       }}
                       aria-pressed={isSelected}
