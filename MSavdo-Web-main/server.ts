@@ -2924,7 +2924,8 @@ app.get('/api/products', (req, res) => {
         ...p,
         main_image: publicImages[0] || '',
         images: publicImages.slice(1).join(','),
-        delivery_type: p.delivery_type || 'order',
+        delivery_type: p.delivery_type === 'stock' ? 'stock' : 'order',
+        availability: p.delivery_type === 'stock' ? 'stock' : 'order',
         video_urls: normalizeVideoUrls(p.video_urls, p.youtube_url || p.video_url || ''),
         youtube_url: p.youtube_url || p.video_url || '',
         video_url: p.youtube_url || p.video_url || '',
@@ -3026,7 +3027,8 @@ app.get('/api/products/:id', (req, res) => {
         ...product,
         main_image: publicImages[0] || '',
         images: publicImages.slice(1).join(','),
-        delivery_type: product.delivery_type || 'order',
+        delivery_type: product.delivery_type === 'stock' ? 'stock' : 'order',
+        availability: product.delivery_type === 'stock' ? 'stock' : 'order',
         video_urls: normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || ''),
         video_url: product.youtube_url || product.video_url || '',
         youtube_url: product.youtube_url || product.video_url || '',
@@ -3986,7 +3988,10 @@ app.get('/api/admin/products', requireAdmin, (req, res) => {
       ORDER BY p.id DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset) as any[];
-    return res.json({ products: products.map((p) => ({ ...p, delivery_type: p.delivery_type || 'order' })), total, limit, offset, has_more: offset + products.length < total });
+    return res.json({ products: products.map((p) => {
+      const availability = p.delivery_type === 'stock' ? 'stock' : 'order';
+      return { ...p, delivery_type: availability, availability };
+    }), total, limit, offset, has_more: offset + products.length < total });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
   }
@@ -5759,7 +5764,8 @@ app.get('/api/videos', (req, res) => {
         title: product.title,
         main_image: publicImages[0] || '',
         images: publicImages.slice(1).join(','),
-        delivery_type: product.delivery_type || 'order',
+        delivery_type: product.delivery_type === 'stock' ? 'stock' : 'order',
+        availability: product.delivery_type === 'stock' ? 'stock' : 'order',
         min_price_tjs: minPrice,
         max_price_tjs: maxPrice,
         in_stock: product.stocked_variants > 0,
@@ -6128,7 +6134,8 @@ app.post('/api/search-by-image', imageSearchRateLimiter, async (req, res) => {
       scoredProducts.push({
         ...p,
         score,
-        delivery_type: p.delivery_type || 'order',
+        delivery_type: p.delivery_type === 'stock' ? 'stock' : 'order',
+        availability: p.delivery_type === 'stock' ? 'stock' : 'order',
         video_urls: normalizeVideoUrls(p.video_urls, p.youtube_url || p.video_url || ''),
         youtube_url: p.youtube_url || p.video_url || '',
         video_url: p.youtube_url || p.video_url || '',

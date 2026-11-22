@@ -29,6 +29,8 @@ export interface Product {
   mpn?: string | null;
   status: 'active' | 'draft';
   delivery_type?: 'stock' | 'order';
+  /** Availability category: stock = in stock, order = on order. */
+  availability?: 'stock' | 'order';
   main_image: string;
   images?: string;
   video_url?: string;

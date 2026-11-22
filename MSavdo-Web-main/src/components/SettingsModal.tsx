@@ -102,10 +102,10 @@ export function SettingsModal({ isOpen, onClose, onNavigate }: SettingsModalProp
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/65 p-0 sm:items-center sm:p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-end justify-center overscroll-contain bg-slate-950/65 sm:items-center sm:p-4" onClick={onClose}>
       <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}
-        className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-3xl bg-white p-4 text-slate-900 shadow-2xl sm:rounded-3xl sm:p-6">
-        <div className="mb-5 flex items-start justify-between gap-4">
+        className="flex max-h-[calc(100dvh-env(safe-area-inset-top))] w-full max-w-xl flex-col overflow-hidden rounded-t-3xl bg-white text-slate-900 shadow-2xl sm:max-h-[calc(100dvh-2rem)] sm:rounded-3xl">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-100 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6">
           <div>
             <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">M.Savdo</p>
             <h2 id="settings-title" className="text-xl font-extrabold tracking-tight">{t('settingsTitle')}</h2>
@@ -115,7 +115,7 @@ export function SettingsModal({ isOpen, onClose, onNavigate }: SettingsModalProp
             className="rounded-full border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-100"><X className="h-5 w-5" /></button>
         </div>
 
-        <div className="space-y-5">
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain px-4 py-4 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 sm:py-5">
           <section className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{t('appearance')}</span>

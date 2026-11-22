@@ -28,6 +28,7 @@ import {
   Instagram,
   Send,
   Youtube,
+  Video,
 } from 'lucide-react';
 
 const BRAND_LOGO_URL = '/msavdo-logo.webp';
@@ -37,7 +38,7 @@ const CartDrawer = lazy(() => import('./components/CartDrawer').then((module) =>
 const RulesView = lazy(() => import('./components/RulesView').then((module) => ({ default: module.RulesView })));
 const SettingsModal = lazy(() => import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal })));
 
-type VideoFeedProduct = Pick<Product, 'id' | 'title' | 'main_image' | 'images' | 'delivery_type' | 'min_price_tjs' | 'max_price_tjs'> & {
+type VideoFeedProduct = Pick<Product, 'id' | 'title' | 'main_image' | 'images' | 'delivery_type' | 'availability' | 'min_price_tjs' | 'max_price_tjs'> & {
   in_stock?: boolean;
   variant_count?: number;
 };
@@ -166,19 +167,22 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
 
   if (videos.length === 0) return <section className="mx-auto max-w-2xl py-6"><button type="button" onClick={onBack} className="mb-4 text-sm font-semibold text-slate-600">← Каталог</button><p className="text-center text-sm text-slate-500">Видео пока нет.</p></section>;
 
-  return <section className="relative mx-auto h-[calc(100dvh-8rem)] w-full max-w-2xl overflow-hidden bg-slate-950 sm:h-[calc(100dvh-9rem)] sm:rounded-2xl">
-    <div className="h-full overflow-hidden overscroll-none" tabIndex={0} onWheel={handleWheel} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}
+  const windowStart = Math.max(0, activeIndex - 1);
+  const windowEnd = Math.min(videos.length, activeIndex + 2);
+  const visibleVideos = videos.slice(windowStart, windowEnd).map((item, offset) => ({ ...item, index: windowStart + offset }));
+
+  return <section className="relative h-full min-h-0 w-full overflow-hidden bg-slate-950 sm:mx-auto sm:max-w-2xl sm:rounded-2xl">
+    <div className="h-full overflow-hidden overscroll-none touch-pan-y" tabIndex={0} onWheel={handleWheel} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}
       onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'PageDown') { event.preventDefault(); move(1); } if (event.key === 'ArrowUp' || event.key === 'PageUp') { event.preventDefault(); move(-1); } }}>
-      <div className="h-full transition-transform duration-500 ease-out" style={{ transform: `translateY(-${activeIndex * 100}%)` }}>
-        {videos.map(({ product, src }, index) => {
-          if (Math.abs(index - activeIndex) > 1) return <article key={`${product.id}-${src}`} className="h-full min-h-full w-full bg-slate-950" />;
+      <div className="relative h-full w-full">
+        {visibleVideos.map(({ product, src, index }) => {
           const youtubeId = src.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/)?.[1];
           const fullProduct = products.find((item) => item.id === product.id);
-          const inStock = 'in_stock' in product ? product.in_stock === true : product.delivery_type === 'stock';
+          const inStock = (product.availability || product.delivery_type) === 'stock';
           const priceLabel = (product.min_price_tjs || 0) > 0 ? `${(product.min_price_tjs || 0).toLocaleString('ru-RU')}${(product.max_price_tjs || 0) > (product.min_price_tjs || 0) ? `–${(product.max_price_tjs || 0).toLocaleString('ru-RU')}` : ''} с.` : 'Цена по запросу';
-          const deliveryLabel = inStock ? 'В наличии' : product.delivery_type === 'stock' ? 'Ожидается поставка' : 'Доставка из Китая';
+          const deliveryLabel = inStock ? 'В наличии' : 'Доставка из Китая';
           const isActive = index === activeIndex;
-          return <article key={`${product.id}-${src}`} className="relative flex h-full min-h-full w-full items-center justify-center bg-slate-950" onClick={isActive ? revealControls : undefined}>
+          return <article key={`${product.id}-${src}`} className={`absolute inset-0 flex h-full w-full items-center justify-center bg-slate-950 transition-transform duration-500 ease-out ${transitioning ? '' : 'will-change-transform'}`} style={{ transform: `translateY(${(index - activeIndex) * 100}%)` }} onClick={isActive ? revealControls : undefined}>
             {product.main_image && isActive && <img src={product.main_image} alt="" className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${mediaState === 'ready' ? 'opacity-0' : 'opacity-80'}`} />}
             {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${isActive ? 1 : 0}&controls=1&playsinline=1&rel=0`} className="absolute inset-0 h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={src} poster={product.main_image || undefined} playsInline loop controls={isActive && showControls} preload={isActive ? 'auto' : index === activeIndex + 1 ? 'auto' : 'metadata'} onLoadStart={() => isActive && setMediaState('loading')} onLoadedData={(event) => { if (!isActive) return; setMediaState('ready'); setDuration(event.currentTarget.duration || 0); if (playing) void event.currentTarget.play().catch(() => { setPlaying(false); setMediaState('blocked'); }); }} onCanPlay={() => isActive && setMediaState('ready')} onWaiting={() => isActive && setMediaState('loading')} onStalled={() => isActive && setMediaState('loading')} onError={() => isActive && setMediaState('error')} onTimeUpdate={(event) => { if (isActive) setCurrentTime(event.currentTarget.currentTime); }} onPlay={() => isActive && setPlaying(true)} onPause={() => isActive && setPlaying(false)} className="absolute inset-0 h-full w-full object-contain" />}
             {isActive && mediaState !== 'ready' && !youtubeId && <div className="absolute inset-0 z-[1] flex items-center justify-center bg-slate-950/10">{mediaState === 'blocked' ? <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRefs.current[index]; if (video) void video.play().then(() => { setPlaying(true); setMediaState('ready'); }).catch(() => setMediaState('blocked')); }} className="rounded-full border border-white/30 bg-black/55 px-5 py-3 text-sm font-bold text-white backdrop-blur">Нажмите, чтобы смотреть</button> : mediaState === 'error' ? <div className="rounded-full bg-black/55 px-4 py-2 text-sm font-semibold text-white">Видео временно недоступно</div> : <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-label="Загрузка видео" />}</div>}
@@ -845,7 +849,7 @@ export default function App() {
       {/* Строгая клиентская изоляция: никаких кнопок импорта или ссылок на Китай */}
       {/* ======================================================== */}
       <header className="sticky top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-14 sm:min-h-[76px] py-2 flex items-center gap-2 sm:gap-6">
+        <div className="mx-auto flex min-h-14 max-w-7xl flex-wrap items-center gap-2 px-3 py-2 sm:min-h-[76px] sm:flex-nowrap sm:gap-6 sm:px-6 lg:px-8">
           
           <div 
             onClick={() => {
@@ -944,7 +948,17 @@ export default function App() {
               )}
             </div>
           )}
-              <div className="ml-auto flex shrink-0 items-center gap-0.5">
+              <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentView('video')}
+                  aria-label={t('menuVideoFeed')}
+                  title={t('menuVideoFeed')}
+                  className={`hidden h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition sm:flex ${currentView === 'video' ? 'bg-slate-950 text-white' : 'bg-white/70 text-slate-900 hover:bg-white'}`}
+                >
+                  <Video className="h-4 w-4" />
+                  <span>{t('menuVideoFeed')}</span>
+                </button>
                 <button
                   type="button"
                   onClick={() => setIsSettingsOpen(true)}
@@ -969,7 +983,7 @@ export default function App() {
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}
       {/* ======================================================== */}
-      <main className={`flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 pb-2.5 sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}>
+      <main className={`flex w-full max-w-7xl flex-1 flex-col px-2.5 sm:mx-auto sm:px-6 lg:px-8 ${currentView === 'video' ? 'min-h-0 px-0 pb-[env(safe-area-inset-bottom)] pt-0 sm:px-6 sm:py-4' : `pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}`}>
         
         {currentView === 'faq' && (
           <section className="mx-auto max-w-3xl space-y-4 py-5">
@@ -1450,7 +1464,7 @@ export default function App() {
           )}
         </>
       )}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-black text-white border-t border-zinc-800 px-4 py-2 flex items-center justify-around shadow-2xl">
+      <div className={`${currentView === 'video' ? 'hidden' : 'flex'} fixed bottom-0 left-0 right-0 z-40 items-center justify-around border-t border-zinc-800 bg-black px-4 py-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] text-white shadow-2xl md:hidden`}>
         <button
           onClick={() => {
             window.dispatchEvent(new Event('msavdo:primary-image-ready'));
@@ -1476,6 +1490,20 @@ export default function App() {
         >
           <Search className="w-4 h-4" />
           <span className="text-[10px] font-bold">{t('search')}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            window.dispatchEvent(new Event('msavdo:primary-image-ready'));
+            setCurrentView('video');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          className={`flex flex-col items-center gap-1 ${currentView === 'video' ? 'text-fuchsia-400' : 'text-zinc-400'}`}
+          aria-label={t('menuVideoFeed')}
+        >
+          <Video className="h-4 w-4" />
+          <span className="text-[10px] font-bold">{t('menuVideoFeed')}</span>
         </button>
 
         <div className="relative flex flex-col items-center gap-1">
@@ -1514,7 +1542,7 @@ export default function App() {
       {/* ======================================================== */}
       {/* 5. ФУТЕР (ПРЕМИАЛЬНЫЙ ЖЕЛТО-ЧЕРНЫЙ БРЕНДИНГ + СКРЫТЫЙ СЛУЖЕБНЫЙ ВХОД) */}
       {/* ======================================================== */}
-      <footer className="bg-black text-white border-t border-zinc-800 mt-16 pt-8 pb-24 md:pb-8">
+      <footer className={`${currentView === 'video' ? 'hidden' : 'block'} mt-16 border-t border-zinc-800 bg-black pt-8 pb-24 text-white md:pb-8`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-zinc-400">
           
           <div className="flex items-center gap-3">

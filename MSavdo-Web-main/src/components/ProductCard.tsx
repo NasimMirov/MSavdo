@@ -60,7 +60,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         : `Discounts from ${minimum} pcs up to ${maximum}%`;
     })();
 
-  const isStock = product.delivery_type === 'stock';
+  // Availability category is the single source for the public status.
+  const isStock = (product.availability || product.delivery_type) === 'stock';
   const productSlug = product.title
     .normalize('NFC')
     .toLowerCase()
