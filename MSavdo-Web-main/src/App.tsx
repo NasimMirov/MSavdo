@@ -983,7 +983,7 @@ export default function App() {
       {/* ======================================================== */}
       {/* 2. ОСНОВНОЙ КОНТЕНТ */}
       {/* ======================================================== */}
-      <main className={`flex w-full max-w-7xl flex-1 flex-col px-2.5 sm:mx-auto sm:px-6 lg:px-8 ${currentView === 'video' ? 'min-h-0 px-0 pb-[env(safe-area-inset-bottom)] pt-0 sm:px-6 sm:py-4' : `pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}`}>
+      <main className={`flex w-full max-w-7xl flex-1 flex-col px-2.5 sm:mx-auto sm:px-6 lg:px-8 ${currentView === 'video' ? 'h-[calc(100dvh-3.5rem)] min-h-0 px-0 pb-[env(safe-area-inset-bottom)] pt-0 sm:h-[calc(100dvh-4.75rem)] sm:px-6 sm:py-4' : `pb-[calc(4rem+env(safe-area-inset-bottom))] sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}`}>
         
         {currentView === 'faq' && (
           <section className="mx-auto max-w-3xl space-y-4 py-5">
