@@ -73,12 +73,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   return (
     <article 
       onClick={() => onSelect(product)}
-      className="group flex min-w-0 cursor-pointer flex-col overflow-hidden rounded-lg border border-emerald-950/10 bg-white shadow-[0_2px_10px_rgba(24,52,35,0.05)] transition-colors hover:border-emerald-700/50"
+      className="group flex min-w-0 cursor-pointer flex-col overflow-hidden rounded-sm border border-slate-200 bg-white transition-colors hover:border-amber-400"
     >
       {/* Изображение */}
-      <div className="relative aspect-square overflow-hidden bg-[#f0f4ed] flex items-center justify-center">
+      <div className="relative aspect-square overflow-hidden bg-slate-100 flex items-center justify-center">
         {!imageLoaded && !imageError && (
-          <div className="absolute inset-0 bg-[#e4ebe0] animate-pulse" />
+          <div className="absolute inset-0 bg-slate-200 animate-pulse" />
         )}
 
         {product.main_image && !imageError ? (
@@ -115,32 +115,32 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             />
           </a>
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center bg-[#f0f4ed] text-slate-400 p-4 text-center">
+          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-400 p-4 text-center">
             <span className="text-xs font-semibold text-slate-500 font-heading">M.Savdo Gallery</span>
           </div>
         )}
 
         {/* Срок доставки */}
         {isStock ? (
-          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] items-center gap-0.5 rounded-sm bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold leading-tight text-emerald-800">
+          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] items-center gap-0.5 rounded-sm bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold leading-tight text-amber-950">
             <Truck className="w-2.5 h-2.5 shrink-0" />
             <span className="min-w-0 leading-tight">{t('inStockOneDay')}</span>
           </div>
         ) : (
-          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] items-center gap-0.5 rounded-md bg-[#e8ddbd] px-1.5 py-0.5 text-[9px] font-bold leading-tight text-[#493d23]">
+          <div className="absolute bottom-1 left-1 flex max-w-[calc(100%-0.5rem)] items-center gap-0.5 rounded-md bg-[#f4c542] px-1.5 py-0.5 text-[9px] font-bold leading-tight text-black">
             <Clock className="w-2.5 h-2.5 shrink-0" />
             <span className="min-w-0 leading-tight">{t('delivery18to30')}</span>
           </div>
         )}
         {hasDiscount && (
-          <div className="absolute left-2 top-2 rounded-md bg-[#d8ead2] px-1.5 py-0.5 text-[9px] font-black text-emerald-950 shadow-sm">
+          <div className="absolute left-2 top-2 rounded-md bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-slate-950 shadow-sm">
             −{product.discount_percent}%
           </div>
         )}
 
         {/* Быстрый выбор при наведении */}
         <div className="pointer-events-none absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-          <div className="bg-emerald-700 text-white text-xs font-bold px-3.5 py-1.5 rounded-xl shadow-lg flex items-center gap-1.5 transform translate-y-2 group-hover:translate-y-0 transition-transform">
+          <div className="bg-amber-400 text-black text-xs font-bold px-3.5 py-1.5 rounded-xl shadow-lg flex items-center gap-1.5 transform translate-y-2 group-hover:translate-y-0 transition-transform">
             <Eye className="w-3.5 h-3.5" />
             <span>Выбрать</span>
           </div>
@@ -150,7 +150,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       {/* Информация о товаре */}
       <div className="flex flex-1 flex-col gap-0.5 px-2 py-1.5">
         <div>
-          <h3 className="line-clamp-2 text-[12px] font-semibold leading-[1.15] text-slate-900 transition-colors group-hover:text-emerald-700 sm:text-sm">
+          <h3 className="line-clamp-2 text-[12px] font-semibold leading-[1.15] text-slate-900 transition-colors group-hover:text-amber-700 sm:text-sm">
             <a
               href={productUrl}
               className="text-inherit no-underline"
@@ -167,7 +167,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
         </div>
 
         {quantityDealLabel && (
-          <div className="flex items-center gap-1 text-[10px] font-semibold leading-tight text-emerald-700 sm:text-xs">
+          <div className="flex items-center gap-1 text-[10px] font-semibold leading-tight text-amber-700 sm:text-xs">
             <BadgePercent className="h-3 w-3 shrink-0" aria-hidden="true" />
             <span>{quantityDealLabel}</span>
           </div>
