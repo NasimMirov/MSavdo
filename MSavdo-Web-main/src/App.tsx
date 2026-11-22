@@ -85,7 +85,7 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
     void loadVideos(0, true);
   }, [loadVideos]);
 
-  const videos = feedVideos ?? products.flatMap((product) => {
+  const videos = feedVideos?.length ? feedVideos : products.flatMap((product) => {
     const sources = [...new Set([...(Array.isArray(product.video_urls) ? product.video_urls : []), product.video_url || '', product.youtube_url || ''].map((url) => url.trim()).filter(Boolean))];
     return sources.map((src) => ({ product, src }));
   });
@@ -171,7 +171,7 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
   const windowEnd = Math.min(videos.length, activeIndex + 2);
   const visibleVideos = videos.slice(windowStart, windowEnd).map((item, offset) => ({ ...item, index: windowStart + offset }));
 
-  return <section className="relative h-full min-h-0 w-full overflow-hidden bg-slate-950 sm:mx-auto sm:max-w-2xl sm:rounded-2xl">
+  return <section className="relative h-[calc(100dvh-3.5rem)] min-h-[20rem] w-full overflow-hidden bg-slate-950 sm:mx-auto sm:h-[calc(100dvh-4.75rem)] sm:max-w-2xl sm:rounded-2xl">
     <div className="h-full overflow-hidden overscroll-none touch-pan-y" tabIndex={0} onWheel={handleWheel} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}
       onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'PageDown') { event.preventDefault(); move(1); } if (event.key === 'ArrowUp' || event.key === 'PageUp') { event.preventDefault(); move(-1); } }}>
       <div className="relative h-full w-full">
