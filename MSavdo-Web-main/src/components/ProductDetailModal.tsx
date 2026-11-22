@@ -450,7 +450,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   }
                   return (
                     <video
-                      src={/^https:\/\/[^/]*(taobao|alicdn|tbcdn|1688|tmall|alibaba|aliyuncs)\./i.test(targetVideo) ? apiUrl(`/api/video-proxy?url=${encodeURIComponent(targetVideo)}`) : targetVideo}
+                      src={targetVideo}
                       preload="metadata"
                       controls
                       autoPlay
