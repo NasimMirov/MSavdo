@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CircleHelp, Menu, Moon, Sun, Video, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleHelp, ChevronRight, LifeBuoy, Menu, MessageSquare, Moon, PackagePlus, Send, Sun, Video, X } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useI18n } from '../i18n';
 
@@ -9,12 +9,14 @@ interface SettingsModalProps {
   onNavigate?: (destination: 'rules' | 'faq' | 'video') => void;
 }
 
+type FeedbackMode = 'suggestion' | 'product' | 'error';
+
 export function SettingsModal({ isOpen, onClose, onNavigate }: SettingsModalProps) {
   const { language, setLanguage, theme, setTheme, t } = useI18n();
   const [productWish, setProductWish] = useState('');
   const [suggestion, setSuggestion] = useState('');
   const [errorReport, setErrorReport] = useState('');
-  const [feedbackMode, setFeedbackMode] = useState<'suggestion' | 'product' | 'error'>('suggestion');
+  const [feedbackMode, setFeedbackMode] = useState<FeedbackMode>('suggestion');
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState<'success' | 'error' | 'required' | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -48,9 +50,21 @@ export function SettingsModal({ isOpen, onClose, onNavigate }: SettingsModalProp
     };
   }, [isOpen, onClose]);
 
+  const setMode = (mode: FeedbackMode) => {
+    setFeedbackMode(mode);
+    setStatus(null);
+  };
+
+  const valueForMode = feedbackMode === 'suggestion' ? suggestion : feedbackMode === 'product' ? productWish : errorReport;
+  const setValueForMode = (value: string) => {
+    if (feedbackMode === 'suggestion') setSuggestion(value);
+    else if (feedbackMode === 'product') setProductWish(value);
+    else setErrorReport(value);
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!productWish.trim() && !suggestion.trim() && !errorReport.trim()) {
+    if (!valueForMode.trim()) {
       setStatus('required');
       return;
     }
@@ -79,70 +93,96 @@ export function SettingsModal({ isOpen, onClose, onNavigate }: SettingsModalProp
     }
   };
 
+  const feedbackActions: Array<{ mode: FeedbackMode; icon: React.ReactNode; title: string; description: string }> = [
+    { mode: 'suggestion', icon: <MessageSquare className="h-4 w-4" />, title: t('menuFeedback'), description: t('projectSuggestion') },
+    { mode: 'product', icon: <PackagePlus className="h-4 w-4" />, title: t('menuProductWish'), description: t('productWish') },
+    { mode: 'error', icon: <AlertTriangle className="h-4 w-4" />, title: t('errorReport'), description: t('errorReportPlaceholder') },
+  ];
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-slate-950/65 p-0 sm:items-center sm:p-4" onClick={onClose}>
       <section ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-5 text-slate-900 shadow-xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h2 id="settings-title" className="text-lg font-bold">{t('settingsTitle')}</h2>
+        className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-t-3xl bg-white p-4 text-slate-900 shadow-2xl sm:rounded-3xl sm:p-6">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-600">M.Savdo</p>
+            <h2 id="settings-title" className="text-xl font-extrabold tracking-tight">{t('settingsTitle')}</h2>
+            <p className="mt-1 text-xs text-slate-500">{t('feedbackHint')}</p>
+          </div>
           <button ref={closeRef} type="button" onClick={onClose} aria-label={t('close')}
-            className="rounded-full p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+            className="rounded-full border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-100"><X className="h-5 w-5" /></button>
         </div>
-        <div className="space-y-3">
-          <div className="text-sm font-semibold">
-            <span className="mb-1 block">{t('appearance')}</span>
-            <div className="grid grid-cols-3 gap-1 rounded-xl border border-slate-200 p-1">
+
+        <div className="space-y-5">
+          <section className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3.5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-600">{t('appearance')}</span>
+              <label className="text-xs font-medium text-slate-500">
+                <span className="sr-only">{t('language')}</span>
+                <select value={language} onChange={(event) => setLanguage(event.target.value as typeof language)}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs">
+                  <option value="ru">Русский</option><option value="tg">Тоҷикӣ</option><option value="en">English</option>
+                </select>
+              </label>
+            </div>
+            <div className="grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-white p-1">
               {(['system', 'light', 'dark'] as const).map((option) => (
-                <button key={option} type="button" onClick={() => setTheme(option)}
-                  className={`flex items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs ${theme === option ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+                <button key={option} type="button" onClick={() => setTheme(option)} aria-pressed={theme === option}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2.5 text-xs font-semibold transition ${theme === option ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}>
                   {option === 'system' ? <Menu className="h-3.5 w-3.5" /> : option === 'light' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
                   {option === 'system' ? t('systemTheme') : option === 'light' ? t('lightTheme') : t('darkTheme')}
                 </button>
               ))}
             </div>
-          </div>
-          <label className="block text-sm font-semibold">
-            <span className="mb-1 block">{t('language')}</span>
-            <select value={language} onChange={(event) => setLanguage(event.target.value as typeof language)}
-              className="w-full rounded-xl border border-slate-300 bg-white p-2 text-sm">
-              <option value="ru">Русский</option><option value="tg">Тоҷикӣ</option><option value="en">English</option>
-            </select>
-          </label>
-          <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
-            <button type="button" onClick={() => setFeedbackMode('suggestion')} className="rounded-xl border border-slate-200 px-3 py-2 text-left text-xs font-semibold hover:border-amber-400">{t('menuFeedback')}</button>
-            <button type="button" onClick={() => setFeedbackMode('product')} className="rounded-xl border border-slate-200 px-3 py-2 text-left text-xs font-semibold hover:border-amber-400">{t('menuProductWish')}</button>
-            <button type="button" onClick={() => setFeedbackMode('error')} className="flex items-center gap-2 rounded-xl border border-red-200 px-3 py-2 text-left text-xs font-semibold text-red-700 hover:border-red-400"><AlertTriangle className="h-4 w-4" />{t('errorReport')}</button>
-            <button type="button" onClick={() => onNavigate?.('video')} className="flex items-center gap-2 rounded-xl border border-fuchsia-300 bg-fuchsia-50 px-3 py-2 text-left text-xs font-bold text-fuchsia-900 hover:bg-fuchsia-100"><Video className="h-4 w-4" />{t('menuVideoFeed')}</button>
-            <button type="button" onClick={() => onNavigate?.('faq')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-left text-xs font-semibold"><CircleHelp className="h-4 w-4" />{t('menuFaq')}</button>
-            <button type="button" onClick={() => onNavigate?.('rules')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-left text-xs font-semibold"><Menu className="h-4 w-4" />{t('menuRules')}</button>
-          </div>
+          </section>
+
+          <section>
+            <div className="mb-2 flex items-center gap-2">
+              <LifeBuoy className="h-4 w-4 text-emerald-600" />
+              <h3 className="text-sm font-bold">{t('feedbackHint')}</h3>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {feedbackActions.map((action) => (
+                <button key={action.mode} type="button" onClick={() => setMode(action.mode)} aria-pressed={feedbackMode === action.mode}
+                  className={`flex min-h-[76px] flex-col items-start justify-between rounded-2xl border p-3 text-left transition ${feedbackMode === action.mode ? 'border-emerald-500 bg-emerald-50 text-emerald-950 shadow-sm ring-1 ring-emerald-200' : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:bg-slate-50'}`}>
+                  <span className="flex w-full items-center justify-between gap-2"><span className="rounded-lg bg-slate-100 p-1.5">{action.icon}</span>{feedbackMode === action.mode && <CheckCircle2 className="h-4 w-4 text-emerald-600" />}</span>
+                  <span className="mt-2 text-xs font-bold">{action.title}</span>
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={submit} className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50/50 p-3.5">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <label htmlFor="settings-feedback" className="text-sm font-bold">{feedbackActions.find((action) => action.mode === feedbackMode)?.description}</label>
+                <span className="text-[10px] font-semibold text-slate-400">{valueForMode.length}/2000</span>
+              </div>
+              <textarea id="settings-feedback" disabled={sending} value={valueForMode} onChange={(event) => setValueForMode(event.target.value)} maxLength={2000}
+                rows={4} placeholder={feedbackMode === 'error' ? t('errorReportPlaceholder') : undefined}
+                className="w-full resize-y rounded-xl border border-emerald-200 bg-white p-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" />
+              {status && <p role="status" className={`mt-2 flex items-center gap-1.5 text-xs font-semibold ${status === 'success' ? 'text-emerald-700' : 'text-red-700'}`}>
+                {status === 'success' && <CheckCircle2 className="h-3.5 w-3.5" />}
+                {t(status === 'success' ? 'feedbackSuccess' : status === 'required' ? 'feedbackRequired' : 'feedbackError')}
+              </p>}
+              <button type="submit" disabled={sending} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:opacity-50">
+                <Send className="h-4 w-4" />{sending ? t('feedbackSending') : t('feedbackSend')}
+              </button>
+            </form>
+          </section>
+
+          <section className="grid gap-2 border-t border-slate-200 pt-4 sm:grid-cols-3">
+            {[
+              { destination: 'video' as const, icon: <Video className="h-4 w-4 text-fuchsia-600" />, label: t('menuVideoFeed'), className: 'border-fuchsia-200 bg-fuchsia-50/70 hover:border-fuchsia-400' },
+              { destination: 'faq' as const, icon: <CircleHelp className="h-4 w-4 text-slate-600" />, label: t('menuFaq'), className: 'border-slate-200 bg-white hover:border-slate-400' },
+              { destination: 'rules' as const, icon: <Menu className="h-4 w-4 text-slate-600" />, label: t('menuRules'), className: 'border-slate-200 bg-white hover:border-slate-400' },
+            ].map((item) => (
+              <button key={item.destination} type="button" onClick={() => onNavigate?.(item.destination)} className={`flex items-center justify-between gap-2 rounded-xl border px-3 py-3 text-left text-xs font-bold transition ${item.className}`}>
+                <span className="flex items-center gap-2">{item.icon}{item.label}</span><ChevronRight className="h-4 w-4 text-slate-400" />
+              </button>
+            ))}
+          </section>
         </div>
-        <form onSubmit={submit} className="mt-5 space-y-3 border-t border-slate-200 pt-4">
-          {feedbackMode === 'product' && <label className="block text-sm font-semibold">
-            {t('productWish')}
-            <textarea disabled={sending} value={productWish} onChange={(event) => setProductWish(event.target.value)} maxLength={2000}
-              rows={3} className="mt-1 w-full rounded-xl border border-slate-300 p-2 text-sm font-normal" />
-          </label>}
-          {feedbackMode === 'suggestion' && <label className="block text-sm font-semibold">
-            {t('projectSuggestion')}
-            <textarea disabled={sending} value={suggestion} onChange={(event) => setSuggestion(event.target.value)} maxLength={2000}
-              rows={3} className="mt-1 w-full rounded-xl border border-slate-300 p-2 text-sm font-normal" />
-          </label>}
-          {feedbackMode === 'error' && <label className="block text-sm font-semibold">
-            {t('errorReport')}
-            <textarea disabled={sending} value={errorReport} onChange={(event) => setErrorReport(event.target.value)} maxLength={2000}
-              rows={3} placeholder={t('errorReportPlaceholder')} className="mt-1 w-full rounded-xl border border-slate-300 p-2 text-sm font-normal" />
-          </label>}
-          <p className="text-xs text-slate-500">{t('feedbackHint')}</p>
-          {status && <p role="status" className={`text-sm ${status === 'success' ? 'text-emerald-700' : 'text-red-700'}`}>
-            {t(status === 'success' ? 'feedbackSuccess' : status === 'required' ? 'feedbackRequired' : 'feedbackError')}
-          </p>}
-          <button type="submit" disabled={sending} className="w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">
-            {sending ? t('feedbackSending') : t('feedbackSend')}
-          </button>
-        </form>
       </section>
     </div>
   );

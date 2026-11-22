@@ -16,6 +16,11 @@ import {
   Search,
   ShoppingBasket,
   Package,
+  Volume2,
+  VolumeX,
+  Gauge,
+  Play,
+  Pause,
   Lock,
   X,
   MessageCircle,
@@ -38,6 +43,13 @@ const SettingsModal = lazy(() => import('./components/SettingsModal').then((modu
 
 function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; onOpenProduct: (product: Product) => void; onBack: () => void }) {
   const [feedVideos, setFeedVideos] = useState<Array<{ product: Pick<Product, 'id' | 'title' | 'main_image'>; src: string }> | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [playing, setPlaying] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const videoRefs = useRef<Array<HTMLVideoElement | null>>([]);
   useEffect(() => {
     apiFetch('/api/videos?limit=500').then((response) => response.ok ? response.json() : Promise.reject(new Error('Video feed failed')))
       .then((data) => setFeedVideos(Array.isArray(data.videos) ? data.videos : []))
@@ -47,40 +59,84 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
     const sources = [...new Set([...(Array.isArray(product.video_urls) ? product.video_urls : []), product.video_url || '', product.youtube_url || ''].map((url) => url.trim()).filter(Boolean))];
     return sources.map((src) => ({ product, src }));
   });
-  const videoRefs = useRef<Array<HTMLVideoElement | null>>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
 
   useEffect(() => {
     videoRefs.current.forEach((video, index) => {
       if (!video) return;
-      if (index === activeIndex) void video.play().catch(() => undefined);
-      else video.pause();
+      video.muted = muted;
+      video.playbackRate = playbackRate;
+      if (index === activeIndex && playing) {
+        void video.play().catch(() => {
+          if (!muted) {
+            setMuted(true);
+            video.muted = true;
+            void video.play().catch(() => setPlaying(false));
+          } else setPlaying(false);
+        });
+      } else video.pause();
       video.preload = Math.abs(index - activeIndex) <= 1 ? 'auto' : 'none';
     });
-  }, [activeIndex, videos.length]);
+  }, [activeIndex, videos.length, muted, playbackRate, playing]);
 
   if (videos.length === 0) return <section className="mx-auto max-w-2xl py-6"><button type="button" onClick={onBack} className="mb-4 text-sm font-semibold text-slate-600">← { 'Каталог' }</button><p className="text-center text-sm text-slate-500">Видео пока нет.</p></section>;
 
-  return <section className="mx-auto flex h-[calc(100dvh-9rem)] max-w-lg flex-col overflow-y-auto snap-y snap-mandatory rounded-xl bg-black" onScroll={(event) => {
-    const next = Math.round(event.currentTarget.scrollTop / event.currentTarget.clientHeight);
-    if (next !== activeIndex) setActiveIndex(next);
-  }}>
-    {videos.map(({ product, src }, index) => {
-      const youtubeId = src.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?/\s]{11})/)?.[1];
-      return <article key={`${product.id}-${src}`} className="relative flex h-full min-h-full w-full shrink-0 snap-start items-center justify-center bg-black">
-        {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${index === activeIndex ? 1 : 0}&mute=1&playsinline=1`} className="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={src} muted playsInline loop controls preload={Math.abs(index - activeIndex) <= 1 ? 'auto' : 'none'} className="h-full w-full object-contain" />}
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/35 to-transparent p-3 pt-16">
-          <button type="button" onClick={() => {
-            const fullProduct = products.find((item) => item.id === product.id);
-            if (fullProduct) onOpenProduct(fullProduct);
-          }} className="flex w-full items-center gap-3 rounded-lg bg-white p-2 text-left text-slate-900">
-            <img src={product.main_image} alt="" loading={index <= activeIndex + 1 ? 'eager' : 'lazy'} className="h-14 w-14 shrink-0 rounded-md object-cover" />
-            <span className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold">{product.title}</span>
-          </button>
-          <div className="mt-2 flex justify-end"><ProductShareButton product={product as Product} /></div>
-        </div>
-      </article>;
-    })}
+  return <section className="relative mx-auto h-[calc(100dvh-8rem)] max-w-lg overflow-hidden rounded-xl bg-black sm:h-[calc(100dvh-9rem)]">
+    <div className="h-full overflow-y-auto snap-y snap-mandatory overscroll-contain" onScroll={(event) => {
+      const next = Math.round(event.currentTarget.scrollTop / event.currentTarget.clientHeight);
+      if (next !== activeIndex) {
+        setActiveIndex(next);
+        setCurrentTime(0);
+        setDuration(0);
+        setPlaying(true);
+      }
+    }}>
+      {videos.map(({ product, src }, index) => {
+        const youtubeId = src.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?/\s]{11})/)?.[1];
+        return <article key={`${product.id}-${src}`} className="relative flex h-full min-h-full w-full snap-start items-center justify-center bg-black">
+          {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${index === activeIndex ? 1 : 0}&controls=1&playsinline=1`} className="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={src} muted={muted} playsInline loop controls preload={Math.abs(index - activeIndex) <= 1 ? 'auto' : 'none'} onTimeUpdate={(event) => { if (index === activeIndex) setCurrentTime(event.currentTarget.currentTime); }} onLoadedMetadata={(event) => { if (index === activeIndex) setDuration(event.currentTarget.duration); }} onPlay={() => index === activeIndex && setPlaying(true)} onPause={() => index === activeIndex && setPlaying(false)} className="h-full w-full object-contain" />}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-black/90 via-black/35 to-transparent" />
+          <div className="absolute inset-x-0 top-0 z-10 flex items-start justify-between p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+            <button type="button" onClick={onBack} aria-label="Назад в каталог" className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm"><span aria-hidden="true">←</span></button>
+            <ProductShareButton product={product as Product} className="z-20" menuAlignment="right" />
+          </div>
+          <div className="absolute right-3 top-16 z-10 flex flex-col gap-2 sm:right-4">
+            <button type="button" onClick={() => setMuted((value) => !value)} aria-label={muted ? 'Включить звук' : 'Выключить звук'} aria-pressed={!muted}
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm hover:bg-black/75">{muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}</button>
+            {!youtubeId && <>
+              <button type="button" onClick={() => { const video = videoRefs.current[index]; if (!video) return; if (video.paused) void video.play().then(() => setPlaying(true)).catch(() => setPlaying(false)); else { video.pause(); setPlaying(false); } }} aria-label={playing ? 'Пауза' : 'Воспроизвести'}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm hover:bg-black/75">{playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5" />}</button>
+              <label className="flex h-11 items-center gap-1 rounded-full bg-black/55 px-2 text-white backdrop-blur-sm" aria-label="Скорость воспроизведения">
+                <Gauge className="h-4 w-4" />
+                <select value={playbackRate} onChange={(event) => setPlaybackRate(Number(event.target.value))} className="w-12 appearance-none bg-transparent text-xs font-semibold text-white focus:outline-none">
+                  {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate} className="text-slate-900">{rate}x</option>)}
+                </select>
+              </label>
+            </>}
+          </div>
+          <div className="absolute inset-x-3 bottom-[max(5.75rem,calc(env(safe-area-inset-bottom)+5.5rem))] z-10 sm:inset-x-4">
+            {!youtubeId && duration > 0 && index === activeIndex && <label className="block rounded-full bg-black/55 px-3 py-1.5 backdrop-blur-sm" aria-label="Позиция видео">
+              <span className="sr-only">Позиция видео</span>
+              <input type="range" min="0" max={duration} step="0.1" value={currentTime} onChange={(event) => {
+                const nextTime = Number(event.target.value);
+                const video = videoRefs.current[index];
+                if (video) video.currentTime = nextTime;
+                setCurrentTime(nextTime);
+              }} className="h-1.5 w-full accent-emerald-400" />
+            </label>}
+          </div>
+          <div className="absolute inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-10 sm:inset-x-4">
+            <button type="button" onClick={() => {
+              const fullProduct = products.find((item) => item.id === product.id);
+              if (fullProduct) onOpenProduct(fullProduct);
+            }} className="flex w-full items-center gap-3 rounded-xl border border-white/70 bg-white p-2.5 text-left text-slate-900 shadow-lg">
+              <img src={product.main_image} alt="" loading={index <= activeIndex + 1 ? 'eager' : 'lazy'} className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+              <span className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold">{product.title}</span>
+              <span className="shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white">Товар</span>
+            </button>
+          </div>
+        </article>;
+      })}
+    </div>
   </section>;
 }
 
