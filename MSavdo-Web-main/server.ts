@@ -6275,9 +6275,11 @@ app.get('/api/video-proxy', videoProxyRateLimiter, async (req, res) => {
       if (upstream.statusCode && upstream.statusCode >= 300 && upstream.statusCode < 400) {
         upstream.resume();
         if (!location || hop === 3) return res.status(502).end();
-        target = new URL(location, target);
-        if (!isAllowedVideoHost(target)) return res.status(400).end();
-        continue;
+        const redirectTarget = new URL(location, target);
+        if (!isAllowedVideoHost(redirectTarget)) return res.status(400).end();
+        res.status(upstream.statusCode).setHeader('Location', redirectTarget.toString());
+        res.setHeader('Cache-Control', 'private, max-age=60');
+        return res.end();
       }
       break;
     }
