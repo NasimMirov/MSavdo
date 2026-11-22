@@ -6225,15 +6225,23 @@ async function fetchVideoProxyTarget(url: URL, headers: Record<string, string>):
   if (!addresses.length || addresses.some(({ address }) => !isPublicIpAddress(address))) {
     throw new Error('Video proxy host resolved to a non-public address');
   }
-  const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
-    if (options.all) callback(null, addresses);
-    else callback(null, addresses[0].address, addresses[0].family);
-  };
-  return new Promise((resolve, reject) => {
-    const request = https.get(url, { lookup: pinnedLookup, headers, timeout: 20000 }, resolve);
-    request.on('timeout', () => request.destroy(new Error('Video proxy request timed out')));
-    request.on('error', reject);
-  });
+  let lastError: Error | null = null;
+  for (const address of addresses) {
+    try {
+      const pinnedLookup: LookupFunction = (_hostname, options, callback) => {
+        if (options.all) callback(null, [address]);
+        else callback(null, address.address, address.family);
+      };
+      return await new Promise<http.IncomingMessage>((resolve, reject) => {
+        const request = https.get(url, { lookup: pinnedLookup, headers, timeout: 8000 }, resolve);
+        request.on('timeout', () => request.destroy(new Error('Video proxy request timed out')));
+        request.on('error', reject);
+      });
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw lastError || new Error('Video proxy request failed');
 }
 
 const videoProxyRateLimiter = rateLimit({

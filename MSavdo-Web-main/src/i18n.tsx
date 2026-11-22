@@ -140,6 +140,9 @@ const translations = {
     menuRules: 'Правила сервиса',
     menuFaq: 'Частые вопросы',
     menuVideoFeed: 'Видео-лента',
+    catalogHeroTitle: 'Товары для дома и жизни',
+    catalogHeroSubtitle: 'Выбирайте нужное спокойно, удобно и с доставкой из Китая.',
+    catalogHeroEyebrow: 'MSavdo marketplace',
   },
   tg: {
     searchProducts: 'Ҷустуҷӯи мол',
@@ -277,6 +280,9 @@ const translations = {
     menuRules: 'Қоидаҳои хизматрасонӣ',
     menuFaq: 'Саволҳои зиёд додашаванда',
     menuVideoFeed: 'Навори видеоӣ',
+    catalogHeroTitle: 'Молҳо барои хона ва зиндагӣ',
+    catalogHeroSubtitle: 'Чизҳои заруриро бо роҳат ва расонидан аз Чин интихоб кунед.',
+    catalogHeroEyebrow: 'MSavdo marketplace',
   },
   en: {
     searchProducts: 'Search products',
@@ -414,6 +420,9 @@ const translations = {
     menuRules: 'Service rules',
     menuFaq: 'Frequently asked questions',
     menuVideoFeed: 'Video feed',
+    catalogHeroTitle: 'Goods for home and everyday life',
+    catalogHeroSubtitle: 'Find what you need with convenient delivery from China.',
+    catalogHeroEyebrow: 'MSavdo marketplace',
   },
 } as const;
 

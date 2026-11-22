@@ -886,16 +886,15 @@ export default function App() {
     ) : null;
 
   return (
-    <div className={`min-h-screen bg-slate-50 text-slate-900 flex flex-col antialiased selection:bg-amber-400 selection:text-black font-sans ${currentView === 'video' ? 'overflow-hidden' : 'pb-16 md:pb-0'}`}>
+    <div className={`min-h-screen bg-[#f4f7f1] text-slate-900 flex flex-col antialiased selection:bg-emerald-200 selection:text-emerald-950 font-sans ${currentView === 'video' ? 'overflow-hidden' : 'pb-16 md:pb-0'}`}>
       
       {/* Глобальные UI-уведомления (Toasts) */}
       <ToastContainer toasts={toasts} onDismiss={removeToast} />
 
       {/* ======================================================== */}
-      {/* 1. ШАПКА МАГАЗИНА: ЖЕЛТО-ЧЕРНЫЙ СТИЛЬ M.SAVDO */}
-      {/* Строгая клиентская изоляция: никаких кнопок импорта или ссылок на Китай */}
+      {/* 1. PUBLIC STORE HEADER */}
       {/* ======================================================== */}
-      <header className={`${currentView === 'video' ? 'hidden' : 'sticky'} top-0 z-40 bg-[#f4c542] text-slate-950 border-b border-[#deb02b] shadow-md`}>
+      <header className={`${currentView === 'video' ? 'hidden' : 'sticky'} top-0 z-40 border-b border-emerald-900/10 bg-[#edf4e8]/95 text-slate-950 shadow-sm backdrop-blur-md`}>
         <div className="mx-auto flex min-h-14 max-w-7xl flex-wrap items-center gap-2 px-3 py-2 sm:min-h-[76px] sm:flex-nowrap sm:gap-6 sm:px-6 lg:px-8">
           
           <div 
@@ -906,7 +905,7 @@ export default function App() {
             }}
             className="cursor-pointer flex items-center gap-1.5 sm:gap-3 shrink-0 select-none group"
           >
-            <div className="relative w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl overflow-hidden border border-black/10 shadow-md shrink-0 bg-[#f4c542] flex items-center justify-center">
+            <div className="relative w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl overflow-hidden border border-emerald-900/10 shadow-sm shrink-0 bg-[#e5eedf] flex items-center justify-center">
               <img 
                 src={BRAND_LOGO_URL} 
                 alt="MSavdo" 
@@ -1001,7 +1000,7 @@ export default function App() {
                   onClick={() => openVideoFeed()}
                   aria-label={t('menuVideoFeed')}
                   title={t('menuVideoFeed')}
-                  className={`hidden h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition sm:flex ${currentView === 'video' ? 'bg-slate-950 text-white' : 'bg-white/70 text-slate-900 hover:bg-white'}`}
+                  className={`hidden h-9 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition sm:flex ${currentView === 'video' ? 'bg-emerald-950 text-white' : 'bg-white/75 text-emerald-950 hover:bg-white'}`}
                 >
                   <Video className="h-4 w-4" />
                   <span>{t('menuVideoFeed')}</span>
@@ -1011,7 +1010,7 @@ export default function App() {
                   onClick={() => setIsSettingsOpen(true)}
                   aria-label={t('settingsTitle')}
                   title={t('settingsTitle')}
-                  className="flex h-8 w-8 items-center justify-center rounded-full text-slate-950 transition hover:bg-black/10"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-emerald-950 transition hover:bg-emerald-900/10"
                 >
                   <Menu className="h-4 w-4" />
                 </button>
@@ -1070,6 +1069,15 @@ export default function App() {
         {/* ЭКРАН 3: ПУБЛИЧНЫЙ КАТАЛОГ (КОМПАКТНЫЙ, БЫСТРЫЙ, МОБИЛЬНЫЙ) */}
         {currentView === 'catalog' && (
           <div className="space-y-2 sm:space-y-4">
+            <section className="relative isolate min-h-[118px] overflow-hidden rounded-2xl border border-emerald-900/10 bg-[#dfeadb] shadow-sm sm:min-h-[178px]" aria-label="MSavdo">
+              <img src="/og-banner.jpg" alt="MSavdo — товары напрямую из Китая" className="absolute inset-0 h-full w-full object-cover object-center opacity-90" loading="eager" />
+              <div className="absolute inset-0 bg-gradient-to-r from-emerald-950/75 via-emerald-950/25 to-transparent" />
+              <div className="relative flex min-h-[118px] max-w-md flex-col justify-center gap-1 px-4 py-3 text-white sm:min-h-[178px] sm:px-7">
+                <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-emerald-100 sm:text-[11px]">{t('catalogHeroEyebrow')}</p>
+                <h1 className="max-w-[15rem] text-lg font-black leading-tight sm:max-w-sm sm:text-3xl">{t('catalogHeroTitle')}</h1>
+                <p className="max-w-[18rem] text-[10px] leading-4 text-white/85 sm:text-sm">{t('catalogHeroSubtitle')}</p>
+              </div>
+            </section>
             {publicOffers.length > 0 && <section className="flex gap-2 overflow-x-auto py-1" aria-label="Предложения">
               {publicOffers.map((offer) => <div key={offer.id} className="shrink-0 rounded-xl bg-amber-100 px-4 py-2 text-xs font-semibold text-amber-950">{offer.title}</div>)}
             </section>}
@@ -1083,7 +1091,7 @@ export default function App() {
                   setIsCategoriesOpen((open) => !open);
                 }}
                 aria-expanded={isCategoriesOpen}
-                className="flex h-7 max-w-full items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-[11px] font-bold text-slate-800 transition-colors hover:border-amber-400"
+                className="flex h-8 max-w-full items-center gap-1.5 rounded-lg border border-emerald-900/10 bg-white px-2.5 text-[11px] font-bold text-slate-800 transition-colors hover:border-emerald-700"
               >
                 <span aria-hidden="true">☰</span>
                 <span className="truncate">
@@ -1105,8 +1113,8 @@ export default function App() {
                   aria-pressed={selectedCategoryId === null}
                   className={`flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 py-1 text-left transition-colors ${
                     selectedCategoryId === null
-                      ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                      : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
+                      ? 'border-emerald-950 bg-emerald-950 text-white shadow-sm'
+                      : 'border-emerald-900/10 bg-white text-slate-700 hover:border-emerald-700'
                   }`}
                 >
                   <span className="text-xs leading-none" aria-hidden="true">🛍️</span>
@@ -1129,8 +1137,8 @@ export default function App() {
                       title={section.name}
                       className={`flex h-7 min-w-0 items-center gap-1 rounded-md border px-1.5 py-1 text-left transition-colors ${
                         isSelected
-                          ? 'border-amber-500 bg-amber-100 text-slate-950 shadow-sm'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-amber-400'
+                          ? 'border-emerald-700 bg-emerald-50 text-emerald-950 shadow-sm'
+                          : 'border-emerald-900/10 bg-white text-slate-700 hover:border-emerald-700'
                       }`}
                     >
                       <span className="text-xs leading-none" aria-hidden="true">{getCategoryIllustration(section.name)}</span>
@@ -1161,8 +1169,8 @@ export default function App() {
                         title={category.name}
                         className={`min-w-0 truncate rounded-md px-1.5 py-1 text-left text-[9px] font-semibold transition-colors ${
                           selectedCategoryId === category.id
-                            ? 'bg-slate-900 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-slate-900'
+                            ? 'bg-emerald-950 text-white'
+                            : 'bg-emerald-50 text-slate-700 hover:bg-emerald-100 hover:text-emerald-950'
                         }`}
                       >
                         {category.name}
