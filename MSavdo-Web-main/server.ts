@@ -19,6 +19,7 @@ import { buildBilingualProductDescription, cleanProductDescription, ensureOrderD
 import { normalizeImportVariants } from './src/utils/importVariants.js';
 import { importVariantInstructions } from './src/utils/importAiPrompt.js';
 import { calculatePromotions } from './src/utils/promotions.js';
+import { shuffleVideoItems } from './src/utils/videoShuffle.js';
 import type { Promotion } from './src/utils/promotions.js';
 import { requestTokenPlanSuggestion } from './src/utils/tokenPlan.js';
 import { restoreCatalogSnapshot } from './src/utils/catalogSnapshotRestore.js';
@@ -5725,8 +5726,10 @@ app.get('/api/site-content', (_req, res) => {
 app.get('/api/videos', (req, res) => {
   const requestedLimit = Number(req.query.limit);
   const requestedOffset = Number(req.query.offset);
+  const requestedSeed = typeof req.query.seed === 'string' ? req.query.seed : '';
   const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 24;
   const offset = Number.isInteger(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
+  const seed = requestedSeed.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || crypto.randomBytes(12).toString('hex');
   try {
     const rows = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications, p.created_at, p.discount_percent,
@@ -5743,9 +5746,8 @@ app.get('/api/videos', (req, res) => {
         (p.youtube_url IS NOT NULL AND trim(p.youtube_url) != '')
       )
       GROUP BY p.id
-      ORDER BY p.views_count DESC, p.id DESC
-      LIMIT ? OFFSET ?
-    `).all(limit, offset) as Array<{
+      ORDER BY p.id DESC
+    `).all() as Array<{
       id: number; title: string; main_image: string | null; images: string | null; video_url: string | null; video_urls: string | null; youtube_url: string | null;
       delivery_type: string | null; discount_percent: number | null; min_price_tjs: number; max_price_tjs: number; stocked_variants: number; variant_count: number; variant_images: string | null;
     }>;
@@ -5773,7 +5775,9 @@ app.get('/api/videos', (req, res) => {
       };
       return normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || '').map((src) => ({ product: productPreview, src }));
     });
-    return res.json({ videos, hasMore: rows.length >= limit, nextOffset: offset + rows.length });
+    const shuffledVideos = shuffleVideoItems(videos, seed, (item) => `${item.product.id}:${item.src}`);
+    const page = shuffledVideos.slice(offset, offset + limit);
+    return res.json({ videos: page, hasMore: offset + page.length < shuffledVideos.length, nextOffset: offset + page.length });
   } catch (error) {
     console.error('[Public Videos]', error);
     return res.status(500).json({ error: 'Не удалось загрузить видео.' });

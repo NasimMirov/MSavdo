@@ -12,6 +12,7 @@ import { apiFetch, apiUrl } from './api';
 import { useI18n } from './i18n';
 import { addCartItem, mergeCartItems, MAX_CART_QUANTITY } from './utils/cart';
 import { readInitialCatalogCache, writeInitialCatalogCache } from './utils/catalogCache';
+import { shuffleVideoItems } from './utils/videoShuffle';
 import {
   Search,
   ShoppingBasket,
@@ -53,6 +54,7 @@ const getVideoSource = (src: string) => isRemoteVideoSource(src)
 
 function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { products: Product[]; initialProductId?: number; onOpenProduct: (product: Product) => void; onBack: () => void }) {
   const [feedVideos, setFeedVideos] = useState<VideoFeedItem[] | null>(null);
+  const [feedSeed] = useState(() => crypto.randomUUID());
   const [hasMoreVideos, setHasMoreVideos] = useState(false);
   const [nextVideoOffset, setNextVideoOffset] = useState(0);
   const [activeIndex, setActiveIndex] = useState(() => Math.max(0, initialProductId ? products.findIndex((product) => product.id === initialProductId) : 0));
@@ -75,7 +77,7 @@ function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { prod
     if (!replace && loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     try {
-      const response = await apiFetch(`/api/videos?limit=24&offset=${offset}`);
+      const response = await apiFetch(`/api/videos?limit=24&offset=${offset}&seed=${encodeURIComponent(feedSeed)}`);
       if (!response.ok) throw new Error('Video feed failed');
       const data = await response.json() as { videos?: VideoFeedItem[]; hasMore?: boolean; nextOffset?: number };
       const nextVideos = Array.isArray(data.videos) ? data.videos : [];
@@ -87,16 +89,19 @@ function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { prod
     } finally {
       loadingMoreRef.current = false;
     }
-  }, []);
+  }, [feedSeed]);
 
   useEffect(() => {
     void loadVideos(0, true);
   }, [loadVideos]);
 
-  const videos = feedVideos?.length ? feedVideos : products.flatMap((product) => {
+  const fallbackVideos = products.flatMap((product) => {
     const sources = [...new Set([...(Array.isArray(product.video_urls) ? product.video_urls : []), product.video_url || '', product.youtube_url || ''].map((url) => url.trim()).filter(Boolean))];
     return sources.map((src) => ({ product, src }));
   });
+  const videos = feedVideos?.length
+    ? feedVideos
+    : shuffleVideoItems(fallbackVideos, feedSeed, (item) => `${item.product.id}:${item.src}`);
 
   const activeProduct = videos[activeIndex]?.product;
   const galleryImages = useMemo(() => {
