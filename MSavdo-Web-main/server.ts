@@ -5722,20 +5722,49 @@ app.get('/api/videos', (req, res) => {
   const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 200;
   try {
     const rows = db.prepare(`
-      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications, p.created_at, p.discount_percent
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications, p.created_at, p.discount_percent,
+             COALESCE(MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS min_price_tjs,
+             COALESCE(MAX(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END), 0) AS max_price_tjs,
+             SUM(CASE WHEN COALESCE(v.stock, 0) > 0 THEN 1 ELSE 0 END) AS stocked_variants,
+             COUNT(v.id) AS variant_count,
+             GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images
       FROM products p
-      WHERE status = 'active' AND (
-        (video_url IS NOT NULL AND trim(video_url) != '') OR
-        (video_urls IS NOT NULL AND trim(video_urls) != '') OR
-        (youtube_url IS NOT NULL AND trim(youtube_url) != '')
+      LEFT JOIN product_variants v ON v.product_id = p.id
+      WHERE p.status = 'active' AND (
+        (p.video_url IS NOT NULL AND trim(p.video_url) != '') OR
+        (p.video_urls IS NOT NULL AND trim(p.video_urls) != '') OR
+        (p.youtube_url IS NOT NULL AND trim(p.youtube_url) != '')
       )
-      ORDER BY views_count DESC, id DESC
+      GROUP BY p.id
+      ORDER BY p.views_count DESC, p.id DESC
       LIMIT ?
-    `).all(limit) as Array<{ id: number; title: string; main_image: string | null; video_url: string | null; video_urls: string | null; youtube_url: string | null }>;
-    const videos = rows.flatMap((product) => normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || '').map((src) => ({
-      product: { id: product.id, title: product.title, main_image: product.main_image || '' },
-      src,
-    })));
+    `).all(limit) as Array<{
+      id: number; title: string; main_image: string | null; images: string | null; video_url: string | null; video_urls: string | null; youtube_url: string | null;
+      delivery_type: string | null; discount_percent: number | null; min_price_tjs: number; max_price_tjs: number; stocked_variants: number; variant_count: number; variant_images: string | null;
+    }>;
+    const videos = rows.flatMap((product) => {
+      const publicImages = getPublicProductImageUrls(
+        product.id,
+        product.main_image,
+        product.images,
+        product.variant_images ? product.variant_images.split(',') : [],
+        8,
+      );
+      const minPrice = Math.max(0, Math.round(product.min_price_tjs * (100 - (product.discount_percent || 0)) / 100));
+      const maxPrice = Math.max(0, Math.round(product.max_price_tjs * (100 - (product.discount_percent || 0)) / 100));
+      const productPreview = {
+        id: product.id,
+        title: product.title,
+        main_image: publicImages[0] || '',
+        images: publicImages.slice(1).join(','),
+        delivery_type: product.delivery_type || 'order',
+        min_price_tjs: minPrice,
+        max_price_tjs: maxPrice,
+        in_stock: product.stocked_variants > 0,
+        variant_count: product.variant_count,
+      };
+      return normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || '').map((src) => ({ product: productPreview, src }));
+    });
     return res.json({ videos });
   } catch (error) {
     console.error('[Public Videos]', error);

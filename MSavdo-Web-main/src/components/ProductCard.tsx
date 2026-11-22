@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { Product } from '../types';
 import { Eye, Truck, Clock, BadgePercent } from 'lucide-react';
 import { useI18n } from '../i18n';
@@ -20,36 +20,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
   const { t, language } = useI18n();
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageError, setImageError] = useState(false);
-  const [activeImageIndex, setActiveImageIndex] = useState(0);
-  const [galleryPaused, setGalleryPaused] = useState(false);
-  const galleryImages = useMemo(() => {
-    const images = [product.main_image, ...(product.images || '').split(',')];
-    for (const variant of product.variants || []) images.push(variant.image_url);
-    return [...new Set(images.map((image) => image?.trim()).filter((image): image is string => Boolean(image)))];
-  }, [product.main_image, product.images, product.variants]);
-  const activeImage = galleryImages[activeImageIndex] || product.main_image;
-  const cardImageUrl = activeImage
+  const cardImageUrl = product.main_image
     ? (() => {
-      const imageUrl = new URL(activeImage, window.location.origin);
+      const imageUrl = new URL(product.main_image, window.location.origin);
       imageUrl.searchParams.set('width', '640');
       return imageUrl.href;
     })()
     : '';
-
-  useEffect(() => {
-    setActiveImageIndex(0);
-    setImageLoaded(false);
-    setImageError(false);
-  }, [product.id]);
-
-  useEffect(() => {
-    if (galleryPaused || galleryImages.length < 2 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const timer = window.setInterval(() => {
-      setActiveImageIndex((index) => (index + 1) % galleryImages.length);
-      setImageLoaded(false);
-    }, 3200);
-    return () => window.clearInterval(timer);
-  }, [galleryPaused, galleryImages.length, product.id]);
 
   // Цены по доступным вариантам
   const variants = product.variants || [];
@@ -98,13 +75,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       className="group flex min-w-0 cursor-pointer flex-col overflow-hidden rounded-sm border border-slate-200 bg-white transition-colors hover:border-amber-400"
     >
       {/* Изображение */}
-      <div
-        className="relative aspect-square overflow-hidden bg-slate-100 flex items-center justify-center"
-        onMouseEnter={() => setGalleryPaused(true)}
-        onMouseLeave={() => setGalleryPaused(false)}
-        onFocus={() => setGalleryPaused(true)}
-        onBlur={() => setGalleryPaused(false)}
-      >
+      <div className="relative aspect-square overflow-hidden bg-slate-100 flex items-center justify-center">
         {!imageLoaded && !imageError && (
           <div className="absolute inset-0 bg-slate-200 animate-pulse" />
         )}
@@ -130,22 +101,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({
                 if (isPriority) onPriorityImageReady?.();
               }}
               onError={() => {
-                const nextImageIndex = activeImageIndex + 1;
-                if (nextImageIndex < galleryImages.length) {
-                  setActiveImageIndex(nextImageIndex);
-                  setImageLoaded(false);
-                  return;
-                }
                 setImageError(true);
                 if (isPriority) onPriorityImageReady?.();
-              }}
-              onTransitionEnd={() => {
-                if (isPriority && imageLoaded) onPriorityImageReady?.();
               }}
               width={640}
               height={640}
               fetchPriority={isPriority ? 'high' : 'auto'}
-              className={`block w-full h-full object-contain transition-opacity duration-500 ease-in-out ${
+              className={`block w-full h-full object-contain group-hover:scale-105 transition-transform duration-500 ease-out ${
                 imageLoaded ? 'opacity-100' : 'opacity-0'
               }`}
               loading={isPriority ? 'eager' : 'lazy'}
