@@ -82,6 +82,7 @@ interface CustomerFeedback {
   id: number;
   product_wish: string;
   suggestion: string;
+  error_report: string;
   created_at: string;
 }
 
@@ -118,7 +119,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const adminFetch = (url: string, options: RequestInit = {}) => apiFetch(url, options);
 
   // Состояния админки
-  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'reviews' | 'promotions' | 'discounts' | 'gemini_ai' | 'settings'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'visitors' | 'searches' | 'feedback' | 'reviews' | 'promotions' | 'discounts' | 'gemini_ai' | 'settings' | 'content'>('products');
   const [adminProducts, setAdminProducts] = useState<any[]>([]);
   const [adminProductsTotal, setAdminProductsTotal] = useState(0);
   const [adminProductsHasMore, setAdminProductsHasMore] = useState(false);
@@ -338,6 +339,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     somon_category_config: {} as Record<string, { rubric_id: string; attributes_json: string }>,
   });
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [contentGroupsOpen, setContentGroupsOpen] = useState<Record<string, boolean>>({ Продажи: true, 'Аналитика и обратная связь': false, Инструменты: false });
+  const [siteContent, setSiteContent] = useState<any>({ faq: [], rules: { title: '', version: '', updatedAt: '', changeNote: '', body: '' }, social: { telegram: '', instagram: '', youtube: '' } });
+  const [siteContentHistory, setSiteContentHistory] = useState<any[]>([]);
+  const [contentSaving, setContentSaving] = useState(false);
+  const [contentMessage, setContentMessage] = useState('');
   const somonPresets = [
     { id: '182', label: 'Универсально: другие товары для дома (ID 182)', attributes: '{"sostoyanie":"const:2"}' },
     { id: '165', label: 'Электроника и аксессуары (ID 165)', attributes: '{"sostoyanie":"const:2"}' },
@@ -609,6 +615,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         setTokenPlanKeyConfigured(data.tokenplan_key_configured === true);
         setInstagramSettings((current) => ({ ...current, user_id: data.instagram_user_id || '', auto_publish: data.instagram_auto_publish === true }));
         setInstagramConfigured(data.instagram_configured === true);
+        if (data.site_content) setSiteContent(data.site_content);
+        setSiteContentHistory(Array.isArray(data.site_content_history) ? data.site_content_history : []);
         setSettings({
           whatsapp_phone: data.whatsapp_phone || '992444431',
           cny_tjs_rate: data.cny_tjs_rate || '1.45',
@@ -855,6 +863,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setIsRecalculatingPrices(false);
     }
   };
+
+  const saveSiteContent = async () => {
+    setContentSaving(true);
+    setContentMessage('');
+    try {
+      const response = await adminFetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ site_content: siteContent }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Не удалось сохранить контент');
+      setContentMessage('Изменения сохранены. История версий обновлена.');
+      const refreshed = await adminFetch('/api/admin/settings');
+      if (refreshed.ok) {
+        const stored = await refreshed.json();
+        setSiteContent(stored.site_content);
+        setSiteContentHistory(stored.site_content_history || []);
+      }
+    } catch (error) {
+      setContentMessage(error instanceof Error ? error.message : 'Не удалось сохранить контент');
+    } finally {
+      setContentSaving(false);
+    }
+  };
+
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2142,12 +2176,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             tabs: [
               { id: 'gemini_ai' as const, label: t('adminAi'), icon: <Sparkles className="h-4 w-4 text-purple-400" />, action: () => setActiveTab('gemini_ai') },
               { id: 'settings' as const, label: t('adminSettings'), icon: <Settings className="h-4 w-4 text-blue-400" />, action: () => setActiveTab('settings') },
+              { id: 'content' as const, label: 'Контент сайта', icon: <FileCode className="h-4 w-4 text-emerald-500" />, action: () => setActiveTab('content') },
             ],
           },
         ].map((group) => (
-          <section key={group.title} className="min-w-0 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-            <h2 className="mb-2 px-1 text-[10px] font-extrabold uppercase tracking-wide text-slate-500">{group.title}</h2>
-            <div className="grid grid-cols-2 gap-1.5">
+          <section key={group.title} className="min-w-0 border-b border-slate-200 py-2">
+            <button type="button" aria-expanded={contentGroupsOpen[group.title] || group.title === 'Продажи'} onClick={() => setContentGroupsOpen((current) => ({ ...current, [group.title]: !current[group.title] }))}
+              className="flex w-full items-center justify-between px-1 text-left text-[10px] font-extrabold uppercase text-slate-500">
+              <span>{group.title}</span><ChevronDown className={`h-3.5 w-3.5 transition-transform ${contentGroupsOpen[group.title] || group.title === 'Продажи' ? 'rotate-180' : ''}`} />
+            </button>
+            {(contentGroupsOpen[group.title] || group.title === 'Продажи') && <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-4">
               {group.tabs.map((tab) => (
                 <button
                   key={tab.id}
@@ -2162,7 +2200,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   {'badge' in tab && tab.badge && <span className="ml-auto rounded-full bg-amber-400 px-1.5 py-0.5 text-[9px] font-black text-black">{tab.badge}</span>}
                 </button>
               ))}
-            </div>
+            </div>}
           </section>
         ))}
       </nav>
@@ -2195,6 +2233,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <p className="whitespace-pre-wrap break-words text-sm text-slate-900">{item.product_wish}</p></div>}
               {item.suggestion && <div><h3 className="text-xs font-bold text-slate-700">Улучшение сервиса</h3>
                 <p className="whitespace-pre-wrap break-words text-sm text-slate-900">{item.suggestion}</p></div>}
+              {item.error_report && <div><h3 className="text-xs font-bold text-red-700">Ошибка</h3>
+                <p className="whitespace-pre-wrap break-words text-sm text-slate-900">{item.error_report}</p></div>}
             </article>
           ))}
           {feedbackHasMore && <button type="button" disabled={feedbackLoading}
@@ -2205,6 +2245,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </section>
       )}
       {activeTab === 'reviews' && <ProductReviewsAdmin />}
+      {activeTab === 'content' && (
+        <section className="space-y-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 className="text-lg font-bold text-slate-900">Контент сайта</h2><p className="text-xs text-slate-500">Публичные FAQ, правила, версии изменений и ссылки на соцсети.</p></div>
+            <button type="button" disabled={contentSaving} onClick={() => void saveSiteContent()} className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"><Save className="h-4 w-4" />{contentSaving ? 'Сохранение…' : 'Сохранить публикацию'}</button>
+          </div>
+          {contentMessage && <p role="status" className="rounded-lg bg-slate-100 p-3 text-xs font-semibold text-slate-700">{contentMessage}</p>}
+          <section className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between"><h3 className="font-bold text-slate-900">Частые вопросы</h3><button type="button" onClick={() => setSiteContent((current: any) => ({ ...current, faq: [...current.faq, { question: '', answer: '' }] }))} className="rounded-lg border border-emerald-300 px-3 py-1.5 text-xs font-bold text-emerald-700">Добавить вопрос</button></div>
+            {siteContent.faq.map((item: { question: string; answer: string }, index: number) => <div key={index} className="grid gap-2 rounded-xl border border-slate-200 p-3 md:grid-cols-[1fr_1.5fr_auto]"><input value={item.question} maxLength={300} placeholder="Вопрос" onChange={(event) => setSiteContent((current: any) => ({ ...current, faq: current.faq.map((entry: any, itemIndex: number) => itemIndex === index ? { ...entry, question: event.target.value } : entry) }))} className="rounded-lg border border-slate-300 p-2 text-sm" /><textarea value={item.answer} maxLength={3000} placeholder="Ответ" rows={2} onChange={(event) => setSiteContent((current: any) => ({ ...current, faq: current.faq.map((entry: any, itemIndex: number) => itemIndex === index ? { ...entry, answer: event.target.value } : entry) }))} className="rounded-lg border border-slate-300 p-2 text-sm" /><button type="button" onClick={() => setSiteContent((current: any) => ({ ...current, faq: current.faq.filter((_: any, itemIndex: number) => itemIndex !== index) }))} className="self-start rounded-lg border border-red-300 px-3 py-2 text-xs font-bold text-red-700">Удалить</button></div>)}
+          </section>
+          <section className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 md:grid-cols-2">
+            <h3 className="md:col-span-2 font-bold text-slate-900">Правила и версия</h3>
+            {(['title', 'version', 'updatedAt', 'changeNote'] as const).map((field) => <label key={field} className="text-xs font-bold text-slate-700">{field === 'title' ? 'Заголовок' : field === 'version' ? 'Версия' : field === 'updatedAt' ? 'Дата редакции' : 'Что изменилось'}<input value={siteContent.rules[field]} maxLength={field === 'changeNote' ? 1000 : 200} onChange={(event) => setSiteContent((current: any) => ({ ...current, rules: { ...current.rules, [field]: event.target.value } }))} className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal" /></label>)}
+            <label className="md:col-span-2 text-xs font-bold text-slate-700">Текст правил<textarea value={siteContent.rules.body} maxLength={30000} rows={10} onChange={(event) => setSiteContent((current: any) => ({ ...current, rules: { ...current.rules, body: event.target.value } }))} className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal" /></label>
+          </section>
+          <section className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-4 md:grid-cols-3"><h3 className="md:col-span-3 font-bold text-slate-900">Социальные сети</h3>{(['telegram', 'instagram', 'youtube'] as const).map((network) => <label key={network} className="text-xs font-bold capitalize text-slate-700">{network}<input type="url" value={siteContent.social[network]} onChange={(event) => setSiteContent((current: any) => ({ ...current, social: { ...current.social, [network]: event.target.value } }))} className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-normal" /></label>)}</section>
+          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4"><h3 className="mb-2 font-bold text-slate-900">История публикаций</h3>{siteContentHistory.length === 0 ? <p className="text-xs text-slate-500">История появится после первого сохранения.</p> : <div className="space-y-2">{siteContentHistory.map((entry, index) => <div key={`${entry.savedAt}-${index}`} className="rounded-lg border border-slate-200 bg-white p-3 text-xs"><strong>Версия {entry.version}</strong> · {entry.updatedAt} · сохранено {new Date(entry.savedAt).toLocaleString('ru-RU')}<p className="mt-1 text-slate-600">{entry.changeNote}</p></div>)}</div>}</section>
+        </section>
+      )}
       {activeTab === 'products' && (
         <div className="space-y-4">
           {adminProductsError && (

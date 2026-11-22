@@ -6,15 +6,16 @@
 import React, { lazy, Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Product, Category, CartItem } from './types';
 import { ProductCard } from './components/ProductCard';
+import { ProductShareButton } from './components/ProductShareButton';
 import { ToastContainer, ToastItem } from './components/Toast';
 import { apiFetch } from './api';
 import { useI18n } from './i18n';
 import { addCartItem, mergeCartItems, MAX_CART_QUANTITY } from './utils/cart';
 import { readInitialCatalogCache, writeInitialCatalogCache } from './utils/catalogCache';
-import { 
-  Search, 
+import {
+  Search,
   ShoppingBasket,
-  Package, 
+  Package,
   Lock,
   X,
   MessageCircle,
@@ -22,7 +23,7 @@ import {
   CheckCircle2,
   ChevronDown,
   SlidersHorizontal,
-  Settings,
+  Menu,
   Instagram,
   Send,
   Youtube,
@@ -34,6 +35,54 @@ const ProductDetailModal = lazy(() => import('./components/ProductDetailModal').
 const CartDrawer = lazy(() => import('./components/CartDrawer').then((module) => ({ default: module.CartDrawer })));
 const RulesView = lazy(() => import('./components/RulesView').then((module) => ({ default: module.RulesView })));
 const SettingsModal = lazy(() => import('./components/SettingsModal').then((module) => ({ default: module.SettingsModal })));
+
+function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; onOpenProduct: (product: Product) => void; onBack: () => void }) {
+  const [feedVideos, setFeedVideos] = useState<Array<{ product: Pick<Product, 'id' | 'title' | 'main_image'>; src: string }> | null>(null);
+  useEffect(() => {
+    apiFetch('/api/videos?limit=500').then((response) => response.ok ? response.json() : Promise.reject(new Error('Video feed failed')))
+      .then((data) => setFeedVideos(Array.isArray(data.videos) ? data.videos : []))
+      .catch(() => setFeedVideos([]));
+  }, []);
+  const videos = feedVideos ?? products.flatMap((product) => {
+    const sources = [...new Set([...(Array.isArray(product.video_urls) ? product.video_urls : []), product.video_url || '', product.youtube_url || ''].map((url) => url.trim()).filter(Boolean))];
+    return sources.map((src) => ({ product, src }));
+  });
+  const videoRefs = useRef<Array<HTMLVideoElement | null>>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    videoRefs.current.forEach((video, index) => {
+      if (!video) return;
+      if (index === activeIndex) void video.play().catch(() => undefined);
+      else video.pause();
+      video.preload = Math.abs(index - activeIndex) <= 1 ? 'auto' : 'none';
+    });
+  }, [activeIndex, videos.length]);
+
+  if (videos.length === 0) return <section className="mx-auto max-w-2xl py-6"><button type="button" onClick={onBack} className="mb-4 text-sm font-semibold text-slate-600">← { 'Каталог' }</button><p className="text-center text-sm text-slate-500">Видео пока нет.</p></section>;
+
+  return <section className="mx-auto flex h-[calc(100dvh-9rem)] max-w-lg flex-col overflow-y-auto snap-y snap-mandatory rounded-xl bg-black" onScroll={(event) => {
+    const next = Math.round(event.currentTarget.scrollTop / event.currentTarget.clientHeight);
+    if (next !== activeIndex) setActiveIndex(next);
+  }}>
+    {videos.map(({ product, src }, index) => {
+      const youtubeId = src.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?/\s]{11})/)?.[1];
+      return <article key={`${product.id}-${src}`} className="relative flex h-full min-h-full w-full shrink-0 snap-start items-center justify-center bg-black">
+        {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${index === activeIndex ? 1 : 0}&mute=1&playsinline=1`} className="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={src} muted playsInline loop controls preload={Math.abs(index - activeIndex) <= 1 ? 'auto' : 'none'} className="h-full w-full object-contain" />}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/35 to-transparent p-3 pt-16">
+          <button type="button" onClick={() => {
+            const fullProduct = products.find((item) => item.id === product.id);
+            if (fullProduct) onOpenProduct(fullProduct);
+          }} className="flex w-full items-center gap-3 rounded-lg bg-white p-2 text-left text-slate-900">
+            <img src={product.main_image} alt="" loading={index <= activeIndex + 1 ? 'eager' : 'lazy'} className="h-14 w-14 shrink-0 rounded-md object-cover" />
+            <span className="line-clamp-2 min-w-0 flex-1 text-sm font-semibold">{product.title}</span>
+          </button>
+          <div className="mt-2 flex justify-end"><ProductShareButton product={product as Product} /></div>
+        </div>
+      </article>;
+    })}
+  </section>;
+}
 
 function getCategoryIllustration(name: string): string {
   const category = name.toLocaleLowerCase('ru');
@@ -58,7 +107,7 @@ function getCategoryIllustration(name: string): string {
 
 export default function App() {
   const { t } = useI18n();
-  const [currentView, setCurrentView] = useState<'catalog' | 'rules' | 'admin'>('catalog');
+  const [currentView, setCurrentView] = useState<'catalog' | 'rules' | 'admin' | 'faq' | 'video'>('catalog');
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -92,6 +141,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(() => !initialCatalogCache);
   const [catalogError, setCatalogError] = useState<'initial' | 'more' | null>(null);
   const [whatsappPhone, setWhatsappPhone] = useState('992444431');
+  const [siteContent, setSiteContent] = useState<any>(null);
   const [showWhatsAppHelp, setShowWhatsAppHelp] = useState(false);
   const [dismissedWhatsAppHelp, setDismissedWhatsAppHelp] = useState(() => {
     try {
@@ -302,6 +352,7 @@ export default function App() {
     }
     if (settingsResult.status === 'fulfilled') {
       if (settingsResult.value?.whatsapp_phone) setWhatsappPhone(settingsResult.value.whatsapp_phone);
+      if (settingsResult.value?.site_content) setSiteContent(settingsResult.value.site_content);
     } else {
       console.warn('[M.Savdo] Настройки временно недоступны:', settingsResult.reason);
     }
@@ -780,14 +831,17 @@ export default function App() {
                   title={t('settingsTitle')}
                   className="flex h-8 w-8 items-center justify-center rounded-full text-slate-950 transition hover:bg-black/10"
                 >
-                  <Settings className="h-4 w-4" />
+                  <Menu className="h-4 w-4" />
                 </button>
               </div>
         </div>
       </header>
       {isSettingsOpen && (
         <Suspense fallback={null}>
-          <SettingsModal isOpen onClose={closeSettings} />
+          <SettingsModal isOpen onClose={closeSettings} onNavigate={(destination) => {
+            setIsSettingsOpen(false);
+            setCurrentView(destination);
+          }} />
         </Suspense>
       )}
 
@@ -796,6 +850,20 @@ export default function App() {
       {/* ======================================================== */}
       <main className={`flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 pb-2.5 sm:pb-6 ${currentView === 'catalog' ? 'pt-1 sm:pt-1.5' : 'pt-2.5 sm:pt-6'}`}>
         
+        {currentView === 'faq' && (
+          <section className="mx-auto max-w-3xl space-y-4 py-5">
+            <button type="button" onClick={() => setCurrentView('catalog')} className="text-sm font-semibold text-slate-600">{t('backToCatalog')}</button>
+            <h1 className="text-xl font-bold text-slate-900">{t('menuFaq')}</h1>
+            <div className="space-y-3 divide-y divide-slate-200">
+              {(siteContent?.faq || []).map((item: { question: string; answer: string }) => <details key={item.question} className="py-3"><summary className="cursor-pointer font-semibold text-slate-800">{item.question}</summary><p className="mt-2 text-sm leading-6 text-slate-600">{item.answer}</p></details>)}
+            </div>
+          </section>
+        )}
+
+        {currentView === 'video' && (
+          <VideoFeed products={products} onOpenProduct={handleOpenProduct} onBack={() => setCurrentView('catalog')} />
+        )}
+
         {/* ЭКРАН 1: ПРАВИЛА СЕРВИСА */}
         {currentView === 'rules' && (
           <Suspense fallback={<div className="p-6 text-center text-sm text-slate-500">Загрузка…</div>}>
@@ -1352,7 +1420,7 @@ export default function App() {
               {t('rules')}
             </button>
             <a 
-              href="https://instagram.com/msavdo_official" 
+              href={siteContent?.social?.instagram || 'https://instagram.com/msavdo_official'}
               target="_blank" 
               rel="noreferrer"
               className="text-amber-400 hover:underline"
@@ -1371,7 +1439,7 @@ export default function App() {
             </div>
             <nav aria-label="Социальные сети M.Savdo" className="flex items-center gap-3">
               <a
-                href="https://t.me/MSavdoTJ"
+                href={siteContent?.social?.telegram || 'https://t.me/MSavdoTJ'}
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="M.Savdo в Telegram"
@@ -1381,7 +1449,7 @@ export default function App() {
                 <Send className="h-4 w-4" />
               </a>
               <a
-                href="https://instagram.com/msavdo_official"
+                href={siteContent?.social?.instagram || 'https://instagram.com/msavdo_official'}
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="M.Savdo в Instagram"
@@ -1391,7 +1459,7 @@ export default function App() {
                 <Instagram className="h-4 w-4" />
               </a>
               <a
-                href="https://www.youtube.com/@MSavdoTJ"
+                href={siteContent?.social?.youtube || 'https://www.youtube.com/@MSavdoTJ'}
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="M.Savdo на YouTube"

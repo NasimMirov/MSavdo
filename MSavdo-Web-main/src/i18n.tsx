@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 export type AppLanguage = 'ru' | 'tg' | 'en';
-export type AppTheme = 'light' | 'dark';
+export type AppTheme = 'system' | 'light' | 'dark';
 
 const translations = {
   ru: {
@@ -119,9 +119,10 @@ const translations = {
     priceDescending: 'По цене (сначала дороже)',
     variantCount: 'По числу вариантов SKU',
     language: 'Язык',
+    systemTheme: 'Как в системе',
     lightTheme: 'Светлая тема',
     darkTheme: 'Тёмная тема',
-    settingsTitle: 'Настройки',
+    settingsTitle: 'Меню',
     appearance: 'Тема',
     productWish: 'Какие товары вы хотели бы увидеть?',
     projectSuggestion: 'Как нам улучшить сервис?',
@@ -131,6 +132,14 @@ const translations = {
     feedbackSuccess: 'Спасибо! Ваше предложение отправлено.',
     feedbackError: 'Не удалось отправить предложение. Попробуйте ещё раз.',
     feedbackRequired: 'Заполните хотя бы одно поле.',
+    errorReport: 'Сообщить об ошибке',
+    errorReportPlaceholder: 'Опишите ошибку или неудобство',
+    themeSystem: 'Системная тема',
+    menuFeedback: 'Предложить улучшение',
+    menuProductWish: 'Предложить товар',
+    menuRules: 'Правила сервиса',
+    menuFaq: 'Частые вопросы',
+    menuVideoFeed: 'Видео-лента',
   },
   tg: {
     searchProducts: 'Ҷустуҷӯи мол',
@@ -259,6 +268,15 @@ const translations = {
     feedbackSuccess: 'Ташаккур! Пешниҳоди шумо фиристода шуд.',
     feedbackError: 'Пешниҳод фиристода нашуд. Дубора кӯшиш кунед.',
     feedbackRequired: 'Ақаллан як майдонро пур кунед.',
+    errorReport: 'Дар бораи хато хабар диҳед',
+    errorReportPlaceholder: 'Хаторо ё нороҳатиро нависед',
+    systemTheme: 'Мисли система',
+    themeSystem: 'Намуди система',
+    menuFeedback: 'Пешниҳоди беҳбудӣ',
+    menuProductWish: 'Пешниҳоди мол',
+    menuRules: 'Қоидаҳои хизматрасонӣ',
+    menuFaq: 'Саволҳои зиёд додашаванда',
+    menuVideoFeed: 'Навори видеоӣ',
   },
   en: {
     searchProducts: 'Search products',
@@ -387,6 +405,15 @@ const translations = {
     feedbackSuccess: 'Thank you! Your feedback has been sent.',
     feedbackError: 'Could not send feedback. Please try again.',
     feedbackRequired: 'Fill in at least one field.',
+    errorReport: 'Report an error',
+    errorReportPlaceholder: 'Describe the error or inconvenience',
+    systemTheme: 'Use system setting',
+    themeSystem: 'System theme',
+    menuFeedback: 'Suggest an improvement',
+    menuProductWish: 'Suggest a product',
+    menuRules: 'Service rules',
+    menuFaq: 'Frequently asked questions',
+    menuVideoFeed: 'Video feed',
   },
 } as const;
 
@@ -396,7 +423,7 @@ interface I18nContextValue {
   language: AppLanguage;
   setLanguage: (language: AppLanguage) => void;
   theme: AppTheme;
-  toggleTheme: () => void;
+  setTheme: (theme: AppTheme) => void;
   t: (key: TranslationKey) => string;
 }
 
@@ -413,10 +440,16 @@ function getStoredLanguage(): AppLanguage {
 
 function getStoredTheme(): AppTheme {
   try {
-    return localStorage.getItem('msavdo_theme') === 'dark' ? 'dark' : 'light';
+    const stored = localStorage.getItem('msavdo_theme');
+    return stored === 'light' || stored === 'dark' ? stored : 'system';
   } catch {
-    return 'light';
+    return 'system';
   }
+}
+
+function resolveTheme(theme: AppTheme): 'light' | 'dark' {
+  if (theme !== 'system') return theme;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
@@ -425,7 +458,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     document.documentElement.lang = language;
-    document.documentElement.dataset.theme = theme;
+    document.documentElement.dataset.theme = resolveTheme(theme);
+    document.documentElement.dataset.themePreference = theme;
     try {
       localStorage.setItem('msavdo_language', language);
       localStorage.setItem('msavdo_theme', theme);
@@ -434,11 +468,19 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     }
   }, [language, theme]);
 
+  useEffect(() => {
+    if (theme !== 'system') return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const update = () => { document.documentElement.dataset.theme = resolveTheme('system'); };
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, [theme]);
+
   const value = useMemo<I18nContextValue>(() => ({
     language,
     setLanguage: setLanguageState,
     theme,
-    toggleTheme: () => setThemeState((current) => current === 'light' ? 'dark' : 'light'),
+    setTheme: setThemeState,
     t: (key) => translations[language][key],
   }), [language, theme]);
 

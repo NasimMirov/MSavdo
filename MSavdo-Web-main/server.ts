@@ -294,6 +294,7 @@ for (const column of ['brand TEXT', 'manufacturer TEXT', 'gtin TEXT', 'mpn TEXT'
   try { db.exec(`ALTER TABLE products ADD COLUMN ${column};`); } catch (_) {}
 }
 try { db.exec('ALTER TABLE product_reviews ADD COLUMN purchase_verified INTEGER NOT NULL DEFAULT 0;'); } catch (_) {}
+try { db.exec("ALTER TABLE customer_feedback ADD COLUMN error_report TEXT NOT NULL DEFAULT '';"); } catch (_) {}
 db.exec(`
   CREATE TABLE IF NOT EXISTS product_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -436,6 +437,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_wish TEXT NOT NULL DEFAULT '',
     suggestion TEXT NOT NULL DEFAULT '',
+    error_report TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS site_visit_totals (
@@ -1034,6 +1036,67 @@ function getSetting(key: string, defaultValue: string): string {
 
 function setSetting(key: string, value: string): void {
   db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(key, value);
+}
+
+const defaultSiteContent = {
+  faq: [
+    { question: 'Как оформить заказ?', answer: 'Выберите товар, вариант и отправьте заказ менеджеру через WhatsApp.' },
+    { question: 'Сколько занимает доставка?', answer: 'Ориентировочный срок доставки составляет от 12 до 35 календарных дней.' },
+    { question: 'В какой валюте указаны цены?', answer: 'Цены указаны в таджикских сомони (TJS).' },
+    { question: 'Как работает возврат?', answer: 'Возврат выполняется по правилам сервиса на тот же счёт или карту, с которых поступила оплата.' },
+  ],
+  rules: {
+    title: 'Правила сервиса M.Savdo',
+    version: '1.0',
+    updatedAt: '2026-01-01',
+    changeNote: 'Первая опубликованная редакция.',
+    body: 'Покупатель подтверждает спецификацию заказа перед отправкой менеджеру. Срок доставки составляет 12–35 календарных дней. Возврат оформляется по правилам сервиса и действующему законодательству.',
+  },
+  social: {
+    telegram: 'https://t.me/MSavdoTJ',
+    instagram: 'https://instagram.com/msavdo_official',
+    youtube: 'https://www.youtube.com/@MSavdoTJ',
+  },
+};
+
+type SiteContent = typeof defaultSiteContent;
+
+function readSiteContent(): SiteContent {
+  try {
+    const parsed = JSON.parse(getSetting('site_content', JSON.stringify(defaultSiteContent))) as Partial<SiteContent>;
+    return {
+      faq: Array.isArray(parsed.faq) ? parsed.faq.filter((item): item is { question: string; answer: string } => Boolean(item && typeof item.question === 'string' && typeof item.answer === 'string')).slice(0, 50) : defaultSiteContent.faq,
+      rules: parsed.rules && typeof parsed.rules === 'object' && typeof parsed.rules.title === 'string' && typeof parsed.rules.body === 'string'
+        ? { ...defaultSiteContent.rules, ...parsed.rules }
+        : defaultSiteContent.rules,
+      social: parsed.social && typeof parsed.social === 'object' ? { ...defaultSiteContent.social, ...parsed.social } : defaultSiteContent.social,
+    };
+  } catch {
+    return defaultSiteContent;
+  }
+}
+
+function validateSiteContent(value: unknown): SiteContent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const input = value as Partial<SiteContent>;
+  if (!Array.isArray(input.faq) || input.faq.length > 50) return null;
+  const faq = input.faq.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const entry = item as { question?: unknown; answer?: unknown };
+    if (typeof entry.question !== 'string' || typeof entry.answer !== 'string' || !entry.question.trim() || entry.question.length > 300 || entry.answer.length > 3000) return null;
+    return { question: entry.question.trim(), answer: entry.answer.trim() };
+  });
+  if (faq.some((item) => !item)) return null;
+  const rules = input.rules;
+  if (!rules || typeof rules !== 'object' || Array.isArray(rules)) return null;
+  const rulesInput = rules as Partial<SiteContent['rules']>;
+  if (typeof rulesInput.title !== 'string' || typeof rulesInput.version !== 'string' || typeof rulesInput.updatedAt !== 'string' || typeof rulesInput.changeNote !== 'string' || typeof rulesInput.body !== 'string' || rulesInput.title.length > 200 || rulesInput.version.length > 30 || rulesInput.changeNote.length > 1000 || rulesInput.body.length > 30000) return null;
+  const social = input.social;
+  if (!social || typeof social !== 'object' || Array.isArray(social)) return null;
+  const socialInput = social as Partial<SiteContent['social']>;
+  const socialValues = [socialInput.telegram, socialInput.instagram, socialInput.youtube];
+  if (socialValues.some((url) => typeof url !== 'string' || url.length > 500 || (url && !/^https:\/\//i.test(url)))) return null;
+  return { faq: faq as SiteContent['faq'], rules: { title: rulesInput.title.trim(), version: rulesInput.version.trim(), updatedAt: rulesInput.updatedAt.trim(), changeNote: rulesInput.changeNote.trim(), body: rulesInput.body.trim() }, social: { telegram: String(socialInput.telegram || '').trim(), instagram: String(socialInput.instagram || '').trim(), youtube: String(socialInput.youtube || '').trim() } };
 }
 
 function tokenPlanEncryptionKey(): Buffer {
@@ -2314,15 +2377,15 @@ const feedbackRateLimiter = rateLimit({
 });
 
 app.post('/api/feedback', feedbackRateLimiter, (req, res) => {
-  const { product_wish: productWish, suggestion } = req.body || {};
-  if (typeof productWish !== 'string' || typeof suggestion !== 'string' ||
-      productWish.length > 2000 || suggestion.length > 2000 ||
-      (!productWish.trim() && !suggestion.trim())) {
+  const { product_wish: productWish, suggestion, error_report: errorReport } = req.body || {};
+  if (typeof productWish !== 'string' || typeof suggestion !== 'string' || typeof errorReport !== 'string' ||
+      productWish.length > 2000 || suggestion.length > 2000 || errorReport.length > 2000 ||
+      (!productWish.trim() && !suggestion.trim() && !errorReport.trim())) {
     return res.status(400).json({ error: 'Заполните хотя бы одно поле; не более 2000 символов в каждом.' });
   }
   try {
-    db.prepare('INSERT INTO customer_feedback (product_wish, suggestion, created_at) VALUES (?, ?, ?)')
-      .run(productWish.trim(), suggestion.trim(), new Date().toISOString());
+    db.prepare('INSERT INTO customer_feedback (product_wish, suggestion, error_report, created_at) VALUES (?, ?, ?, ?)')
+      .run(productWish.trim(), suggestion.trim(), errorReport.trim(), new Date().toISOString());
     return res.status(201).json({ success: true });
   } catch (error) {
     console.error('[Customer Feedback]', error);
@@ -2471,8 +2534,8 @@ app.get('/api/admin/feedback', (req, res) => {
   }
   try {
     const rows = before === null
-      ? db.prepare('SELECT id, product_wish, suggestion, created_at FROM customer_feedback ORDER BY id DESC LIMIT 51').all()
-      : db.prepare('SELECT id, product_wish, suggestion, created_at FROM customer_feedback WHERE id < ? ORDER BY id DESC LIMIT 51').all(before);
+      ? db.prepare('SELECT id, product_wish, suggestion, error_report, created_at FROM customer_feedback ORDER BY id DESC LIMIT 51').all()
+      : db.prepare('SELECT id, product_wish, suggestion, error_report, created_at FROM customer_feedback WHERE id < ? ORDER BY id DESC LIMIT 51').all(before);
     return res.json({ feedback: rows.slice(0, 50), has_more: rows.length > 50 });
   } catch (error) {
     console.error('[Admin Feedback]', error);
@@ -5645,7 +5708,39 @@ app.get('/api/settings', (_req, res) => {
   return res.json({
     whatsapp_phone: getSetting('whatsapp_phone', '992444431'),
     delivery_per_kg_tjs: '30',
+    site_content: readSiteContent(),
   });
+});
+
+app.get('/api/site-content', (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+  return res.json(readSiteContent());
+});
+
+app.get('/api/videos', (req, res) => {
+  const requestedLimit = Number(req.query.limit);
+  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 200;
+  try {
+    const rows = db.prepare(`
+      SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications, p.created_at, p.discount_percent
+      FROM products p
+      WHERE status = 'active' AND (
+        (video_url IS NOT NULL AND trim(video_url) != '') OR
+        (video_urls IS NOT NULL AND trim(video_urls) != '') OR
+        (youtube_url IS NOT NULL AND trim(youtube_url) != '')
+      )
+      ORDER BY views_count DESC, id DESC
+      LIMIT ?
+    `).all(limit) as Array<{ id: number; title: string; main_image: string | null; video_url: string | null; video_urls: string | null; youtube_url: string | null }>;
+    const videos = rows.flatMap((product) => normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || '').map((src) => ({
+      product: { id: product.id, title: product.title, main_image: product.main_image || '' },
+      src,
+    })));
+    return res.json({ videos });
+  } catch (error) {
+    console.error('[Public Videos]', error);
+    return res.status(500).json({ error: 'Не удалось загрузить видео.' });
+  }
 });
 
 app.get('/api/admin/settings', requireAdmin, (_req, res) => {
@@ -5682,6 +5777,10 @@ app.get('/api/admin/settings', requireAdmin, (_req, res) => {
     instagram_configured: Boolean(getSetting('instagram_user_id', '').trim() && getSetting('instagram_access_token_encrypted', '')),
     instagram_user_id: getSetting('instagram_user_id', ''),
     instagram_auto_publish: getSetting('instagram_auto_publish', '0') === '1',
+    site_content: readSiteContent(),
+    site_content_history: (() => {
+      try { return JSON.parse(getSetting('site_content_history', '[]')); } catch { return []; }
+    })(),
   });
 });
 
@@ -5737,6 +5836,16 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
     }
     setSetting('somon_city_id', '513');
     setSetting('somon_district_id', '');
+    if (req.body?.site_content !== undefined) {
+      const content = validateSiteContent(req.body.site_content);
+      if (!content) return res.status(400).json({ error: 'Контент сайта имеет неверный формат или превышает допустимый размер.' });
+      const previous = readSiteContent();
+      let history: Array<{ version: string; updatedAt: string; changeNote: string; savedAt: string; content: SiteContent }> = [];
+      try { history = JSON.parse(getSetting('site_content_history', '[]')); } catch { history = []; }
+      history.unshift({ version: previous.rules.version, updatedAt: previous.rules.updatedAt, changeNote: previous.rules.changeNote, savedAt: new Date().toISOString(), content: previous });
+      setSetting('site_content_history', JSON.stringify(history.slice(0, 20)));
+      setSetting('site_content', JSON.stringify(content));
+    }
     if (somon_category_config !== undefined) {
       if (!somon_category_config || typeof somon_category_config !== 'object' || Array.isArray(somon_category_config)) {
         return res.status(400).json({ error: 'Укажите корректные настройки категорий Somon' });

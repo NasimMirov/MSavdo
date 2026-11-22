@@ -1,6 +1,7 @@
 import React from 'react';
 import { AlertTriangle, ArrowLeft, CheckCircle2, ShieldCheck, ShoppingBasket } from 'lucide-react';
 import { useI18n } from '../i18n';
+import { apiFetch } from '../api';
 
 interface RulesViewProps {
   onBack: () => void;
@@ -171,6 +172,11 @@ const rulesCopy = {
 
 export const RulesView: React.FC<RulesViewProps> = ({ onBack, onOpenCart }) => {
   const { t, language } = useI18n();
+  const [siteRules, setSiteRules] = React.useState<{ title: string; version: string; updatedAt: string; changeNote: string; body: string } | null>(null);
+  React.useEffect(() => {
+    apiFetch('/api/site-content').then((response) => response.ok ? response.json() : Promise.reject(new Error('Rules unavailable')))
+      .then((data) => setSiteRules(data.rules || null)).catch(() => undefined);
+  }, []);
   const copy = rulesCopy[language];
 
   return (
@@ -201,9 +207,9 @@ export const RulesView: React.FC<RulesViewProps> = ({ onBack, onOpenCart }) => {
             <span>{copy.label}</span>
           </div>
           <h1 className="font-heading text-xl font-extrabold tracking-tight text-slate-900 sm:text-2xl">
-            {copy.title}
+            {siteRules?.title || copy.title}
           </h1>
-          <p className="mt-1 text-xs text-slate-500">{copy.edition}</p>
+          <p className="mt-1 text-xs text-slate-500">{siteRules ? `Версия ${siteRules.version} · Редакция от ${siteRules.updatedAt}` : copy.edition}</p>
         </header>
 
         <section className="rounded-xl border border-red-300 bg-red-50 p-4 text-red-950 sm:p-5">
@@ -225,7 +231,7 @@ export const RulesView: React.FC<RulesViewProps> = ({ onBack, onOpenCart }) => {
         </section>
 
         <div className="space-y-5 text-sm leading-relaxed text-slate-700">
-          {copy.sections.map((section, index) => (
+          {siteRules ? <p className="whitespace-pre-wrap">{siteRules.body}</p> : copy.sections.map((section, index) => (
             <section key={section.title} className="space-y-2">
               <h3 className="flex items-center gap-2 text-base font-bold text-slate-900">
                 <span className="font-mono text-emerald-600">{String(index + 1).padStart(2, '0')}.</span>
@@ -234,6 +240,7 @@ export const RulesView: React.FC<RulesViewProps> = ({ onBack, onOpenCart }) => {
               {section.paragraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
             </section>
           ))}
+          {siteRules && <p className="text-xs text-slate-500">Изменения в редакции: {siteRules.changeNote}</p>}
         </div>
 
         <footer className="flex flex-col items-center justify-between gap-4 border-t border-slate-200 pt-5 sm:flex-row">
