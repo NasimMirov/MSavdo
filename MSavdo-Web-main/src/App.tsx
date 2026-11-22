@@ -46,6 +46,8 @@ type VideoFeedItem = { product: VideoFeedProduct; src: string };
 
 function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; onOpenProduct: (product: Product) => void; onBack: () => void }) {
   const [feedVideos, setFeedVideos] = useState<VideoFeedItem[] | null>(null);
+  const [hasMoreVideos, setHasMoreVideos] = useState(false);
+  const [nextVideoOffset, setNextVideoOffset] = useState(0);
   const [activeIndex, setActiveIndex] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [playing, setPlaying] = useState(true);
@@ -53,14 +55,34 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
   const [duration, setDuration] = useState(0);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [transitioning, setTransitioning] = useState(false);
+  const [mediaState, setMediaState] = useState<'loading' | 'ready' | 'blocked' | 'error'>('loading');
+  const [showControls, setShowControls] = useState(false);
   const videoRefs = useRef<Array<HTMLVideoElement | null>>([]);
   const touchStartY = useRef<number | null>(null);
+  const controlsTimer = useRef<number | null>(null);
+  const loadingMoreRef = useRef(false);
+
+  const loadVideos = useCallback(async (offset: number, replace = false) => {
+    if (!replace && loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    try {
+      const response = await apiFetch(`/api/videos?limit=24&offset=${offset}`);
+      if (!response.ok) throw new Error('Video feed failed');
+      const data = await response.json() as { videos?: VideoFeedItem[]; hasMore?: boolean; nextOffset?: number };
+      const nextVideos = Array.isArray(data.videos) ? data.videos : [];
+      setFeedVideos((current) => replace ? nextVideos : [...(current || []), ...nextVideos]);
+      setHasMoreVideos(data.hasMore === true || nextVideos.length === 24);
+      setNextVideoOffset(typeof data.nextOffset === 'number' ? data.nextOffset : offset + 24);
+    } catch {
+      if (replace) setFeedVideos([]);
+    } finally {
+      loadingMoreRef.current = false;
+    }
+  }, []);
 
   useEffect(() => {
-    apiFetch('/api/videos?limit=500').then((response) => response.ok ? response.json() : Promise.reject(new Error('Video feed failed')))
-      .then((data) => setFeedVideos(Array.isArray(data.videos) ? data.videos : []))
-      .catch(() => setFeedVideos([]));
-  }, []);
+    void loadVideos(0, true);
+  }, [loadVideos]);
 
   const videos = feedVideos ?? products.flatMap((product) => {
     const sources = [...new Set([...(Array.isArray(product.video_urls) ? product.video_urls : []), product.video_url || '', product.youtube_url || ''].map((url) => url.trim()).filter(Boolean))];
@@ -82,12 +104,19 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
   }, [activeIndex, galleryImages.length]);
 
   useEffect(() => {
+    setMediaState('loading');
+    setShowControls(false);
     videoRefs.current.forEach((video, index) => {
       if (!video) return;
       video.playbackRate = playbackRate;
-      video.preload = index === activeIndex || index === activeIndex + 1 ? 'auto' : 'none';
+      video.preload = index === activeIndex ? 'auto' : index === activeIndex + 1 ? 'auto' : index === activeIndex - 1 ? 'metadata' : 'none';
       if (index === activeIndex && playing) {
-        void video.play().catch(() => setPlaying(false));
+        if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+          void video.play().catch(() => {
+            setPlaying(false);
+            setMediaState('blocked');
+          });
+        }
       } else if (index !== activeIndex) {
         video.pause();
         video.currentTime = 0;
@@ -95,17 +124,28 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
     });
   }, [activeIndex, videos.length, playbackRate, playing]);
 
+  useEffect(() => () => {
+    if (controlsTimer.current) window.clearTimeout(controlsTimer.current);
+  }, []);
+
+  const revealControls = () => {
+    setShowControls(true);
+    if (controlsTimer.current) window.clearTimeout(controlsTimer.current);
+    controlsTimer.current = window.setTimeout(() => setShowControls(false), 4500);
+  };
+
   const move = useCallback((direction: 1 | -1) => {
     if (transitioning || videos.length < 2) return;
     const next = Math.max(0, Math.min(videos.length - 1, activeIndex + direction));
     if (next === activeIndex) return;
+    if (direction > 0 && hasMoreVideos && next >= videos.length - 3) void loadVideos(nextVideoOffset);
     setTransitioning(true);
     setActiveIndex(next);
     setCurrentTime(0);
     setDuration(0);
     setPlaying(true);
     window.setTimeout(() => setTransitioning(false), 520);
-  }, [activeIndex, transitioning, videos.length]);
+  }, [activeIndex, hasMoreVideos, loadVideos, nextVideoOffset, transitioning, videos.length]);
 
   const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     if (Math.abs(event.deltaY) < 12) return;
@@ -113,7 +153,10 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
     move(event.deltaY > 0 ? 1 : -1);
   };
 
-  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => { touchStartY.current = event.touches[0]?.clientY ?? null; };
+  const handleTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest('button, select, input, video, iframe')) return;
+    touchStartY.current = event.touches[0]?.clientY ?? null;
+  };
   const handleTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
     if (touchStartY.current === null) return;
     const delta = touchStartY.current - (event.changedTouches[0]?.clientY ?? touchStartY.current);
@@ -128,33 +171,31 @@ function VideoFeed({ products, onOpenProduct, onBack }: { products: Product[]; o
       onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'PageDown') { event.preventDefault(); move(1); } if (event.key === 'ArrowUp' || event.key === 'PageUp') { event.preventDefault(); move(-1); } }}>
       <div className="h-full transition-transform duration-500 ease-out" style={{ transform: `translateY(-${activeIndex * 100}%)` }}>
         {videos.map(({ product, src }, index) => {
+          if (Math.abs(index - activeIndex) > 1) return <article key={`${product.id}-${src}`} className="h-full min-h-full w-full bg-slate-950" />;
           const youtubeId = src.match(/(?:youtube\.com\/(?:[^/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/)?.[1];
           const fullProduct = products.find((item) => item.id === product.id);
           const inStock = 'in_stock' in product ? product.in_stock === true : product.delivery_type === 'stock';
           const priceLabel = (product.min_price_tjs || 0) > 0 ? `${(product.min_price_tjs || 0).toLocaleString('ru-RU')}${(product.max_price_tjs || 0) > (product.min_price_tjs || 0) ? `–${(product.max_price_tjs || 0).toLocaleString('ru-RU')}` : ''} с.` : 'Цена по запросу';
           const deliveryLabel = inStock ? 'В наличии' : product.delivery_type === 'stock' ? 'Ожидается поставка' : 'Доставка из Китая';
-          return <article key={`${product.id}-${src}`} className="relative flex h-full min-h-full w-full items-center justify-center bg-slate-900">
-            {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${index === activeIndex ? 1 : 0}&controls=1&playsinline=1&rel=0`} className="h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={src} playsInline loop controls preload={index === activeIndex || index === activeIndex + 1 ? 'auto' : 'none'} onTimeUpdate={(event) => { if (index === activeIndex) setCurrentTime(event.currentTarget.currentTime); }} onLoadedMetadata={(event) => { if (index === activeIndex) setDuration(event.currentTarget.duration); }} onPlay={() => index === activeIndex && setPlaying(true)} onPause={() => index === activeIndex && setPlaying(false)} className="h-full w-full object-contain" />}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-48 bg-gradient-to-t from-slate-950/90 via-slate-950/30 to-transparent" />
+          const isActive = index === activeIndex;
+          return <article key={`${product.id}-${src}`} className="relative flex h-full min-h-full w-full items-center justify-center bg-slate-950" onClick={isActive ? revealControls : undefined}>
+            {product.main_image && isActive && <img src={product.main_image} alt="" className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${mediaState === 'ready' ? 'opacity-0' : 'opacity-80'}`} />}
+            {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${isActive ? 1 : 0}&controls=1&playsinline=1&rel=0`} className="absolute inset-0 h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={src} poster={product.main_image || undefined} playsInline loop controls={isActive && showControls} preload={isActive ? 'auto' : index === activeIndex + 1 ? 'auto' : 'metadata'} onLoadStart={() => isActive && setMediaState('loading')} onLoadedData={(event) => { if (!isActive) return; setMediaState('ready'); setDuration(event.currentTarget.duration || 0); if (playing) void event.currentTarget.play().catch(() => { setPlaying(false); setMediaState('blocked'); }); }} onCanPlay={() => isActive && setMediaState('ready')} onWaiting={() => isActive && setMediaState('loading')} onStalled={() => isActive && setMediaState('loading')} onError={() => isActive && setMediaState('error')} onTimeUpdate={(event) => { if (isActive) setCurrentTime(event.currentTarget.currentTime); }} onPlay={() => isActive && setPlaying(true)} onPause={() => isActive && setPlaying(false)} className="absolute inset-0 h-full w-full object-contain" />}
+            {isActive && mediaState !== 'ready' && !youtubeId && <div className="absolute inset-0 z-[1] flex items-center justify-center bg-slate-950/10">{mediaState === 'blocked' ? <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRefs.current[index]; if (video) void video.play().then(() => { setPlaying(true); setMediaState('ready'); }).catch(() => setMediaState('blocked')); }} className="rounded-full border border-white/30 bg-black/55 px-5 py-3 text-sm font-bold text-white backdrop-blur">Нажмите, чтобы смотреть</button> : mediaState === 'error' ? <div className="rounded-full bg-black/55 px-4 py-2 text-sm font-semibold text-white">Видео временно недоступно</div> : <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-label="Загрузка видео" />}</div>}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent" />
             <div className="absolute inset-x-0 top-0 z-10 flex items-start justify-between p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
               <button type="button" onClick={onBack} aria-label="Назад в каталог" className="flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm"><span aria-hidden="true">←</span></button>
               <div className="flex items-center gap-2">
-                {!youtubeId && <label className="flex h-9 items-center gap-1 rounded-full bg-black/45 px-2 text-white backdrop-blur-sm" aria-label="Скорость воспроизведения">
-                  <Gauge className="h-3.5 w-3.5" /><select value={playbackRate} onChange={(event) => setPlaybackRate(Number(event.target.value))} className="w-11 appearance-none bg-transparent text-[11px] font-bold text-white focus:outline-none">
-                    {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate} className="text-slate-900">{rate}x</option>)}
-                  </select>
-                </label>}
+                {!youtubeId && <label className="flex h-9 items-center gap-1 rounded-full bg-black/45 px-2 text-white backdrop-blur-sm" aria-label="Скорость воспроизведения"><Gauge className="h-3.5 w-3.5" /><select value={playbackRate} onChange={(event) => setPlaybackRate(Number(event.target.value))} className="w-11 appearance-none bg-transparent text-[11px] font-bold text-white focus:outline-none">{[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate} className="text-slate-900">{rate}x</option>)}</select></label>}
                 <ProductShareButton product={(fullProduct || product) as Product} className="z-20" menuAlignment="right" />
               </div>
             </div>
-            {!youtubeId && duration > 0 && index === activeIndex && <div className="absolute inset-x-3 bottom-[max(6.75rem,calc(env(safe-area-inset-bottom)+6rem))] z-10 sm:inset-x-4"><label className="block rounded-full bg-black/45 px-3 py-1.5 backdrop-blur-sm" aria-label="Позиция видео"><span className="sr-only">Позиция видео</span><input type="range" min="0" max={duration} step="0.1" value={currentTime} onChange={(event) => { const nextTime = Number(event.target.value); const video = videoRefs.current[index]; if (video) video.currentTime = nextTime; setCurrentTime(nextTime); }} className="h-1.5 w-full accent-emerald-400" /></label></div>}
+            {!youtubeId && isActive && showControls && duration > 0 && <div className="absolute inset-x-3 bottom-[max(6rem,calc(env(safe-area-inset-bottom)+5.5rem))] z-10 sm:inset-x-4"><label className="block rounded-full bg-black/45 px-3 py-1.5 backdrop-blur-sm" aria-label="Позиция видео"><span className="sr-only">Позиция видео</span><input type="range" min="0" max={duration} step="0.1" value={currentTime} onChange={(event) => { const nextTime = Number(event.target.value); const video = videoRefs.current[index]; if (video) video.currentTime = nextTime; setCurrentTime(nextTime); }} className="h-1.5 w-full accent-emerald-400" /></label></div>}
             <div className="absolute inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-10 sm:inset-x-4">
-              <button type="button" onClick={() => fullProduct && onOpenProduct(fullProduct)} className="relative flex w-full items-center gap-2.5 overflow-hidden rounded-xl border border-white/80 bg-white/95 p-2.5 text-left text-slate-900 shadow-[0_10px_35px_rgba(0,0,0,0.35)] backdrop-blur-sm transition hover:border-emerald-400">
-                <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-slate-100">
-                  {galleryImages.map((image, imageIndex) => <img key={image} src={image} alt="" loading={index <= activeIndex + 1 ? 'eager' : 'lazy'} className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 ${imageIndex === galleryIndex ? 'opacity-100' : 'opacity-0'}`} />)}
-                </div>
-                <span className="min-w-0 flex-1"><span className="block line-clamp-2 text-xs font-bold leading-tight">{product.title}</span><span className="mt-1 block text-sm font-black text-slate-950">{priceLabel}</span><span className={`mt-0.5 block text-[10px] font-semibold ${inStock ? 'text-emerald-700' : 'text-amber-700'}`}>{deliveryLabel}</span></span>
-                <span className="shrink-0 rounded-lg bg-slate-950 px-2.5 py-2 text-[10px] font-bold text-white shadow-sm">Посмотреть товар</span>
+              <button type="button" onClick={() => fullProduct && onOpenProduct(fullProduct)} className="relative flex w-full items-center gap-3 overflow-hidden rounded-2xl border border-white/20 bg-slate-950/75 p-3 text-left text-white shadow-[0_12px_42px_rgba(0,0,0,0.42)] backdrop-blur-xl transition hover:border-emerald-300/50">
+                <span className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-white/10 ring-1 ring-white/20">{galleryImages.map((image, imageIndex) => <img key={image} src={image} alt="" loading={index <= activeIndex + 1 ? 'eager' : 'lazy'} className={`absolute inset-0 h-full w-full object-cover transition-opacity duration-700 motion-reduce:transition-none ${imageIndex === galleryIndex ? 'opacity-100' : 'opacity-0'}`} />)}{galleryImages.length > 1 && <span className="absolute bottom-1 right-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[9px] font-bold">{galleryIndex + 1}/{galleryImages.length}</span>}</span>
+                <span className="min-w-0 flex-1"><span className="block line-clamp-2 text-sm font-semibold leading-snug">{product.title}</span><span className="mt-1 block text-base font-extrabold tracking-tight">{priceLabel}</span><span className={`mt-0.5 inline-flex items-center gap-1.5 text-[11px] font-semibold ${inStock ? 'text-emerald-300' : 'text-amber-200'}`}><span className={`h-1.5 w-1.5 rounded-full ${inStock ? 'bg-emerald-400' : 'bg-amber-300'}`} />{deliveryLabel}</span></span>
+                <span className="shrink-0 rounded-xl bg-emerald-400 px-3 py-2.5 text-xs font-extrabold text-slate-950 shadow-lg shadow-emerald-950/20">Посмотреть<br />товар</span>
               </button>
             </div>
           </article>;

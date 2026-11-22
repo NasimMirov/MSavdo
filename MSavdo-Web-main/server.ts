@@ -5719,7 +5719,9 @@ app.get('/api/site-content', (_req, res) => {
 
 app.get('/api/videos', (req, res) => {
   const requestedLimit = Number(req.query.limit);
-  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 200;
+  const requestedOffset = Number(req.query.offset);
+  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 24;
+  const offset = Number.isInteger(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
   try {
     const rows = db.prepare(`
       SELECT p.id, p.title, p.description, p.category_id, p.base_sku, p.status, p.delivery_type, p.main_image, p.images, p.video_url, p.video_urls, p.youtube_url, p.video_first, p.specifications, p.created_at, p.discount_percent,
@@ -5737,8 +5739,8 @@ app.get('/api/videos', (req, res) => {
       )
       GROUP BY p.id
       ORDER BY p.views_count DESC, p.id DESC
-      LIMIT ?
-    `).all(limit) as Array<{
+      LIMIT ? OFFSET ?
+    `).all(limit, offset) as Array<{
       id: number; title: string; main_image: string | null; images: string | null; video_url: string | null; video_urls: string | null; youtube_url: string | null;
       delivery_type: string | null; discount_percent: number | null; min_price_tjs: number; max_price_tjs: number; stocked_variants: number; variant_count: number; variant_images: string | null;
     }>;
@@ -5765,7 +5767,7 @@ app.get('/api/videos', (req, res) => {
       };
       return normalizeVideoUrls(product.video_urls, product.youtube_url || product.video_url || '').map((src) => ({ product: productPreview, src }));
     });
-    return res.json({ videos });
+    return res.json({ videos, hasMore: rows.length >= limit, nextOffset: offset + rows.length });
   } catch (error) {
     console.error('[Public Videos]', error);
     return res.status(500).json({ error: 'Не удалось загрузить видео.' });
