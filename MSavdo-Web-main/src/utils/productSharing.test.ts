@@ -16,7 +16,7 @@ test('shares, copies, and reports clipboard failures without leaving temporary e
   try {
     setGlobal('window', { location: { origin: 'https://msavdo.shop' } });
     const url = getProductUrl(product);
-    assert.equal(url, 'https://msavdo.shop/?product=12');
+    assert.equal(url, 'https://msavdo.shop/product/12/%D1%83%D0%BC%D0%BD%D1%8B%D0%B5-%D0%BE%D1%87%D0%BA%D0%B8');
     let copied = '';
     setGlobal('navigator', { clipboard: { writeText: async (value: string) => { copied = value; } } });
     assert.equal(await shareProduct(product), 'copied');

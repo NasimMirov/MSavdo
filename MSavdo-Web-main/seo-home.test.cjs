@@ -26,6 +26,8 @@ test('homepage exposes current product links and falls back to the storefront if
   assert.match(html, /Очки &lt;новые&gt; \$&amp;/);
   assert.match(html, /href="\/product\/8\//);
   assert.match(html, /от 390 сомони/);
+  assert.match(html, /<meta name="robots" content="noindex,follow">/);
+  assert.match(html, /<link rel="canonical" href="https:\/\/msavdo\.shop\/product\/8\/%D0%BE%D1%87%D0%BA%D0%B8/);
   assert.match(html, /product-image\/8\/a\.jpg\?width=640/);
   assert.doesNotMatch(html, /other\.example/);
   assert.match(html, /Новый товар/);

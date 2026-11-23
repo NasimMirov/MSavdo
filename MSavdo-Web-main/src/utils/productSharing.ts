@@ -2,12 +2,13 @@ import { Product } from '../types';
 
 export type ShareResult = 'shared' | 'copied' | 'cancelled';
 
+function productSlug(title: string): string {
+  return title.normalize('NFC').toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '').slice(0, 80) || 'product';
+}
+
 export function getProductUrl(product: Product): string {
-  // Shared links must open the SPA so users get the interactive product card.
-  // The /product/:id/:slug route is reserved for SEO crawler pages.
-  const url = new URL('/', window.location.origin);
-  url.searchParams.set('product', String(product.id));
-  return url.toString();
+  return new URL(`/product/${product.id}/${encodeURIComponent(productSlug(product.title))}`, window.location.origin).toString();
 }
 
 function copyTextFallback(text: string): void {
