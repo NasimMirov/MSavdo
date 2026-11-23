@@ -1227,30 +1227,32 @@ async function instagramRequest(pathname: string, method: 'GET' | 'POST', params
 }
 
 async function waitForInstagramContainer(containerId: string, token: string, kind: 'media' | 'video' = 'media'): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+  const pollDelayMs = kind === 'video' ? 5000 : 1500;
+  const maxAttempts = kind === 'video' ? 120 : 20;
+  let lastStatus = 'UNKNOWN';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
     const status = await instagramRequest(`/${encodeURIComponent(containerId)}`, 'GET', {
       fields: 'status_code,status',
       access_token: token,
     });
+    lastStatus = typeof status.status_code === 'string'
+      ? status.status_code
+      : typeof status.status === 'string'
+        ? status.status
+        : 'UNKNOWN';
     if (status.status_code === 'ERROR') {
       const message = typeof status.error_message === 'string' ? `: ${status.error_message}` : '';
       throw new Error(`Instagram не смог обработать ${kind === 'video' ? 'видео' : 'медиа'}${message}.`);
     }
     if (status.status_code === 'FINISHED') return;
   }
-  throw new Error(`Instagram не завершил обработку ${kind === 'video' ? 'видео' : 'медиа'} вовремя.`);
-}
 
-function isDirectInstagramVideoUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (!/^https?:$/.test(url.protocol)) return false;
-    if (/youtube\.com|youtu\.be|vimeo\.com|tiktok\.com/i.test(url.hostname)) return false;
-    return /\.(mp4|mov|m4v|avi|webm)(?:$|[?#])/i.test(url.pathname + url.search);
-  } catch {
-    return false;
-  }
+  throw new Error(
+    `Instagram не завершил обработку ${kind === 'video' ? 'видео' : 'медиа'} `
+      + `за ${Math.round((maxAttempts * pollDelayMs) / 60000)} мин. Последний статус: ${lastStatus}.`,
+  );
 }
 
 async function createInstagramMediaContainer(
@@ -1296,25 +1298,17 @@ async function publishInstagramProduct(productId: number): Promise<void> {
   );
   if (!images.length) throw new Error('У товара нет публичного изображения для Instagram.');
   const videoUrls = normalizeVideoUrls(row.video_urls, row.youtube_url || row.video_url || '');
-  const directVideoUrls = videoUrls.filter(isDirectInstagramVideoUrl);
-  const directVideos = directVideoUrls.slice(0, Math.max(0, instagramCarouselLimit - images.length));
-  const skippedVideos = videoUrls.filter((url) => !isDirectInstagramVideoUrl(url));
-  const truncatedVideos = directVideoUrls.slice(directVideos.length);
   const instagramUserId = getSetting('instagram_user_id', '').trim();
   if (!instagramUserId) throw new Error('Не указан Instagram professional account ID.');
   const token = readInstagramToken();
   const caption = instagramCaption(row);
-  const mediaCount = images.length + directVideos.length;
   const childIds: string[] = [];
 
-  if (mediaCount === 1 && images.length === 1) {
+  if (images.length === 1) {
     childIds.push(await createInstagramMediaContainer(instagramUserId, token, { imageUrl: images[0], caption }));
   } else {
     for (const image of images) {
       childIds.push(await createInstagramMediaContainer(instagramUserId, token, { imageUrl: image, carouselItem: true }));
-    }
-    for (const video of directVideos) {
-      childIds.push(await createInstagramMediaContainer(instagramUserId, token, { videoUrl: video, carouselItem: true }));
     }
   }
 
@@ -1330,22 +1324,18 @@ async function publishInstagramProduct(productId: number): Promise<void> {
     await waitForInstagramContainer(carouselId, token);
     const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: carouselId, access_token: token });
     const mediaId = typeof result.id === 'string' ? result.id : carouselId;
-    const warningParts = [
-      skippedVideos.length ? `Пропущены ссылки на видео, не являющиеся прямыми файлами: ${skippedVideos.join(', ')}` : '',
-      truncatedVideos.length ? `Превышен лимит Instagram carousel, пропущены видео: ${truncatedVideos.join(', ')}` : '',
-    ].filter(Boolean);
-    const warning = warningParts.join('. ') || null;
+    const warning = videoUrls.length
+      ? 'Видео пропущено: публикация создана из фотографий товара.'
+      : null;
     db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, warning, productId);
     return;
   }
 
   const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: childIds[0], access_token: token });
   const mediaId = typeof result.id === 'string' ? result.id : childIds[0];
-  const warningParts = [
-    skippedVideos.length ? `Пропущены ссылки на видео, не являющиеся прямыми файлами: ${skippedVideos.join(', ')}` : '',
-    truncatedVideos.length ? `Превышен лимит Instagram carousel, пропущены видео: ${truncatedVideos.join(', ')}` : '',
-  ].filter(Boolean);
-  const warning = warningParts.join('. ') || null;
+  const warning = videoUrls.length
+    ? 'Видео пропущено: публикация создана из фотографий товара.'
+    : null;
   db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, warning, productId);
 }
 
@@ -1353,7 +1343,7 @@ async function processInstagramQueue(): Promise<void> {
   if (instagramWorkerRunning || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
   instagramWorkerRunning = true;
   try {
-    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE status IN ('queued', 'failed') AND attempts < 5 ORDER BY updated_at ASC LIMIT 3`).all() as Array<{ product_id: number; attempts: number }>;
+    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes'))) AND attempts < 5 ORDER BY updated_at ASC LIMIT 3`).all() as Array<{ product_id: number; attempts: number }>;
     for (const job of jobs) {
       db.prepare("UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(job.product_id);
       try {
