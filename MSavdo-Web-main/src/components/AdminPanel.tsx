@@ -359,8 +359,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [instagramSettings, setInstagramSettings] = useState({ user_id: '', access_token: '', auto_publish: false });
   const [instagramConfigured, setInstagramConfigured] = useState(false);
   const [instagramJobs, setInstagramJobs] = useState<any[]>([]);
+  const [instagramMedia, setInstagramMedia] = useState<any[]>([]);
+  const [instagramReconcileMessage, setInstagramReconcileMessage] = useState('');
+  const [instagramReconcileBusy, setInstagramReconcileBusy] = useState(false);
   const [instagramReelsJobs, setInstagramReelsJobs] = useState<any[]>([]);
   const [instagramReelsEligible, setInstagramReelsEligible] = useState(0);
+  const [instagramReelsChecks, setInstagramReelsChecks] = useState<any[]>([]);
+  const [instagramReelsValidationMessage, setInstagramReelsValidationMessage] = useState('');
+  const [instagramReelsChecking, setInstagramReelsChecking] = useState(false);
   const [instagramReelsMessage, setInstagramReelsMessage] = useState('');
   const [instagramMessage, setInstagramMessage] = useState('');
   const [instagramSaving, setInstagramSaving] = useState(false);
@@ -930,9 +936,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         const reelsData = await reelsResponse.json();
         setInstagramReelsJobs(Array.isArray(reelsData.jobs) ? reelsData.jobs : []);
         setInstagramReelsEligible(Number(reelsData.eligible) || 0);
+        setInstagramReelsChecks(Array.isArray(reelsData.checks) ? reelsData.checks : []);
+        setInstagramReelsValidationMessage(reelsData.validationNote || '');
       }
     } catch {
       setInstagramMessage('Не удалось загрузить статус Instagram.');
+    }
+  };
+
+  const reconcileInstagramMedia = async () => {
+    setInstagramReconcileBusy(true);
+    setInstagramReconcileMessage('Получение публикаций Instagram без изменения очереди…');
+    try {
+      const response = await adminFetch('/api/admin/instagram/media?limit=200', { cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось получить публикации Instagram.');
+      setInstagramMedia(Array.isArray(data.media) ? data.media : []);
+      setInstagramReconcileMessage(`Получено публикаций: ${data.media?.length || 0}. Очередь не изменялась; сопоставьте подпись и дату с товарами вручную.`);
+    } catch (error) {
+      setInstagramReconcileMessage(error instanceof Error ? error.message : 'Сверка Instagram не удалась.');
+    } finally {
+      setInstagramReconcileBusy(false);
+    }
+  };
+
+  const checkInstagramReels = async () => {
+    setInstagramReelsChecking(true);
+    setInstagramReelsMessage('Проверка ссылок видео без загрузки файлов…');
+    try {
+      const response = await adminFetch('/api/admin/instagram/reels/check', { method: 'POST', cache: 'no-store' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось проверить ссылки видео.');
+      setInstagramReelsEligible(Number(data.eligible) || 0);
+      setInstagramReelsChecks(Array.isArray(data.checks) ? data.checks : []);
+      setInstagramReelsValidationMessage(data.validationNote || '');
+      setInstagramReelsMessage(`Проверено ссылок: ${data.checks?.length || 0}; пригодны для передачи Meta: ${data.eligible || 0}. Файлы не скачивались.`);
+    } catch (error) {
+      setInstagramReelsMessage(error instanceof Error ? error.message : 'Проверка ссылок не удалась.');
+    } finally {
+      setInstagramReelsChecking(false);
     }
   };
 
@@ -1019,6 +1061,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setInstagramMessage(error instanceof Error ? error.message : 'Не удалось поставить товары в очередь.');
     } finally {
       setInstagramSaving(false);
+    }
+  };
+
+  const retryInstagramProduct = async (productId: number) => {
+    setInstagramMessage(`Повторная постановка товара #${productId}…`);
+    try {
+      const response = await adminFetch(`/api/admin/instagram/retry/${productId}`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось поставить товар повторно.');
+      setInstagramMessage(`Товар #${productId} поставлен повторно. Worker обрабатывает по одному товару.`);
+      await loadInstagramStatus();
+    } catch (error) {
+      setInstagramMessage(error instanceof Error ? error.message : 'Не удалось повторить публикацию.');
     }
   };
 
@@ -3274,13 +3329,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <label className="flex items-center gap-2 text-xs font-bold text-slate-700"><input type="checkbox" checked={instagramSettings.auto_publish} onChange={(event) => setInstagramSettings({ ...instagramSettings, auto_publish: event.target.checked })} /> Публиковать новые активные товары автоматически</label>
             <div className="flex flex-wrap gap-2"><button type="button" disabled={instagramSaving} onClick={() => void saveInstagramSettings()} className="rounded-xl bg-pink-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{instagramSaving ? 'Сохранение…' : 'Сохранить настройки'}</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void testInstagramConnection()} className="rounded-xl border border-pink-300 px-4 py-2 text-xs font-bold text-pink-800 disabled:opacity-50">Проверить подключение</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void queueAllInstagramProducts()} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 disabled:opacity-50">Поставить все активные товары в очередь</button></div>
             {instagramMessage && <p role="status" className="text-xs text-slate-700">{instagramMessage}</p>}
-            {instagramJobs.length > 0 && <div className="space-y-1 text-xs"><div className="font-bold text-slate-700">Последние публикации фото</div>{instagramJobs.slice(0, 8).map((job) => <div key={job.product_id} className="flex items-center justify-between gap-2 border-b border-pink-100 py-1"><span className="truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status === 'published' ? 'Опубликован' : job.status === 'failed' ? `Ошибка: ${job.error || 'проверить'}` : job.status === 'publishing' ? 'Публикуется' : 'В очереди'}</span></div>)}</div>}
+            <button type="button" disabled={!instagramConfigured || instagramReconcileBusy} onClick={() => void reconcileInstagramMedia()} className="rounded-xl border border-pink-300 bg-white px-4 py-2 text-xs font-bold text-pink-800 disabled:opacity-50">{instagramReconcileBusy ? 'Сверка…' : 'Сверить публикации Instagram'}</button>
+            {instagramReconcileMessage && <p role="status" className="text-xs text-slate-700">{instagramReconcileMessage}</p>}
+            {instagramJobs.length > 0 && <div className="space-y-1 text-xs"><div className="font-bold text-slate-700">Очередь фото: exhausted {instagramJobs.filter((job) => job.status !== 'published' && job.attempts >= 5).length} из показанных 30</div>{instagramJobs.slice(0, 8).map((job) => <div key={job.product_id} className="flex flex-wrap items-center justify-between gap-2 border-b border-pink-100 py-1"><span className="min-w-0 truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status} · {job.attempts} попыток{job.media_id ? ` · ${job.media_id}` : ''}</span>{job.error && <span className="w-full break-words text-[10px] text-red-700">{job.error}</span>}{job.status !== 'published' && <button type="button" onClick={() => void retryInstagramProduct(job.product_id)} className="shrink-0 text-pink-700 underline">Поставить снова</button>}</div>)}</div>}
+            {instagramMedia.length > 0 && <div className="max-h-80 space-y-1 overflow-auto text-xs"><div className="font-bold text-slate-700">Реальные публикации Instagram (read-only)</div>{instagramMedia.map((media) => <div key={media.id} className="border-b border-pink-100 py-2"><div className="flex flex-wrap justify-between gap-2"><span>{media.media_type} · {media.timestamp}</span><a href={media.permalink} target="_blank" rel="noreferrer" className="text-pink-700 underline">Открыть пост</a></div><div className="break-words text-slate-700">{media.caption || 'Без подписи'}</div><div className="text-[10px] text-slate-500">Media ID: {media.id}</div></div>)}</div>}
           </section>
           <section className="space-y-3 rounded-2xl border border-rose-200 bg-rose-50 p-4">
             <h3 className="flex items-center gap-2 font-bold text-slate-800"><Instagram className="h-4 w-4 text-rose-600" /> Отдельная очередь Instagram Reels</h3>
-            <p className="text-xs text-slate-600">Найдены подходящие кандидаты HTTPS-ссылок: {instagramReelsEligible}. Перед отправкой сервер дополнительно проверяет доступность и Content-Type; страницы YouTube, TikTok и Vimeo не подходят. Для публикации используется оригинальная аудиодорожка: автоматический выбор музыки из библиотеки Instagram не поддерживается в этом Graph API-потоке.</p>
-            <button type="button" disabled={!instagramConfigured} onClick={() => void queueInstagramReels()} className="rounded-xl border border-rose-300 bg-white px-4 py-2 text-xs font-bold text-rose-800 disabled:opacity-50">Поставить подходящие видео в очередь Reels</button>
+            <p className="text-xs text-slate-600">Проверено пригодных ссылок: {instagramReelsEligible}. Сначала выполните проверку: сервер не скачивает видео, а проверяет публичный доступ, HTTP-ответ и Content-Type. Проверка не может заранее подтвердить кодек, длительность и лимиты Instagram. Для публикации используется оригинальная аудиодорожка.</p>
+            <div className="flex flex-wrap gap-2"><button type="button" disabled={!instagramConfigured || instagramReelsChecking} onClick={() => void checkInstagramReels()} className="rounded-xl border border-rose-300 bg-white px-4 py-2 text-xs font-bold text-rose-800 disabled:opacity-50">{instagramReelsChecking ? 'Проверка…' : 'Проверить ссылки видео'}</button><button type="button" disabled={!instagramConfigured || instagramReelsChecking || instagramReelsEligible === 0} onClick={() => void queueInstagramReels()} className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">Поставить проверенные видео</button></div>
             {instagramReelsMessage && <p role="status" className="text-xs text-slate-700">{instagramReelsMessage}</p>}
+            {instagramReelsValidationMessage && <p className="text-[11px] text-slate-500">{instagramReelsValidationMessage}</p>}
+            {instagramReelsChecks.length > 0 && <div className="max-h-72 space-y-1 overflow-auto text-xs"><div className="font-bold text-slate-700">Результаты проверки ссылок</div>{instagramReelsChecks.map((check) => <div key={`${check.product_id}-${check.url}`} className="border-b border-rose-100 py-2"><div className="flex flex-wrap justify-between gap-2"><span className="min-w-0 flex-1 truncate">#{check.product_id} {check.title}</span><span className={check.eligible ? 'font-semibold text-emerald-700' : 'font-semibold text-red-700'}>{check.eligible ? `Готово · ${check.contentType}` : 'Не подходит'}</span></div><div className="break-all text-[10px] text-slate-500">{check.url}</div>{!check.eligible && <div className="text-[10px] text-red-700">{check.reason}</div>}{check.eligible && <div className="text-[10px] text-slate-500">HTTP {check.status} · {check.contentLength === null ? 'размер неизвестен' : `${check.contentLength} байт`} · Range: {check.acceptsRanges ? 'да' : 'нет'}</div>}</div>)}</div>}
             {instagramReelsJobs.length > 0 && <div className="max-h-72 space-y-1 overflow-auto text-xs"><div className="font-bold text-slate-700">Последние видео</div>{instagramReelsJobs.slice(0, 30).map((job) => <div key={`${job.product_id}-${job.video_url}`} className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-100 py-1"><span className="min-w-0 flex-1 truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status === 'published' ? 'Опубликован' : job.status === 'failed' ? 'Ошибка' : job.status === 'publishing' ? 'Публикуется' : 'В очереди'}</span>{job.status === 'failed' && <button type="button" onClick={() => void retryInstagramReel(job)} className="shrink-0 text-rose-700 underline">Повторить</button>}{job.error && <span className="w-full break-words text-[10px] text-red-700">{job.error}</span>}</div>)}</div>}
           </section>
           <section className="space-y-2 rounded-2xl border border-purple-200 bg-purple-50 p-4">
