@@ -964,6 +964,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
   };
 
+  const queueAllInstagramProducts = async () => {
+    setInstagramSaving(true);
+    setInstagramMessage('Добавление активных товаров в очередь…');
+    try {
+      const response = await adminFetch('/api/admin/instagram/queue-active', { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось поставить товары в очередь.');
+      setInstagramMessage(`В очередь добавлено активных товаров: ${data.queued}. Уже опубликованные товары не будут отправлены повторно.`);
+      await loadInstagramStatus();
+    } catch (error) {
+      setInstagramMessage(error instanceof Error ? error.message : 'Не удалось поставить товары в очередь.');
+    } finally {
+      setInstagramSaving(false);
+    }
+  };
+
   const applySomonQuickConfig = async () => {
     const rubricId = somonQuickRubric.trim();
     if (!/^\d+$/.test(rubricId) || Number(rubricId) <= 0) {
@@ -3214,7 +3230,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <input type="password" autoComplete="off" value={instagramSettings.access_token} onChange={(event) => setInstagramSettings({ ...instagramSettings, access_token: event.target.value })} placeholder={instagramConfigured ? 'Оставьте пустым, чтобы сохранить текущий токен' : 'Вставьте токен Meta'} className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm font-normal" />
             </label>
             <label className="flex items-center gap-2 text-xs font-bold text-slate-700"><input type="checkbox" checked={instagramSettings.auto_publish} onChange={(event) => setInstagramSettings({ ...instagramSettings, auto_publish: event.target.checked })} /> Публиковать новые активные товары автоматически</label>
-            <div className="flex flex-wrap gap-2"><button type="button" disabled={instagramSaving} onClick={() => void saveInstagramSettings()} className="rounded-xl bg-pink-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{instagramSaving ? 'Сохранение…' : 'Сохранить настройки'}</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void testInstagramConnection()} className="rounded-xl border border-pink-300 px-4 py-2 text-xs font-bold text-pink-800 disabled:opacity-50">Проверить подключение</button></div>
+            <div className="flex flex-wrap gap-2"><button type="button" disabled={instagramSaving} onClick={() => void saveInstagramSettings()} className="rounded-xl bg-pink-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{instagramSaving ? 'Сохранение…' : 'Сохранить настройки'}</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void testInstagramConnection()} className="rounded-xl border border-pink-300 px-4 py-2 text-xs font-bold text-pink-800 disabled:opacity-50">Проверить подключение</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void queueAllInstagramProducts()} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 disabled:opacity-50">Поставить все активные товары в очередь</button></div>
             {instagramMessage && <p role="status" className="text-xs text-slate-700">{instagramMessage}</p>}
             {instagramJobs.length > 0 && <div className="space-y-1 text-xs"><div className="font-bold text-slate-700">Последние публикации</div>{instagramJobs.slice(0, 8).map((job) => <div key={job.product_id} className="flex items-center justify-between gap-2 border-b border-pink-100 py-1"><span className="truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status === 'published' ? 'Опубликован' : job.status === 'failed' ? `Ошибка: ${job.error || 'проверить'}` : job.status === 'publishing' ? 'Публикуется' : 'В очереди'}</span></div>)}</div>}
           </section>

@@ -1216,7 +1216,12 @@ async function instagramRequest(pathname: string, method: 'GET' | 'POST', params
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok || body.error) {
     const error = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : {};
-    throw new Error(`Instagram API HTTP ${response.status}: ${String(error.message || body.error || 'неизвестная ошибка')}`);
+    const details = [
+      typeof error.code === 'number' || typeof error.code === 'string' ? `код ${error.code}` : '',
+      typeof error.error_subcode === 'number' || typeof error.error_subcode === 'string' ? `подкод ${error.error_subcode}` : '',
+      typeof error.type === 'string' ? `тип ${error.type}` : '',
+    ].filter(Boolean).join(', ');
+    throw new Error(`Instagram API HTTP ${response.status}: ${String(error.message || body.error || 'неизвестная ошибка')}${details ? ` (${details})` : ''}`);
   }
   return body;
 }
@@ -1402,6 +1407,28 @@ app.post('/api/admin/instagram/test', requireAdmin, async (_req, res) => {
   } catch (error) {
     return res.status(503).json({ error: error instanceof Error ? error.message : 'Instagram недоступен.' });
   }
+});
+
+app.post('/api/admin/instagram/queue-active', requireAdmin, (_req, res) => {
+  const products = db.prepare("SELECT id FROM products WHERE status = 'active'").all() as Array<{ id: number }>;
+  const queueProduct = db.prepare(`
+    INSERT INTO instagram_publications (product_id, status, error, updated_at)
+    VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP)
+    ON CONFLICT(product_id) DO UPDATE SET
+      status = CASE WHEN instagram_publications.status = 'published' THEN 'published' ELSE 'queued' END,
+      error = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.error ELSE NULL END,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+  db.exec('BEGIN');
+  try {
+    products.forEach((product) => queueProduct.run(product.id));
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  void processInstagramQueue();
+  return res.json({ success: true, queued: products.length });
 });
 
 app.post('/api/admin/instagram/queue/:id', requireAdmin, (req, res) => {
