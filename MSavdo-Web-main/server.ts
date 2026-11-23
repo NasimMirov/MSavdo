@@ -1230,7 +1230,7 @@ async function waitForInstagramContainer(containerId: string, token: string, kin
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     const status = await instagramRequest(`/${encodeURIComponent(containerId)}`, 'GET', {
-      fields: 'status_code,status,error_message',
+      fields: 'status_code,status',
       access_token: token,
     });
     if (status.status_code === 'ERROR') {
