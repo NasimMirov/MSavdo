@@ -359,6 +359,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [instagramSettings, setInstagramSettings] = useState({ user_id: '', access_token: '', auto_publish: false });
   const [instagramConfigured, setInstagramConfigured] = useState(false);
   const [instagramJobs, setInstagramJobs] = useState<any[]>([]);
+  const [instagramReelsJobs, setInstagramReelsJobs] = useState<any[]>([]);
+  const [instagramReelsEligible, setInstagramReelsEligible] = useState(0);
+  const [instagramReelsMessage, setInstagramReelsMessage] = useState('');
   const [instagramMessage, setInstagramMessage] = useState('');
   const [instagramSaving, setInstagramSaving] = useState(false);
   const [extensionImportKey, setExtensionImportKey] = useState('');
@@ -922,8 +925,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setInstagramConfigured(data.configured === true);
       setInstagramSettings((current) => ({ ...current, user_id: data.user_id || '', auto_publish: data.auto_publish === true }));
       setInstagramJobs(Array.isArray(data.jobs) ? data.jobs : []);
+      const reelsResponse = await adminFetch('/api/admin/instagram/reels', { cache: 'no-store' });
+      if (reelsResponse.ok) {
+        const reelsData = await reelsResponse.json();
+        setInstagramReelsJobs(Array.isArray(reelsData.jobs) ? reelsData.jobs : []);
+        setInstagramReelsEligible(Number(reelsData.eligible) || 0);
+      }
     } catch {
       setInstagramMessage('Не удалось загрузить статус Instagram.');
+    }
+  };
+
+  const queueInstagramReels = async (productId?: number) => {
+    setInstagramReelsMessage('Добавление видео в отдельную очередь Reels…');
+    try {
+      const response = await adminFetch(productId
+        ? `/api/admin/instagram/reels/queue/${productId}`
+        : '/api/admin/instagram/reels/queue-active', { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось поставить видео в очередь.');
+      setInstagramReelsMessage(productId
+        ? `Видео товара добавлены в очередь: ${data.queued}.`
+        : `В очередь Reels добавлено видео: ${data.queued}. Опубликованные ссылки повторно не отправляются.`);
+      await loadInstagramStatus();
+    } catch (error) {
+      setInstagramReelsMessage(error instanceof Error ? error.message : 'Не удалось поставить видео в очередь.');
+    }
+  };
+
+  const retryInstagramReel = async (job: { product_id: number; video_url: string }) => {
+    setInstagramReelsMessage('Повторная постановка видео в очередь…');
+    try {
+      const response = await adminFetch('/api/admin/instagram/reels/retry', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_id: job.product_id, video_url: job.video_url }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Не удалось повторить публикацию.');
+      setInstagramReelsMessage('Видео поставлено в очередь повторно.');
+      await loadInstagramStatus();
+    } catch (error) {
+      setInstagramReelsMessage(error instanceof Error ? error.message : 'Не удалось повторить публикацию.');
     }
   };
 
@@ -3232,7 +3274,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <label className="flex items-center gap-2 text-xs font-bold text-slate-700"><input type="checkbox" checked={instagramSettings.auto_publish} onChange={(event) => setInstagramSettings({ ...instagramSettings, auto_publish: event.target.checked })} /> Публиковать новые активные товары автоматически</label>
             <div className="flex flex-wrap gap-2"><button type="button" disabled={instagramSaving} onClick={() => void saveInstagramSettings()} className="rounded-xl bg-pink-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">{instagramSaving ? 'Сохранение…' : 'Сохранить настройки'}</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void testInstagramConnection()} className="rounded-xl border border-pink-300 px-4 py-2 text-xs font-bold text-pink-800 disabled:opacity-50">Проверить подключение</button><button type="button" disabled={instagramSaving || !instagramConfigured} onClick={() => void queueAllInstagramProducts()} className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-800 disabled:opacity-50">Поставить все активные товары в очередь</button></div>
             {instagramMessage && <p role="status" className="text-xs text-slate-700">{instagramMessage}</p>}
-            {instagramJobs.length > 0 && <div className="space-y-1 text-xs"><div className="font-bold text-slate-700">Последние публикации</div>{instagramJobs.slice(0, 8).map((job) => <div key={job.product_id} className="flex items-center justify-between gap-2 border-b border-pink-100 py-1"><span className="truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status === 'published' ? 'Опубликован' : job.status === 'failed' ? `Ошибка: ${job.error || 'проверить'}` : job.status === 'publishing' ? 'Публикуется' : 'В очереди'}</span></div>)}</div>}
+            {instagramJobs.length > 0 && <div className="space-y-1 text-xs"><div className="font-bold text-slate-700">Последние публикации фото</div>{instagramJobs.slice(0, 8).map((job) => <div key={job.product_id} className="flex items-center justify-between gap-2 border-b border-pink-100 py-1"><span className="truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status === 'published' ? 'Опубликован' : job.status === 'failed' ? `Ошибка: ${job.error || 'проверить'}` : job.status === 'publishing' ? 'Публикуется' : 'В очереди'}</span></div>)}</div>}
+          </section>
+          <section className="space-y-3 rounded-2xl border border-rose-200 bg-rose-50 p-4">
+            <h3 className="flex items-center gap-2 font-bold text-slate-800"><Instagram className="h-4 w-4 text-rose-600" /> Отдельная очередь Instagram Reels</h3>
+            <p className="text-xs text-slate-600">Найдены подходящие кандидаты HTTPS-ссылок: {instagramReelsEligible}. Перед отправкой сервер дополнительно проверяет доступность и Content-Type; страницы YouTube, TikTok и Vimeo не подходят. Для публикации используется оригинальная аудиодорожка: автоматический выбор музыки из библиотеки Instagram не поддерживается в этом Graph API-потоке.</p>
+            <button type="button" disabled={!instagramConfigured} onClick={() => void queueInstagramReels()} className="rounded-xl border border-rose-300 bg-white px-4 py-2 text-xs font-bold text-rose-800 disabled:opacity-50">Поставить подходящие видео в очередь Reels</button>
+            {instagramReelsMessage && <p role="status" className="text-xs text-slate-700">{instagramReelsMessage}</p>}
+            {instagramReelsJobs.length > 0 && <div className="max-h-72 space-y-1 overflow-auto text-xs"><div className="font-bold text-slate-700">Последние видео</div>{instagramReelsJobs.slice(0, 30).map((job) => <div key={`${job.product_id}-${job.video_url}`} className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-100 py-1"><span className="min-w-0 flex-1 truncate">#{job.product_id} {job.title}</span><span className="shrink-0 font-semibold">{job.status === 'published' ? 'Опубликован' : job.status === 'failed' ? 'Ошибка' : job.status === 'publishing' ? 'Публикуется' : 'В очереди'}</span>{job.status === 'failed' && <button type="button" onClick={() => void retryInstagramReel(job)} className="shrink-0 text-rose-700 underline">Повторить</button>}{job.error && <span className="w-full break-words text-[10px] text-red-700">{job.error}</span>}</div>)}</div>}
           </section>
           <section className="space-y-2 rounded-2xl border border-purple-200 bg-purple-50 p-4">
             <label htmlFor="tokenplan-key" className="block font-bold text-slate-800">Ключ TokenPlan для редактора товара</label>
