@@ -1190,20 +1190,15 @@ const instagramGraphVersion = (process.env.INSTAGRAM_GRAPH_API_VERSION || 'v22.0
 const instagramGraphBase = `https://graph.facebook.com/${instagramGraphVersion}`;
 const instagramCarouselLimit = 10;
 let instagramWorkerRunning = false;
-let instagramWorkerBlockedUntil = 0;
 
 function queueInstagramProduct(productId: number): void {
   db.prepare(`
     INSERT INTO instagram_publications (product_id, status, error, updated_at)
     VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP)
     ON CONFLICT(product_id) DO UPDATE SET
-      status = CASE
-        WHEN instagram_publications.status IN ('published', 'publishing') THEN instagram_publications.status
-        ELSE 'queued'
-      END,
-      error = CASE WHEN instagram_publications.status IN ('published', 'publishing') THEN instagram_publications.error ELSE NULL END,
-      attempts = CASE WHEN instagram_publications.status IN ('published', 'publishing') THEN instagram_publications.attempts ELSE 0 END,
-      updated_at = CASE WHEN instagram_publications.status IN ('published', 'publishing') THEN instagram_publications.updated_at ELSE CURRENT_TIMESTAMP END
+      status = CASE WHEN instagram_publications.status = 'published' THEN 'published' ELSE 'queued' END,
+      error = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.error ELSE NULL END,
+      updated_at = CURRENT_TIMESTAMP
   `).run(productId);
 }
 
@@ -1247,16 +1242,6 @@ function getProductVideoUrls(videoUrls: unknown, videoUrl: string | null, youtub
     ...normalizeVideoUrls(youtubeUrl || ''),
   ])].slice(0, 12);
 }
-
-type VideoProbeResult = {
-  url: string;
-  status: number;
-  contentType: string;
-  contentLength: number | null;
-  acceptsRanges: boolean;
-  eligible: boolean;
-  reason: string | null;
-};
 
 async function requestVideoHeaders(url: URL, method: 'HEAD' | 'GET'): Promise<{ status: number; headers: http.IncomingHttpHeaders }> {
   const addresses = await dns.lookup(url.hostname, { all: true, verbatim: true });
@@ -1303,38 +1288,31 @@ function queueInstagramReelsForProduct(productId: number): number {
   return count;
 }
 
-async function probeInstagramVideoUrl(videoUrl: string): Promise<VideoProbeResult> {
-  const baseResult: VideoProbeResult = { url: videoUrl, status: 0, contentType: '', contentLength: null, acceptsRanges: false, eligible: false, reason: null };
-  if (!isDirectVideoCandidate(videoUrl)) return { ...baseResult, reason: 'Нужна прямая публичная HTTPS-ссылка на файл, а не страница видеосервиса.' };
-  let url = new URL(videoUrl);
-  try {
-    for (let redirect = 0; redirect <= 3; redirect += 1) {
-      if (!isDirectVideoCandidate(url.href)) return { ...baseResult, url: url.href, reason: 'Перенаправление ведёт на неподходящий или непубличный адрес.' };
-      let response = await requestVideoHeaders(url, 'HEAD');
-      if (response.status === 405 || response.status === 501) response = await requestVideoHeaders(url, 'GET');
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.location;
-        if (!location) return { ...baseResult, url: url.href, status: response.status, reason: 'Сервер вернул перенаправление без адреса назначения.' };
-        url = new URL(location, url);
-        continue;
-      }
-      const contentType = String(response.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
-      const contentLengthValue = Number(response.headers['content-length']);
-      const contentLength = Number.isFinite(contentLengthValue) && contentLengthValue >= 0 ? contentLengthValue : null;
-      const acceptsRanges = String(response.headers['accept-ranges'] || '').toLowerCase().includes('bytes');
-      if (response.status < 200 || response.status >= 300) return { ...baseResult, url: url.href, status: response.status, contentType, contentLength, acceptsRanges, reason: `Видео недоступно по ссылке (HTTP ${response.status}).` };
-      if (!contentType.startsWith('video/')) return { ...baseResult, url: url.href, status: response.status, contentType, contentLength, acceptsRanges, reason: `Ссылка вернула не видеофайл (Content-Type: ${contentType || 'не указан'}).` };
-      return { ...baseResult, url: url.href, status: response.status, contentType, contentLength, acceptsRanges, eligible: true };
-    }
-    return { ...baseResult, url: url.href, reason: 'Слишком много перенаправлений видео.' };
-  } catch (error) {
-    return { ...baseResult, url: url.href, reason: error instanceof Error ? error.message : 'Не удалось проверить ссылку.' };
-  }
-}
-
 async function checkInstagramVideoUrl(videoUrl: string): Promise<void> {
-  const result = await probeInstagramVideoUrl(videoUrl);
-  if (!result.eligible) throw new Error(result.reason || 'Видео не прошло проверку доступности.');
+  if (!isDirectVideoCandidate(videoUrl)) throw new Error('Видео должно быть прямой публичной HTTPS-ссылкой, а не страницей видеосервиса.');
+  let url = new URL(videoUrl);
+  for (let redirect = 0; redirect <= 3; redirect += 1) {
+    if (!isDirectVideoCandidate(url.href)) throw new Error('Видео должно оставаться публичной HTTPS-ссылкой на прямой файл.');
+    let response = await requestVideoHeaders(url, 'HEAD');
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.location;
+      if (!location) throw new Error('Видео вернуло некорректное перенаправление.');
+      url = new URL(location, url);
+      continue;
+    }
+    if (response.status === 405 || response.status === 501) response = await requestVideoHeaders(url, 'GET');
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.location;
+      if (!location) throw new Error('Видео вернуло некорректное перенаправление.');
+      url = new URL(location, url);
+      continue;
+    }
+    if (response.status < 200 || response.status >= 300) throw new Error(`Видео недоступно по ссылке (HTTP ${response.status}).`);
+    const contentType = String(response.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+    if (!contentType.startsWith('video/')) throw new Error(`Ссылка не ведёт на видеофайл (Content-Type: ${contentType || 'не указан'}).`);
+    return;
+  }
+  throw new Error('Слишком много перенаправлений видео.');
 }
 
 async function instagramRequest(pathname: string, method: 'GET' | 'POST', params: Record<string, string>): Promise<Record<string, unknown>> {
@@ -1530,21 +1508,16 @@ async function processInstagramReelsQueue(force = false): Promise<void> {
 }
 
 async function processInstagramQueue(): Promise<void> {
-  if (instagramWorkerRunning || Date.now() < instagramWorkerBlockedUntil || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
+  if (instagramWorkerRunning || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
   instagramWorkerRunning = true;
   try {
-    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes'))) AND attempts < 5 ORDER BY updated_at ASC LIMIT 1`).all() as Array<{ product_id: number; attempts: number }>;
+    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes'))) AND attempts < 5 ORDER BY updated_at ASC LIMIT 3`).all() as Array<{ product_id: number; attempts: number }>;
     for (const job of jobs) {
       db.prepare("UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(job.product_id);
       try {
         await publishInstagramProduct(job.product_id);
       } catch (error) {
-        const message = error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram';
-        db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(message, job.product_id);
-        if (/HTTP (403|429)|код 4\b|rate.?limit|лимит запросов|application request limit/i.test(message)) {
-          instagramWorkerBlockedUntil = Date.now() + 15 * 60 * 1000;
-          break;
-        }
+        db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram', job.product_id);
       }
     }
   } finally {
@@ -1558,58 +1531,12 @@ app.get('/api/admin/instagram', requireAdmin, (_req, res) => {
     FROM instagram_publications i JOIN products p ON p.id = i.product_id
     ORDER BY i.updated_at DESC LIMIT 30
   `).all();
-  const counts = db.prepare(`SELECT status, COUNT(*) AS count FROM instagram_publications GROUP BY status`).all() as Array<{ status: string; count: number }>;
-  const exhausted = db.prepare(`SELECT COUNT(*) AS count FROM instagram_publications WHERE status != 'published' AND attempts >= 5`).get() as { count: number };
-  const activeWithoutJobs = db.prepare(`SELECT COUNT(*) AS count FROM products p LEFT JOIN instagram_publications i ON i.product_id = p.id WHERE p.status = 'active' AND i.product_id IS NULL`).get() as { count: number };
   return res.json({
     configured: Boolean(getSetting('instagram_user_id', '').trim() && getSetting('instagram_access_token_encrypted', '')),
     auto_publish: getSetting('instagram_auto_publish', '0') === '1',
     user_id: getSetting('instagram_user_id', ''),
-    counts: Object.fromEntries(counts.map((row) => [row.status, row.count])),
-    exhausted: exhausted.count,
-    active_without_jobs: activeWithoutJobs.count,
-    blocked_for_ms: Math.max(0, instagramWorkerBlockedUntil - Date.now()),
     jobs,
-    recovery_candidates: db.prepare(`SELECT i.product_id, p.title, i.status, i.attempts, i.error FROM instagram_publications i JOIN products p ON p.id = i.product_id WHERE p.status = 'active' AND i.status != 'published' ORDER BY i.updated_at ASC LIMIT 100`).all(),
   });
-});
-
-app.get('/api/admin/instagram/media', requireAdmin, async (req, res) => {
-  try {
-    const requestedLimit = Number(req.query.limit || 100);
-    const maxItems = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 100;
-    const token = readInstagramToken();
-    const userId = getSetting('instagram_user_id', '').trim();
-    if (!/^\d{5,30}$/.test(userId)) throw new Error('Не указан Instagram professional account ID.');
-
-    const media: Array<Record<string, unknown>> = [];
-    let nextUrl: string | undefined = `${instagramGraphBase}/${encodeURIComponent(userId)}/media?fields=id,caption,media_type,timestamp,permalink&limit=${Math.min(maxItems, 100)}`;
-    while (nextUrl && media.length < maxItems) {
-      const url = new URL(nextUrl);
-      if (url.origin !== 'https://graph.facebook.com' || !url.pathname.startsWith(`/${instagramGraphVersion}/`)) {
-        throw new Error('Instagram вернул недопустимую ссылку пагинации.');
-      }
-      const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
-      const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-      if (!response.ok || body.error) {
-        const error = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : {};
-        throw new Error(`Instagram API HTTP ${response.status}: ${String(error.message || 'не удалось получить публикации')}`);
-      }
-      const data = Array.isArray(body.data) ? body.data as Array<Record<string, unknown>> : [];
-      media.push(...data.slice(0, maxItems - media.length));
-      const paging = body.paging && typeof body.paging === 'object' ? body.paging as Record<string, unknown> : {};
-      const cursors = paging.cursors && typeof paging.cursors === 'object' ? paging.cursors as Record<string, unknown> : {};
-      const after = typeof cursors.after === 'string' ? cursors.after : '';
-      nextUrl = media.length < maxItems && typeof paging.next === 'string' && after
-        ? `${instagramGraphBase}/${encodeURIComponent(userId)}/media?fields=id,caption,media_type,timestamp,permalink&limit=${Math.min(maxItems - media.length, 100)}&after=${encodeURIComponent(after)}`
-        : undefined;
-    }
-
-    const local = db.prepare(`SELECT i.product_id, p.title, i.status, i.media_id, i.attempts, i.error, i.updated_at FROM instagram_publications i JOIN products p ON p.id = i.product_id ORDER BY i.updated_at DESC`).all();
-    return res.json({ success: true, media, local, limit: maxItems, truncated: media.length >= maxItems });
-  } catch (error) {
-    return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось сверить публикации Instagram.' });
-  }
 });
 
 app.post('/api/admin/instagram/settings', requireAdmin, async (req, res) => {
@@ -1645,7 +1572,10 @@ app.post('/api/admin/instagram/queue-active', requireAdmin, (_req, res) => {
   const queueProduct = db.prepare(`
     INSERT INTO instagram_publications (product_id, status, error, updated_at)
     VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP)
-    ON CONFLICT(product_id) DO NOTHING
+    ON CONFLICT(product_id) DO UPDATE SET
+      status = CASE WHEN instagram_publications.status = 'published' THEN 'published' ELSE 'queued' END,
+      error = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.error ELSE NULL END,
+      updated_at = CURRENT_TIMESTAMP
   `);
   db.exec('BEGIN');
   try {
@@ -1668,19 +1598,6 @@ app.post('/api/admin/instagram/queue/:id', requireAdmin, (req, res) => {
   return res.json({ success: true, product_id: productId });
 });
 
-app.post('/api/admin/instagram/retry/:id', requireAdmin, (req, res) => {
-  const productId = Number(req.params.id);
-  const result = db.prepare(`
-    UPDATE instagram_publications
-    SET status = 'queued', attempts = 0, error = NULL, updated_at = CURRENT_TIMESTAMP
-    WHERE product_id = ? AND status IN ('queued', 'failed')
-      AND EXISTS (SELECT 1 FROM products WHERE id = ? AND status = 'active')
-  `).run(productId, productId);
-  if (!result.changes) return res.status(404).json({ error: 'Не найдена активная неопубликованная задача. Опубликованные товары не ставятся повторно.' });
-  void processInstagramQueue();
-  return res.json({ success: true, product_id: productId, queued: result.changes });
-});
-
 app.get('/api/admin/instagram/reels', requireAdmin, (_req, res) => {
   const jobs = db.prepare(`
     SELECT r.product_id, r.video_url, r.status, r.media_id, r.error, r.attempts, r.updated_at,
@@ -1689,44 +1606,16 @@ app.get('/api/admin/instagram/reels', requireAdmin, (_req, res) => {
     ORDER BY r.updated_at DESC LIMIT 100
   `).all();
   const candidates = db.prepare("SELECT id, video_url, video_urls, youtube_url FROM products WHERE status = 'active'").all() as Array<{ id: number; video_url: string | null; video_urls: string | null; youtube_url: string | null }>;
-  const candidateCount = candidates.reduce((count, product) => count + getProductVideoUrls(product.video_urls, product.video_url, product.youtube_url).length, 0);
-  return res.json({ jobs, eligible: 0, candidateCount });
+  const eligible = candidates.reduce((count, product) => count + getProductVideoUrls(product.video_urls, product.video_url, product.youtube_url).filter(isDirectVideoCandidate).length, 0);
+  return res.json({ jobs, eligible });
 });
 
-app.post('/api/admin/instagram/reels/check', requireAdmin, async (_req, res) => {
-  const candidates = db.prepare("SELECT id, title, video_url, video_urls, youtube_url FROM products WHERE status = 'active'").all() as Array<{ id: number; title: string; video_url: string | null; video_urls: string | null; youtube_url: string | null }>;
-  const urls = candidates.flatMap((product) => getProductVideoUrls(product.video_urls, product.video_url, product.youtube_url).map((url) => ({ product_id: product.id, title: product.title, url })));
-  const checks: Array<{ product_id: number; title: string; url: string } & VideoProbeResult> = [];
-  const limitedUrls = urls.slice(0, 100);
-  for (let offset = 0; offset < limitedUrls.length; offset += 5) {
-    const batch = limitedUrls.slice(offset, offset + 5);
-    checks.push(...await Promise.all(batch.map(async (item) => ({ ...item, ...(await probeInstagramVideoUrl(item.url)) }))));
-  }
-  return res.json({ checks, eligible: checks.filter((check) => check.eligible).length, truncated: urls.length > checks.length, validationNote: 'Проверка подтверждает доступность URL и Content-Type, но не проверяет кодек, длительность и ограничения самого Instagram.' });
-});
-
-app.post('/api/admin/instagram/reels/queue-active', requireAdmin, async (_req, res) => {
+app.post('/api/admin/instagram/reels/queue-active', requireAdmin, (_req, res) => {
   const products = db.prepare("SELECT id, video_url, video_urls, youtube_url FROM products WHERE status = 'active'").all() as Array<{ id: number; video_url: string | null; video_urls: string | null; youtube_url: string | null }>;
-  const eligible: Array<{ productId: number; url: string }> = [];
-  for (const product of products) {
-    for (const url of getProductVideoUrls(product.video_urls, product.video_url, product.youtube_url)) {
-      if ((await probeInstagramVideoUrl(url)).eligible) eligible.push({ productId: product.id, url });
-    }
-  }
   let queued = 0;
   db.exec('BEGIN');
   try {
-    for (const { productId, url } of eligible) {
-      queued += Number(db.prepare(`
-        INSERT INTO instagram_reels (product_id, video_url, status, error, attempts, updated_at)
-        VALUES (?, ?, 'queued', NULL, 0, CURRENT_TIMESTAMP)
-        ON CONFLICT(product_id, video_url) DO UPDATE SET
-          status = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.status ELSE 'queued' END,
-          error = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.error ELSE NULL END,
-          attempts = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.attempts ELSE 0 END,
-          updated_at = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.updated_at ELSE CURRENT_TIMESTAMP END
-      `).run(productId, url).changes);
-    }
+    for (const product of products) queued += queueInstagramReelsForProduct(product.id);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -1735,27 +1624,15 @@ app.post('/api/admin/instagram/reels/queue-active', requireAdmin, async (_req, r
   void processInstagramReelsQueue(true);
   return res.json({ success: true, queued });
 });
-app.post('/api/admin/instagram/reels/queue/:id', requireAdmin, async (req, res) => {
+
+app.post('/api/admin/instagram/reels/queue/:id', requireAdmin, (req, res) => {
   const productId = Number(req.params.id);
-  const product = db.prepare("SELECT id, video_url, video_urls, youtube_url FROM products WHERE id = ? AND status = 'active'").get(productId) as { id: number; video_url: string | null; video_urls: string | null; youtube_url: string | null } | undefined;
-  if (!product) return res.status(404).json({ error: 'Активный товар не найден.' });
-  const urls = getProductVideoUrls(product.video_urls, product.video_url, product.youtube_url);
-  let count = 0;
-  for (const url of urls) {
-    const probe = await probeInstagramVideoUrl(url);
-    if (!probe.eligible) continue;
-    const result = db.prepare(`
-      INSERT INTO instagram_reels (product_id, video_url, status, error, attempts, updated_at)
-      VALUES (?, ?, 'queued', NULL, 0, CURRENT_TIMESTAMP)
-      ON CONFLICT(product_id, video_url) DO UPDATE SET
-        status = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.status ELSE 'queued' END,
-        error = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.error ELSE NULL END,
-        attempts = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.attempts ELSE 0 END,
-        updated_at = CASE WHEN instagram_reels.status IN ('published', 'publishing') THEN instagram_reels.updated_at ELSE CURRENT_TIMESTAMP END
-    `).run(productId, url);
-    count += Number(result.changes);
+  const count = queueInstagramReelsForProduct(productId);
+  if (!count) {
+    const product = db.prepare("SELECT id FROM products WHERE id = ? AND status = 'active'").get(productId);
+    if (!product) return res.status(404).json({ error: 'Активный товар не найден.' });
+    return res.status(400).json({ error: 'У товара нет прямой публичной HTTPS-ссылки на видео.' });
   }
-  if (!count) return res.status(400).json({ error: 'У товара нет ссылки, которую удалось подтвердить как публичный видеофайл.' });
   void processInstagramReelsQueue(true);
   return res.json({ success: true, product_id: productId, queued: count });
 });
