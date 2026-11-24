@@ -6281,9 +6281,8 @@ app.get('/api/video-proxy', videoProxyRateLimiter, async (req, res) => {
         if (!location || hop === 3) return res.status(502).end();
         const redirectTarget = new URL(location, target);
         if (!isAllowedVideoHost(redirectTarget)) return res.status(400).end();
-        res.status(upstream.statusCode).setHeader('Location', redirectTarget.toString());
-        res.setHeader('Cache-Control', 'private, max-age=60');
-        return res.end();
+        target = redirectTarget;
+        continue;
       }
       break;
     }
