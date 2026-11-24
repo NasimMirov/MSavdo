@@ -1188,6 +1188,7 @@ function queueInstagramProduct(productId: number): void {
     ON CONFLICT(product_id) DO UPDATE SET
       status = CASE WHEN instagram_publications.status = 'published' THEN 'published' ELSE 'queued' END,
       error = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.error ELSE NULL END,
+      attempts = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.attempts ELSE 0 END,
       updated_at = CURRENT_TIMESTAMP
   `).run(productId);
 }
@@ -1231,7 +1232,7 @@ async function waitForInstagramContainer(containerId: string, token: string, kin
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 1500));
     const status = await instagramRequest(`/${encodeURIComponent(containerId)}`, 'GET', {
-      fields: 'status_code,status,error_message',
+      fields: 'status_code,status',
       access_token: token,
     });
     if (status.status_code === 'ERROR') {
