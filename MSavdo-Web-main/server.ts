@@ -6257,6 +6257,7 @@ const videoProxyRateLimiter = rateLimit({
 
 // Видео 1688/Taobao отдаются только с их Referer, поэтому браузер не может играть их напрямую
 app.get('/api/video-proxy', videoProxyRateLimiter, async (req, res) => {
+  let fallbackTarget = '';
   try {
     let target: URL;
     try {
@@ -6272,6 +6273,8 @@ app.get('/api/video-proxy', videoProxyRateLimiter, async (req, res) => {
     };
     if (typeof req.headers.range === 'string') headers.Range = req.headers.range;
 
+    const originalTarget = target.toString();
+    fallbackTarget = originalTarget;
     let upstream: http.IncomingMessage | null = null;
     for (let hop = 0; hop < 4; hop++) {
       upstream = await fetchVideoProxyTarget(target, headers);
@@ -6281,6 +6284,7 @@ app.get('/api/video-proxy', videoProxyRateLimiter, async (req, res) => {
         if (!location || hop === 3) return res.status(502).end();
         const redirectTarget = new URL(location, target);
         if (!isAllowedVideoHost(redirectTarget)) return res.status(400).end();
+        fallbackTarget = redirectTarget.toString();
         target = redirectTarget;
         continue;
       }
@@ -6321,7 +6325,11 @@ app.get('/api/video-proxy', videoProxyRateLimiter, async (req, res) => {
     });
     upstream.pipe(res);
   } catch {
-    if (!res.headersSent) res.status(502).end();
+    if (!res.headersSent) {
+      res.status(302).setHeader('Location', fallbackTarget);
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      res.end();
+    }
   }
 });
 
