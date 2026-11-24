@@ -18,6 +18,8 @@ import {
   ShoppingBasket,
   Package,
   Gauge,
+  Volume2,
+  VolumeX,
   Lock,
   X,
   MessageCircle,
@@ -59,6 +61,7 @@ function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { prod
   const [nextVideoOffset, setNextVideoOffset] = useState(0);
   const [activeIndex, setActiveIndex] = useState(() => Math.max(0, initialProductId ? products.findIndex((product) => product.id === initialProductId) : 0));
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [muted, setMuted] = useState(false);
   const [playing, setPlaying] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -123,6 +126,7 @@ function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { prod
     videoRefs.current.forEach((video, index) => {
       if (!video) return;
       video.playbackRate = playbackRate;
+      video.muted = muted;
       video.preload = index === activeIndex || index === activeIndex + 1 ? 'auto' : index === activeIndex - 1 ? 'metadata' : 'none';
       if (index === activeIndex && playing && video.readyState >= HTMLMediaElement.HAVE_METADATA) {
         void video.play().catch(() => {
@@ -134,7 +138,7 @@ function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { prod
         video.currentTime = 0;
       }
     });
-  }, [activeIndex, videos.length, playbackRate, playing]);
+  }, [activeIndex, videos.length, playbackRate, muted, playing]);
 
   useEffect(() => {
     if (!initialProductId || !videos.length) return;
@@ -216,13 +220,16 @@ function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { prod
           const isActive = index === activeIndex;
           return <article key={`${product.id}-${src}`} className={`absolute inset-0 flex h-full w-full items-center justify-center bg-slate-950 transition-transform duration-500 ease-out ${transitioning ? '' : 'will-change-transform'}`} style={{ transform: `translateY(${(index - activeIndex) * 100}%)` }} onTouchStartCapture={() => { swipeConsumed.current = false; }} onClickCapture={(event) => { if (!swipeConsumed.current) return; swipeConsumed.current = false; event.preventDefault(); event.stopPropagation(); }} onClick={isActive ? revealControls : undefined}>
             {product.main_image && isActive && <img src={product.main_image} alt="" className={`absolute inset-0 h-full w-full object-contain transition-opacity duration-300 ${mediaState === 'ready' ? 'opacity-0' : 'opacity-80'}`} />}
-            {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${isActive ? 1 : 0}&controls=1&playsinline=1&rel=0`} className="absolute inset-0 h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={getVideoSource(src)} poster={product.main_image || undefined} muted playsInline loop controls={isActive && showControls} preload={index === activeIndex || index === activeIndex + 1 ? 'auto' : index === activeIndex - 1 ? 'metadata' : 'none'} onLoadStart={() => isActive && setMediaState('loading')} onLoadedData={(event) => { if (!isActive) return; setMediaState('ready'); setDuration(event.currentTarget.duration || 0); if (playing) void event.currentTarget.play().catch(() => { setPlaying(false); setMediaState('blocked'); }); }} onCanPlay={() => isActive && setMediaState('ready')} onWaiting={() => isActive && setMediaState('loading')} onStalled={() => isActive && setMediaState('loading')} onError={() => isActive && setMediaState('error')} onTimeUpdate={(event) => { if (isActive) setCurrentTime(event.currentTarget.currentTime); }} onPlay={() => isActive && setPlaying(true)} onPause={() => isActive && setPlaying(false)} className="absolute inset-0 h-full w-full object-contain" />}
+            {youtubeId ? <iframe title={product.title} src={`https://www.youtube-nocookie.com/embed/${youtubeId}?autoplay=${isActive ? 1 : 0}&controls=1&playsinline=1&rel=0`} className="absolute inset-0 h-full w-full border-0" allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /> : <video ref={(element) => { videoRefs.current[index] = element; }} src={getVideoSource(src)} poster={product.main_image || undefined} muted={muted} playsInline loop controls={isActive && showControls} preload={index === activeIndex || index === activeIndex + 1 ? 'auto' : index === activeIndex - 1 ? 'metadata' : 'none'} onLoadStart={() => isActive && setMediaState('loading')} onLoadedData={(event) => { if (!isActive) return; setMediaState('ready'); setDuration(event.currentTarget.duration || 0); if (playing) void event.currentTarget.play().catch(() => { setPlaying(false); setMediaState('blocked'); }); }} onCanPlay={() => isActive && setMediaState('ready')} onWaiting={() => isActive && setMediaState('loading')} onStalled={() => isActive && setMediaState('loading')} onError={() => isActive && setMediaState('error')} onTimeUpdate={(event) => { if (isActive) setCurrentTime(event.currentTarget.currentTime); }} onPlay={() => isActive && setPlaying(true)} onPause={() => isActive && setPlaying(false)} className="absolute inset-0 h-full w-full object-contain" />}
             {isActive && mediaState !== 'ready' && !youtubeId && <div className="absolute inset-0 z-[1] flex items-center justify-center bg-slate-950/10">{mediaState === 'blocked' ? <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRefs.current[index]; if (video) void video.play().then(() => { setPlaying(true); setMediaState('ready'); }).catch(() => setMediaState('blocked')); }} className="rounded-full border border-white/30 bg-black/55 px-5 py-3 text-sm font-bold text-white backdrop-blur">Нажмите, чтобы смотреть</button> : mediaState === 'error' ? <div className="rounded-full bg-black/55 px-4 py-2 text-sm font-semibold text-white">Видео временно недоступно</div> : <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-white" aria-label="Загрузка видео" />}</div>}
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-44 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent" />
             <div className="absolute inset-x-0 top-0 z-10 flex items-start justify-between p-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
               <button type="button" onClick={onBack} aria-label="Назад в каталог" className="flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm"><span aria-hidden="true">←</span></button>
               <div className="flex items-center gap-2">
-                {!youtubeId && <label className="flex h-9 items-center gap-1 rounded-full bg-black/45 px-2 text-white backdrop-blur-sm" aria-label="Скорость воспроизведения"><Gauge className="h-3.5 w-3.5" /><select value={playbackRate} onChange={(event) => setPlaybackRate(Number(event.target.value))} className="w-11 appearance-none bg-transparent text-[11px] font-bold text-white focus:outline-none">{[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate} className="text-slate-900">{rate}x</option>)}</select></label>}
+                {!youtubeId && <>
+                  <button type="button" onClick={(event) => { event.stopPropagation(); setMuted((value) => !value); }} aria-label={muted ? 'Включить звук' : 'Выключить звук'} title={muted ? 'Включить звук' : 'Выключить звук'} className="flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm">{muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}</button>
+                  <label className="flex h-9 items-center gap-1 rounded-full bg-black/45 px-2 text-white backdrop-blur-sm" aria-label="Скорость воспроизведения"><Gauge className="h-3.5 w-3.5" /><select value={playbackRate} onChange={(event) => setPlaybackRate(Number(event.target.value))} className="w-11 appearance-none bg-transparent text-[11px] font-bold text-white focus:outline-none">{[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate} className="text-slate-900">{rate}x</option>)}</select></label>
+                </>}
                 <ProductShareButton product={(fullProduct || product) as Product} className="z-20" menuAlignment="right" />
               </div>
             </div>
