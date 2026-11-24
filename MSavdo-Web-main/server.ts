@@ -1177,8 +1177,9 @@ app.get('/api/extension/import-access', (req, res) => {
 
 const instagramGraphVersion = (process.env.INSTAGRAM_GRAPH_API_VERSION || 'v22.0').trim();
 const instagramGraphBase = `https://graph.facebook.com/${instagramGraphVersion}`;
-const instagramCarouselLimit = 10;
+const instagramCarouselLimit = 5;
 let instagramWorkerRunning = false;
+let instagramWorkerBlockedUntil = 0;
 
 function queueInstagramProduct(productId: number): void {
   db.prepare(`
@@ -1216,7 +1217,12 @@ async function instagramRequest(pathname: string, method: 'GET' | 'POST', params
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok || body.error) {
     const error = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : {};
-    throw new Error(`Instagram API HTTP ${response.status}: ${String(error.message || body.error || 'неизвестная ошибка')}`);
+    const details = [
+      typeof error.code === 'number' || typeof error.code === 'string' ? `код ${error.code}` : '',
+      typeof error.error_subcode === 'number' || typeof error.error_subcode === 'string' ? `подкод ${error.error_subcode}` : '',
+      typeof error.type === 'string' ? `тип ${error.type}` : '',
+    ].filter(Boolean).join(', ');
+    throw new Error(`Instagram API HTTP ${response.status}: ${String(error.message || body.error || 'неизвестная ошибка')}${details ? ` (${details})` : ''}`);
   }
   return body;
 }
@@ -1235,17 +1241,6 @@ async function waitForInstagramContainer(containerId: string, token: string, kin
     if (status.status_code === 'FINISHED') return;
   }
   throw new Error(`Instagram не завершил обработку ${kind === 'video' ? 'видео' : 'медиа'} вовремя.`);
-}
-
-function isDirectInstagramVideoUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    if (!/^https?:$/.test(url.protocol)) return false;
-    if (/youtube\.com|youtu\.be|vimeo\.com|tiktok\.com/i.test(url.hostname)) return false;
-    return /\.(mp4|mov|m4v|avi|webm)(?:$|[?#])/i.test(url.pathname + url.search);
-  } catch {
-    return false;
-  }
 }
 
 async function createInstagramMediaContainer(
@@ -1290,16 +1285,11 @@ async function publishInstagramProduct(productId: number): Promise<void> {
     instagramCarouselLimit,
   );
   if (!images.length) throw new Error('У товара нет публичного изображения для Instagram.');
-  const videoUrls = normalizeVideoUrls(row.video_urls, row.youtube_url || row.video_url || '');
-  const directVideoUrls = videoUrls.filter(isDirectInstagramVideoUrl);
-  const directVideos = directVideoUrls.slice(0, Math.max(0, instagramCarouselLimit - images.length));
-  const skippedVideos = videoUrls.filter((url) => !isDirectInstagramVideoUrl(url));
-  const truncatedVideos = directVideoUrls.slice(directVideos.length);
   const instagramUserId = getSetting('instagram_user_id', '').trim();
   if (!instagramUserId) throw new Error('Не указан Instagram professional account ID.');
   const token = readInstagramToken();
   const caption = instagramCaption(row);
-  const mediaCount = images.length + directVideos.length;
+  const mediaCount = images.length;
   const childIds: string[] = [];
 
   if (mediaCount === 1 && images.length === 1) {
@@ -1307,9 +1297,6 @@ async function publishInstagramProduct(productId: number): Promise<void> {
   } else {
     for (const image of images) {
       childIds.push(await createInstagramMediaContainer(instagramUserId, token, { imageUrl: image, carouselItem: true }));
-    }
-    for (const video of directVideos) {
-      childIds.push(await createInstagramMediaContainer(instagramUserId, token, { videoUrl: video, carouselItem: true }));
     }
   }
 
@@ -1325,36 +1312,31 @@ async function publishInstagramProduct(productId: number): Promise<void> {
     await waitForInstagramContainer(carouselId, token);
     const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: carouselId, access_token: token });
     const mediaId = typeof result.id === 'string' ? result.id : carouselId;
-    const warningParts = [
-      skippedVideos.length ? `Пропущены ссылки на видео, не являющиеся прямыми файлами: ${skippedVideos.join(', ')}` : '',
-      truncatedVideos.length ? `Превышен лимит Instagram carousel, пропущены видео: ${truncatedVideos.join(', ')}` : '',
-    ].filter(Boolean);
-    const warning = warningParts.join('. ') || null;
-    db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, warning, productId);
+    db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
     return;
   }
 
   const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: childIds[0], access_token: token });
   const mediaId = typeof result.id === 'string' ? result.id : childIds[0];
-  const warningParts = [
-    skippedVideos.length ? `Пропущены ссылки на видео, не являющиеся прямыми файлами: ${skippedVideos.join(', ')}` : '',
-    truncatedVideos.length ? `Превышен лимит Instagram carousel, пропущены видео: ${truncatedVideos.join(', ')}` : '',
-  ].filter(Boolean);
-  const warning = warningParts.join('. ') || null;
-  db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, warning, productId);
+  db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
 }
 
 async function processInstagramQueue(): Promise<void> {
-  if (instagramWorkerRunning || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
+  if (instagramWorkerRunning || Date.now() < instagramWorkerBlockedUntil || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
   instagramWorkerRunning = true;
   try {
-    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE status IN ('queued', 'failed') AND attempts < 5 ORDER BY updated_at ASC LIMIT 3`).all() as Array<{ product_id: number; attempts: number }>;
+    db.prepare("UPDATE instagram_publications SET status = 'queued', error = 'Восстановлено после перезапуска очереди.', attempts = 0 WHERE status = 'publishing' AND updated_at < datetime('now', '-10 minutes')").run();
+    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes'))) AND attempts < 5 ORDER BY updated_at ASC LIMIT 1`).all() as Array<{ product_id: number; attempts: number }>;
     for (const job of jobs) {
       db.prepare("UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(job.product_id);
       try {
         await publishInstagramProduct(job.product_id);
       } catch (error) {
-        db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram', job.product_id);
+        const message = error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram';
+        db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(message, job.product_id);
+        if (/HTTP (401|403).*?(token|session|OAuth|permission)|session has expired|access token|OAuthException|(?:код|code)\s+190/i.test(message)) {
+          instagramWorkerBlockedUntil = Date.now() + 30 * 60 * 1000;
+        }
       }
     }
   } finally {
@@ -1384,9 +1366,14 @@ app.post('/api/admin/instagram/settings', requireAdmin, async (req, res) => {
   if (token && token.length > 4096) return res.status(400).json({ error: 'Instagram access token слишком длинный.' });
   if (!token && !getSetting('instagram_access_token_encrypted', '')) return res.status(400).json({ error: 'Вставьте Instagram access token.' });
   try {
-    if (token) setSetting('instagram_access_token_encrypted', encryptInstagramToken(token));
+    if (token) {
+      setSetting('instagram_access_token_encrypted', encryptInstagramToken(token));
+      instagramWorkerBlockedUntil = 0;
+      db.prepare("UPDATE instagram_publications SET status = 'queued', error = NULL, attempts = 0, updated_at = CURRENT_TIMESTAMP WHERE status = 'failed' AND (error LIKE '%access token%' OR error LIKE '%session%' OR error LIKE '%OAuth%' OR error LIKE '%code 190%')").run();
+    }
     setSetting('instagram_user_id', userId);
     setSetting('instagram_auto_publish', autoPublish ? '1' : '0');
+    if (token && autoPublish) void processInstagramQueue();
     return res.json({ success: true, configured: true, auto_publish: autoPublish });
   } catch (error) {
     return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось сохранить Instagram настройки.' });
