@@ -1369,7 +1369,7 @@ app.post('/api/admin/instagram/settings', requireAdmin, async (req, res) => {
     if (token) {
       setSetting('instagram_access_token_encrypted', encryptInstagramToken(token));
       instagramWorkerBlockedUntil = 0;
-      db.prepare("UPDATE instagram_publications SET status = 'queued', error = NULL, attempts = 0, updated_at = CURRENT_TIMESTAMP WHERE status = 'failed' AND (error LIKE '%access token%' OR error LIKE '%session%' OR error LIKE '%OAuth%' OR error LIKE '%code 190%')").run();
+      db.prepare("UPDATE instagram_publications SET status = 'queued', error = NULL, attempts = 0, updated_at = CURRENT_TIMESTAMP WHERE (status = 'failed' AND (error LIKE '%access token%' OR error LIKE '%session%' OR error LIKE '%OAuth%' OR error LIKE '%code 190%' OR error LIKE '%код 190%')) OR (status = 'queued' AND attempts >= 5)").run();
     }
     setSetting('instagram_user_id', userId);
     setSetting('instagram_auto_publish', autoPublish ? '1' : '0');
