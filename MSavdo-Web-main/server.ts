@@ -1385,8 +1385,8 @@ app.post('/api/admin/instagram/test', requireAdmin, async (_req, res) => {
   try {
     const userId = getSetting('instagram_user_id', '').trim();
     if (!/^\d{5,30}$/.test(userId)) throw new Error('Сначала укажите Instagram professional account ID.');
-    const body = await instagramRequest(`/${encodeURIComponent(userId)}`, 'GET', { fields: 'id,username', access_token: readInstagramToken() });
-    return res.json({ success: true, id: body.id, username: body.username || '' });
+    const body = await instagramRequest(`/${encodeURIComponent(userId)}`, 'GET', { fields: 'id', access_token: readInstagramToken() });
+    return res.json({ success: true, id: body.id });
   } catch (error) {
     return res.status(503).json({ error: error instanceof Error ? error.message : 'Instagram недоступен.' });
   }
