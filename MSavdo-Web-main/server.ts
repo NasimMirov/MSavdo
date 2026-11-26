@@ -314,9 +314,12 @@ db.exec(`
     media_id TEXT,
     error TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    queued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 `);
+try { db.exec('ALTER TABLE instagram_publications ADD COLUMN queued_at TEXT;'); } catch (_) {}
+try { db.exec("UPDATE instagram_publications SET queued_at = COALESCE(queued_at, updated_at, CURRENT_TIMESTAMP) WHERE queued_at IS NULL OR queued_at = '';"); } catch (_) {}
 
 function normalizeVideoUrls(value: unknown, fallback = ''): string[] {
   let candidates: unknown[] = [];
@@ -1184,16 +1187,35 @@ let instagramWorkerBlockedUntil = 0;
 let instagramWorkerNextRunAt = 0;
 const instagramRateLimitCooldownMs = 60 * 60 * 1000;
 
-function queueInstagramProduct(productId: number): void {
+function queueInstagramProduct(productId: number, force = false): void {
   db.prepare(`
-    INSERT INTO instagram_publications (product_id, status, error, updated_at)
-    VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP)
+    INSERT INTO instagram_publications (product_id, status, error, updated_at, queued_at)
+    VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT(product_id) DO UPDATE SET
-      status = CASE WHEN instagram_publications.status = 'published' THEN 'published' ELSE 'queued' END,
-      error = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.error ELSE NULL END,
-      attempts = CASE WHEN instagram_publications.status = 'published' THEN instagram_publications.attempts ELSE 0 END,
-      updated_at = CURRENT_TIMESTAMP
-  `).run(productId);
+      status = CASE
+        WHEN instagram_publications.status = 'published' THEN 'published'
+        WHEN ? = 1 OR instagram_publications.status = 'failed' THEN 'queued'
+        ELSE instagram_publications.status
+      END,
+      error = CASE
+        WHEN instagram_publications.status = 'published' THEN instagram_publications.error
+        WHEN ? = 1 OR instagram_publications.status = 'failed' THEN NULL
+        ELSE instagram_publications.error
+      END,
+      attempts = CASE
+        WHEN instagram_publications.status = 'published' THEN instagram_publications.attempts
+        WHEN ? = 1 OR instagram_publications.status = 'failed' THEN 0
+        ELSE instagram_publications.attempts
+      END,
+      updated_at = CASE
+        WHEN ? = 1 OR instagram_publications.status = 'failed' THEN CURRENT_TIMESTAMP
+        ELSE instagram_publications.updated_at
+      END,
+      queued_at = CASE
+        WHEN ? = 1 OR instagram_publications.status = 'failed' THEN CURRENT_TIMESTAMP
+        ELSE instagram_publications.queued_at
+      END
+  `).run(productId, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0);
 }
 
 function instagramCaption(product: { id: number; title: string; description: string | null; price_tjs: number | null; slug?: string }): string {
@@ -1267,6 +1289,13 @@ async function createInstagramMediaContainer(
   return id;
 }
 
+class InstagramPublicationUncertainError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InstagramPublicationUncertainError';
+  }
+}
+
 async function publishInstagramProduct(productId: number): Promise<void> {
   const row = db.prepare(`
     SELECT p.id, p.title, p.description,
@@ -1294,9 +1323,14 @@ async function publishInstagramProduct(productId: number): Promise<void> {
   const token = readInstagramToken();
   const caption = instagramCaption(row);
   const containerId = await createInstagramMediaContainer(instagramUserId, token, { imageUrl: images[0], caption });
-  const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: containerId, access_token: token });
-  const mediaId = typeof result.id === 'string' ? result.id : containerId;
-  db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
+  try {
+    const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: containerId, access_token: token });
+    const mediaId = typeof result.id === 'string' ? result.id : containerId;
+    db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Неизвестный ответ Instagram.';
+    throw new InstagramPublicationUncertainError(`Результат публикации не подтверждён. Проверьте Instagram вручную перед повтором: ${message}`);
+  }
 }
 
 async function processInstagramQueue(): Promise<void> {
@@ -1304,16 +1338,32 @@ async function processInstagramQueue(): Promise<void> {
   if (instagramWorkerRunning || now < instagramWorkerBlockedUntil || now < instagramWorkerNextRunAt || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
   instagramWorkerRunning = true;
   try {
-    db.prepare("UPDATE instagram_publications SET status = 'queued', error = 'Восстановлено после перезапуска очереди.', attempts = 0 WHERE status = 'publishing' AND updated_at < datetime('now', '-10 minutes')").run();
-    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes'))) AND attempts < 5 ORDER BY updated_at DESC LIMIT 1`).all() as Array<{ product_id: number; attempts: number }>;
+    const jobs = db.prepare(`
+      SELECT product_id, attempts
+      FROM instagram_publications
+      WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes')))
+        AND attempts < 5
+      ORDER BY COALESCE(queued_at, updated_at) ASC, product_id ASC
+      LIMIT 1
+    `).all() as Array<{ product_id: number; attempts: number }>;
     for (const job of jobs) {
-      db.prepare("UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(job.product_id);
+      const claim = db.prepare(`
+        UPDATE instagram_publications
+        SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
+        WHERE product_id = ? AND status IN ('queued', 'failed')
+      `).run(job.product_id);
+      if (claim.changes !== 1) continue;
       try {
         await publishInstagramProduct(job.product_id);
         instagramWorkerNextRunAt = Date.now() + instagramPublishIntervalMs;
       } catch (error) {
+        const uncertain = error instanceof InstagramPublicationUncertainError;
         const message = error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram';
-        db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(message, job.product_id);
+        if (uncertain) {
+          db.prepare("UPDATE instagram_publications SET error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND status = 'publishing'").run(message, job.product_id);
+        } else {
+          db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND status = 'publishing'").run(message, job.product_id);
+        }
         instagramWorkerNextRunAt = Date.now() + instagramPublishIntervalMs;
         if (/код 4|code 4|rate limit|request limit/i.test(message)) {
           instagramWorkerBlockedUntil = Date.now() + instagramRateLimitCooldownMs;
@@ -1378,7 +1428,7 @@ app.post('/api/admin/instagram/queue/:id', requireAdmin, (req, res) => {
   const productId = Number(req.params.id);
   const product = db.prepare("SELECT id FROM products WHERE id = ? AND status = 'active'").get(productId) as { id: number } | undefined;
   if (!product) return res.status(404).json({ error: 'Активный товар не найден.' });
-  queueInstagramProduct(productId);
+  queueInstagramProduct(productId, true);
   void processInstagramQueue();
   return res.json({ success: true, product_id: productId });
 });
