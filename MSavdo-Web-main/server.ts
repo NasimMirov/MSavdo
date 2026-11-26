@@ -315,11 +315,14 @@ db.exec(`
     error TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    queued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    queued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    queue_order INTEGER
   );
 `);
 try { db.exec('ALTER TABLE instagram_publications ADD COLUMN queued_at TEXT;'); } catch (_) {}
+try { db.exec('ALTER TABLE instagram_publications ADD COLUMN queue_order INTEGER;'); } catch (_) {}
 try { db.exec("UPDATE instagram_publications SET queued_at = COALESCE(queued_at, updated_at, CURRENT_TIMESTAMP) WHERE queued_at IS NULL OR queued_at = '';"); } catch (_) {}
+try { db.exec("UPDATE instagram_publications SET queue_order = COALESCE(queue_order, rowid) WHERE queue_order IS NULL;"); } catch (_) {}
 
 function normalizeVideoUrls(value: unknown, fallback = ''): string[] {
   let candidates: unknown[] = [];
@@ -1189,8 +1192,8 @@ const instagramRateLimitCooldownMs = 60 * 60 * 1000;
 
 function queueInstagramProduct(productId: number, force = false): void {
   db.prepare(`
-    INSERT INTO instagram_publications (product_id, status, error, updated_at, queued_at)
-    VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    INSERT INTO instagram_publications (product_id, status, error, updated_at, queued_at, queue_order)
+    VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM instagram_publications))
     ON CONFLICT(product_id) DO UPDATE SET
       status = CASE
         WHEN instagram_publications.status = 'published' THEN 'published'
@@ -1214,8 +1217,12 @@ function queueInstagramProduct(productId: number, force = false): void {
       queued_at = CASE
         WHEN ? = 1 OR instagram_publications.status = 'failed' THEN CURRENT_TIMESTAMP
         ELSE instagram_publications.queued_at
+      END,
+      queue_order = CASE
+        WHEN ? = 1 OR instagram_publications.status = 'failed' THEN (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM instagram_publications)
+        ELSE instagram_publications.queue_order
       END
-  `).run(productId, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0);
+  `).run(productId, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0, force ? 1 : 0);
 }
 
 function instagramCaption(product: { id: number; title: string; description: string | null; price_tjs: number | null; slug?: string }): string {
@@ -1325,7 +1332,8 @@ async function publishInstagramProduct(productId: number): Promise<void> {
   const containerId = await createInstagramMediaContainer(instagramUserId, token, { imageUrl: images[0], caption });
   try {
     const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: containerId, access_token: token });
-    const mediaId = typeof result.id === 'string' ? result.id : containerId;
+    const mediaId = typeof result.id === 'string' ? result.id.trim() : '';
+    if (!mediaId) throw new Error('Instagram не подтвердил публикацию media ID.');
     db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Неизвестный ответ Instagram.';
@@ -1343,7 +1351,7 @@ async function processInstagramQueue(): Promise<void> {
       FROM instagram_publications
       WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes')))
         AND attempts < 5
-      ORDER BY COALESCE(queued_at, updated_at) ASC, product_id ASC
+      ORDER BY COALESCE(queue_order, rowid) ASC, product_id ASC
       LIMIT 1
     `).all() as Array<{ product_id: number; attempts: number }>;
     for (const job of jobs) {
