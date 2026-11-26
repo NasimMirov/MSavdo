@@ -1180,6 +1180,7 @@ const instagramGraphBase = `https://graph.facebook.com/${instagramGraphVersion}`
 const instagramCarouselLimit = 5;
 let instagramWorkerRunning = false;
 let instagramWorkerBlockedUntil = 0;
+const instagramRateLimitCooldownMs = 60 * 60 * 1000;
 
 function queueInstagramProduct(productId: number): void {
   db.prepare(`
@@ -1335,7 +1336,9 @@ async function processInstagramQueue(): Promise<void> {
       } catch (error) {
         const message = error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram';
         db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(message, job.product_id);
-        if (/HTTP (401|403).*?(token|session|OAuth|permission)|session has expired|access token|OAuthException|(?:код|code)\s+190/i.test(message)) {
+        if (/код 4|code 4|rate limit|request limit/i.test(message)) {
+          instagramWorkerBlockedUntil = Date.now() + instagramRateLimitCooldownMs;
+        } else if (/HTTP (401|403).*?(token|session|OAuth|permission)|session has expired|access token|OAuthException|(?:код|code)\s+190/i.test(message)) {
           instagramWorkerBlockedUntil = Date.now() + 30 * 60 * 1000;
         }
       }
