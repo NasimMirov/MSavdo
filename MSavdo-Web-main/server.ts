@@ -1177,9 +1177,11 @@ app.get('/api/extension/import-access', (req, res) => {
 
 const instagramGraphVersion = (process.env.INSTAGRAM_GRAPH_API_VERSION || 'v22.0').trim();
 const instagramGraphBase = `https://graph.facebook.com/${instagramGraphVersion}`;
-const instagramCarouselLimit = 5;
+const instagramImageLimit = 1;
+const instagramPublishIntervalMs = 5 * 60 * 1000;
 let instagramWorkerRunning = false;
 let instagramWorkerBlockedUntil = 0;
+let instagramWorkerNextRunAt = 0;
 const instagramRateLimitCooldownMs = 60 * 60 * 1000;
 
 function queueInstagramProduct(productId: number): void {
@@ -1284,47 +1286,22 @@ async function publishInstagramProduct(productId: number): Promise<void> {
     row.main_image,
     row.images,
     row.variant_images ? row.variant_images.split(',') : [],
-    instagramCarouselLimit,
+    instagramImageLimit,
   );
   if (!images.length) throw new Error('У товара нет публичного изображения для Instagram.');
   const instagramUserId = getSetting('instagram_user_id', '').trim();
   if (!instagramUserId) throw new Error('Не указан Instagram professional account ID.');
   const token = readInstagramToken();
   const caption = instagramCaption(row);
-  const mediaCount = images.length;
-  const childIds: string[] = [];
-
-  if (mediaCount === 1 && images.length === 1) {
-    childIds.push(await createInstagramMediaContainer(instagramUserId, token, { imageUrl: images[0], caption }));
-  } else {
-    for (const image of images) {
-      childIds.push(await createInstagramMediaContainer(instagramUserId, token, { imageUrl: image, carouselItem: true }));
-    }
-  }
-
-  if (childIds.length > 1) {
-    const parent = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media`, 'POST', {
-      media_type: 'CAROUSEL',
-      children: childIds.join(','),
-      caption,
-      access_token: token,
-    });
-    const carouselId = typeof parent.id === 'string' ? parent.id : '';
-    if (!carouselId) throw new Error('Instagram не вернул carousel container ID.');
-    await waitForInstagramContainer(carouselId, token);
-    const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: carouselId, access_token: token });
-    const mediaId = typeof result.id === 'string' ? result.id : carouselId;
-    db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
-    return;
-  }
-
-  const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: childIds[0], access_token: token });
-  const mediaId = typeof result.id === 'string' ? result.id : childIds[0];
+  const containerId = await createInstagramMediaContainer(instagramUserId, token, { imageUrl: images[0], caption });
+  const result = await instagramRequest(`/${encodeURIComponent(instagramUserId)}/media_publish`, 'POST', { creation_id: containerId, access_token: token });
+  const mediaId = typeof result.id === 'string' ? result.id : containerId;
   db.prepare(`UPDATE instagram_publications SET status = 'published', media_id = ?, error = NULL, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?`).run(mediaId, productId);
 }
 
 async function processInstagramQueue(): Promise<void> {
-  if (instagramWorkerRunning || Date.now() < instagramWorkerBlockedUntil || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
+  const now = Date.now();
+  if (instagramWorkerRunning || now < instagramWorkerBlockedUntil || now < instagramWorkerNextRunAt || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
   instagramWorkerRunning = true;
   try {
     db.prepare("UPDATE instagram_publications SET status = 'queued', error = 'Восстановлено после перезапуска очереди.', attempts = 0 WHERE status = 'publishing' AND updated_at < datetime('now', '-10 minutes')").run();
@@ -1333,9 +1310,11 @@ async function processInstagramQueue(): Promise<void> {
       db.prepare("UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(job.product_id);
       try {
         await publishInstagramProduct(job.product_id);
+        instagramWorkerNextRunAt = Date.now() + instagramPublishIntervalMs;
       } catch (error) {
         const message = error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram';
         db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(message, job.product_id);
+        instagramWorkerNextRunAt = Date.now() + instagramPublishIntervalMs;
         if (/код 4|code 4|rate limit|request limit/i.test(message)) {
           instagramWorkerBlockedUntil = Date.now() + instagramRateLimitCooldownMs;
         } else if (/HTTP (401|403).*?(token|session|OAuth|permission)|session has expired|access token|OAuthException|(?:код|code)\s+190/i.test(message)) {
