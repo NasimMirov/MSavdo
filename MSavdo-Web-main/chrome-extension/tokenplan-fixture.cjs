@@ -1,6 +1,6 @@
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, options) => {
-  if (input !== "https://tokenplan.art/v1/chat/completions") return originalFetch(input, options);
+  if (input !== "https://tokenplan.su/v1/chat/completions") return originalFetch(input, options);
   if (options.headers.Authorization !== "Bearer valid-test-key") {
     return Response.json({ error: "credentials rejected" }, { status: 401 });
   }
@@ -11,7 +11,7 @@ globalThis.fetch = async (input, options) => {
     return Response.json({ error: "quota" }, { status: 429 });
   }
   const result = prompt.includes("подкатегорию")
-    ? "Туризм, кемпинг и пикник"
+    ? "Хобби, музыка и спорт / Спорт и инвентарь / Туризм / охота / рыбалка"
     : prompt.includes("только название") ? "Солнечный фонарь" : "Фонарь для кемпинга.";
   return Response.json({ choices: [{ message: { content: result } }] });
 };

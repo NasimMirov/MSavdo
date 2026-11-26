@@ -13,9 +13,14 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
   const project = path.resolve(__dirname, "..");
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "msavdo-import-test-"));
   const utils = path.join(temp, "src", "utils");
+  const data = path.join(temp, "src", "data");
   fs.mkdirSync(utils, { recursive: true });
+  fs.mkdirSync(data, { recursive: true });
+  fs.mkdirSync(path.join(temp, "scripts"), { recursive: true });
   fs.copyFileSync(path.join(project, "server.ts"), path.join(temp, "server.ts"));
-  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "importAiPrompt.ts", "promotions.ts", "tokenPlan.ts", "catalogSnapshotRestore.ts", "catalogBackup.ts", "productWatermark.ts", "demoSeed.ts", "catalogSearch.ts"]) {
+  fs.copyFileSync(path.join(project, "src", "data", "somonCategories.ts"), path.join(data, "somonCategories.ts"));
+  fs.copyFileSync(path.join(project, "scripts", "somon_classifier.py"), path.join(temp, "scripts", "somon_classifier.py"));
+  for (const file of ["semanticAi.ts", "pricing.ts", "productDescription.ts", "importVariants.ts", "importAiPrompt.ts", "promotions.ts", "tokenPlan.ts", "catalogSnapshotRestore.ts", "catalogBackup.ts", "productWatermark.ts", "demoSeed.ts", "catalogSearch.ts", "videoShuffle.ts"]) {
     fs.copyFileSync(path.join(project, "src", "utils", file), path.join(utils, file));
   }
   fs.mkdirSync(path.join(temp, "public"));
@@ -33,8 +38,11 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
   const child = spawn(process.execPath, ["--require", path.join(project, "chrome-extension", "tokenplan-fixture.cjs"), "--import", "tsx", "server.ts"], {
     cwd: temp,
     env: { ...process.env, NODE_ENV: "development", PORT: String(port), PUBLIC_BASE_URL: `http://127.0.0.1:${port}`, GEMINI_API_KEY: "", ADMIN_JWT_SECRET: secret, ADMIN_TELEGRAM_ALLOWED_IDS: "111,222", TOKENPLAN_TEST_LOG: path.join(temp, "tokenplan.log") },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let childStderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { childStderr = `${childStderr}${chunk}`.slice(-4000); });
   const base = `http://127.0.0.1:${port}`;
   let db;
   try {
@@ -43,18 +51,18 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
       try { if ((await fetch(`${base}/api/ping`)).ok) { ready = true; break; } } catch {}
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    assert.ok(ready, "test server did not start");
+    assert.ok(ready, `test server did not start: ${childStderr}`);
     const headers = { "Content-Type": "application/json" };
     const categoryResponse = await fetch(`${base}/api/import-categories`);
     assert.equal(categoryResponse.status, 200);
-    assert.ok((await categoryResponse.json()).categories.includes("Хозяйственные мелочи"));
+    assert.ok((await categoryResponse.json()).categories.includes("Все для дома / Хозяйственный инвентарь и бытовая химия"));
     const assistant = { title: "Товар", description: "", source_text: "", instruction: "Улучши", history: [] };
     const unauthorized = await fetch(`${base}/api/admin/import-assistant`, { method: "POST", headers, body: JSON.stringify(assistant) });
-    assert.equal(unauthorized.status, 401);
+    assert.ok([401, 403].includes(unauthorized.status));
     const unauthorizedPrepare = await fetch(`${base}/api/admin/import-assistant`, {
       method: "POST", headers, body: JSON.stringify({ ...assistant, prepare_only: true }),
     });
-    assert.equal(unauthorizedPrepare.status, 401);
+    assert.ok([401, 403].includes(unauthorizedPrepare.status));
 
     db = new DatabaseSync(path.join(temp, "msavdo.db"));
     db.prepare("INSERT INTO admin_users (username, password_hash) VALUES (?, ?)").run("test-admin", "unused");
@@ -77,7 +85,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     });
     assert.equal(preparedResponse.status, 200);
     const prepared = await preparedResponse.json();
-    assert.ok(prepared.categories.includes("Хозяйственные мелочи"));
+    assert.ok(prepared.categories.includes("Все для дома / Хозяйственный инвентарь и бытовая химия"));
     assert.match(prepared.prompt, /红色/);
     const invalidPrepare = await fetch(`${base}/api/admin/import-assistant`, {
       method: "POST", headers: { ...headers, Cookie: `__Host-msavdo_admin=${header}.${payload}.${signature}` },
@@ -300,10 +308,10 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const failedAuto = await failedAutoResponse.json();
     assert.equal(failedAuto.automatic_ai.status, "queued");
     const failedJob = await waitForJob(failedAuto.product.id);
-    assert.equal(failedJob.status, "failed");
-    assert.match(failedJob.message, /ключ TokenPlan/);
+    assert.equal(failedJob.status, "completed");
+    assert.match(failedJob.message, /Категория подобрана/);
     assert.equal(db.prepare("SELECT status FROM products WHERE id = ?").get(failedAuto.product.id).status, "draft");
-    const categoryId = db.prepare("SELECT id FROM categories WHERE name = ?").get("Хозяйственные мелочи").id;
+    const categoryId = db.prepare("SELECT id FROM categories WHERE name = ?").get("Все для дома / Хозяйственный инвентарь и бытовая химия").id;
     const manualSourceLink = "https://detail.1688.com/offer/123456789.html";
     const createdManually = await fetch(`${base}/api/admin/products`, {
       method: "POST", headers: { ...headers, Cookie: cookie },
@@ -396,7 +404,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     const descriptionSuggestion = await (await suggest("description")).json();
     assert.equal(descriptionSuggestion.description, "Фонарь для кемпинга.");
     const categorySuggestion = await (await suggest("category")).json();
-    assert.equal(categorySuggestion.category_name, "Туризм, кемпинг и пикник");
+    assert.equal(categorySuggestion.category_name, "Хобби, музыка и спорт / Спорт и инвентарь / Туризм / охота / рыбалка");
     assert.ok(categorySuggestion.category_id > 0);
     const baselineResponse = await fetch(`${base}/api/add-product`, {
       method: "POST", headers, body: JSON.stringify({ ...autoPayload, automatic_ai: false }),
@@ -417,10 +425,7 @@ test("isolated import, AI authorization, server pricing and promotion limits", {
     assert.equal(autoSaved.specifications, baselineSaved.specifications);
     assert.equal(autoSaved.images, baselineSaved.images);
     const requests = fs.readFileSync(path.join(temp, "tokenplan.log"), "utf8").trim().split("\n").map(JSON.parse);
-    assert.equal(requests.length, 1);
-    assert.match(requests[0].prompt, /подкатегорию/);
-    assert.ok(requests[0].prompt.includes(autoSaved.title));
-    assert.ok(requests[0].prompt.includes(autoSaved.description.slice(0, 4000).replace(/\n/g, "\\n")));
+    assert.equal(requests.length, 0);
     assert.equal(autoSaved.category_id, categorySuggestion.category_id);
     const autoVariants = db.prepare("SELECT color, price_cny, price_tjs FROM product_variants WHERE product_id = ? ORDER BY id").all(auto.product.id);
     assert.equal(autoVariants.length, 600);

@@ -11,7 +11,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "sync:somon-guide": "node scripts/sync-somon-guide.mjs"
+    "sync:somon-guide": "node scripts/sync-somon-guide.mjs",
+    "generate:somon-categories": "node scripts/generate-somon-categories.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

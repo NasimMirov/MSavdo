@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
+import { spawn } from 'node:child_process';
 import { isIP, type LookupFunction } from 'node:net';
 import { rateLimit } from 'express-rate-limit';
 import sharp from 'sharp';
@@ -27,6 +28,7 @@ import { createCatalogBackup } from './src/utils/catalogBackup.js';
 import { isWatermarkedUpload, productImageToken, renderProductWatermark, saveWatermarkedUpload } from './src/utils/productWatermark.js';
 import { shouldSeedDemoProducts } from './src/utils/demoSeed.js';
 import { catalogSearchCondition, catalogSearchTerms, escapeSearchLike } from './src/utils/catalogSearch.js';
+import { SOMON_CATEGORIES } from './src/data/somonCategories.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -584,7 +586,7 @@ for (const existingOrder of existingOrdersForItems) {
   }
 }
 
-const FIXED_CATEGORY_TREE = [
+const LEGACY_CATEGORY_TREE = [
   {
     name: 'Женская одежда',
     subcategories: [
@@ -770,11 +772,82 @@ const FIXED_CATEGORY_TREE = [
   },
 ];
 
-const STRICT_ALLOWED_CATEGORIES: string[] = [];
-for (const root of FIXED_CATEGORY_TREE) {
-  for (const subcategory of root.subcategories) {
-    STRICT_ALLOWED_CATEGORIES.push(subcategory);
-  }
+const somonCategoryByPath = new Map(SOMON_CATEGORIES.map((category) => [category.path, category]));
+const somonCategoryById = new Map(SOMON_CATEGORIES.map((category) => [category.rubric_id, category]));
+const somonLeafCategories = SOMON_CATEGORIES.filter((category) => !SOMON_CATEGORIES.some((other) => other.path.startsWith(`${category.path} / `)));
+const STRICT_ALLOWED_CATEGORIES = somonLeafCategories.map((category) => category.path);
+const FIXED_CATEGORY_TREE = [...new Set(somonLeafCategories.map((category) => category.path.split(' / ')[0]))].map((name) => ({
+  name,
+  subcategories: somonLeafCategories.filter((category) => category.path.startsWith(`${name} / `)).map((category) => category.path),
+}));
+
+type PythonCategoryResult = {
+  status: 'classified' | 'ambiguous' | 'unclassified' | 'forbidden' | 'error';
+  reason?: string;
+  path?: string | null;
+  rubric_id?: number | null;
+  confidence?: number;
+};
+
+function runPythonCategoryClassifier(input: {
+  title: string;
+  description: string;
+  category_hint?: string;
+  specifications: Array<{ name: string; value: string }>;
+}): Promise<PythonCategoryResult> {
+  const executable = process.env.PYTHON_BIN?.trim() || (process.platform === 'win32' ? 'python' : 'python3');
+  const script = path.join(__dirname, 'scripts', 'somon_classifier.py');
+  const payload = JSON.stringify({
+    ...input,
+    categories: somonLeafCategories.map(({ path: categoryPath, rubric_id }) => ({ path: categoryPath, rubric_id })),
+  });
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, [script], { cwd: __dirname, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error('Python classifier timeout.'));
+    }, 8000);
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => { stdout = `${stdout}${chunk}`.slice(-20000); });
+    child.stderr.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-2000); });
+    child.once('error', (error) => { clearTimeout(timeout); reject(error); });
+    child.once('close', (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) return reject(new Error(`Python classifier exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+      try {
+        const parsed = JSON.parse(stdout) as PythonCategoryResult;
+        if (!parsed || typeof parsed.status !== 'string') throw new Error('invalid classifier response');
+        if (parsed.status === 'classified') {
+          if (typeof parsed.path !== 'string' || !Number.isSafeInteger(parsed.rubric_id)) throw new Error('classifier returned incomplete category');
+          const official = somonCategoryByPath.get(parsed.path);
+          if (!official || official.rubric_id !== parsed.rubric_id || !STRICT_ALLOWED_CATEGORIES.includes(parsed.path)) {
+            throw new Error('classifier returned category outside the official catalog');
+          }
+        }
+        resolve(parsed);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error('invalid classifier response'));
+      }
+    });
+    child.stdin.end(payload);
+  });
+}
+
+function somonCategoryName(categoryName: string, productText = ''): string {
+  const normalized = String(categoryName || '').trim().toLocaleLowerCase('ru');
+  const exact = STRICT_ALLOWED_CATEGORIES.find((path) => path.toLocaleLowerCase('ru') === normalized);
+  if (exact) return exact;
+  const leafMatches = somonLeafCategories.filter((category) => category.path.split(' / ').at(-1)?.toLocaleLowerCase('ru') === normalized);
+  if (leafMatches.length === 1) return leafMatches[0].path;
+  const text = `${categoryName} ${productText}`.toLocaleLowerCase('ru');
+  const candidates = somonLeafCategories.filter((category) => {
+    const leaf = category.path.split(' / ').at(-1)?.toLocaleLowerCase('ru') || '';
+    return leaf.length > 3 && text.includes(leaf);
+  });
+  return candidates.length === 1 ? candidates[0].path : '';
 }
 
 app.get('/api/import-categories', (_req, res) => {
@@ -893,23 +966,86 @@ function determineSubcategoryRuleBased(productText: string): string {
       ? 'Футболки, топы и боди'
       : 'Мужские футболки, майки и поло';
   }
-  return 'Хозяйственные мелочи';
+  return '';
 }
 
+const LEGACY_CATEGORY_TO_SOMON: Record<string, string> = {
+  'мужские футболки, майки и поло': 'Одежда и личные вещи / Мужская одежда / Футболки',
+  'мужские рубашки и сорочки': 'Одежда и личные вещи / Мужская одежда / Рубашки',
+  'мужские худи, толстовки и свитеры': 'Одежда и личные вещи / Мужская одежда / Кофты',
+  'мужские брюки и джинсы': 'Одежда и личные вещи / Мужская одежда / Брюки',
+  'мужские костюмы и пиджаки': 'Одежда и личные вещи / Мужская одежда / Костюмы',
+  'мужские шорты и бриджи': 'Одежда и личные вещи / Мужская одежда / Шорты',
+  'мужская верхняя одежда': 'Одежда и личные вещи / Мужская одежда / Верхняя одежда',
+  'мужское нижнее белье': 'Одежда и личные вещи / Мужская одежда / Нижнее белье',
+  'мужская обувь': 'Одежда и личные вещи / Обувь / Мужская обувь',
+  'женская обувь': 'Одежда и личные вещи / Обувь / Женская обувь',
+  'детская обувь': 'Детский мир / Детская обувь / Для мальчиков',
+  'платья и сарафаны': 'Одежда и личные вещи / Женская одежда / Платья',
+  'женские блузки и рубашки': 'Одежда и личные вещи / Женская одежда / Блузки',
+  'женские брюки, джинсы и леггинсы': 'Одежда и личные вещи / Женская одежда / Брюки',
+  'женская верхняя одежда': 'Одежда и личные вещи / Женская одежда / Верхняя одежда',
+  'женские юбки и шорты': 'Одежда и личные вещи / Женская одежда / Юбки',
+  'женские костюмы, жакеты и комбинезоны': 'Одежда и личные вещи / Женская одежда / Костюм',
+  'женские свитеры, худи и трикотаж': 'Одежда и личные вещи / Женская одежда / Кофты',
+  'женское нижнее белье': 'Одежда и личные вещи / Женская одежда / Нижнее белье',
+  'носки, гольфы и колготки': 'Одежда и личные вещи / Мужская одежда / Нижнее белье',
+  'пижамы и одежда для дома': 'Одежда и личные вещи / Мужская одежда / Одежда для дома',
+  'наручные часы': 'Одежда и личные вещи / Часы и украшения / Мужские часы',
+  'очки и оптика': 'Одежда и личные вещи / Аксессуары, шарфы, головные уборы',
+  'головные уборы': 'Одежда и личные вещи / Аксессуары, шарфы, головные уборы',
+  'шарфы, платки и перчатки': 'Одежда и личные вещи / Аксессуары, шарфы, головные уборы',
+  'ремни, пояса и галстуки': 'Одежда и личные вещи / Аксессуары, шарфы, головные уборы',
+  'бижутерия и украшения': 'Одежда и личные вещи / Часы и украшения / Другие аксессуары',
+  'смартфоны и аксессуары': '',
+  'наушники и аудиотехника': 'Телефоны и связь / Аксессуары для телефонов / Гарнитуры и наушники',
+  'смарт-часы и носимая электроника': 'Телефоны и связь / Аксессуары для телефонов / Смарт часы',
+  'зарядные устройства, кабели и питание': 'Телефоны и связь / Аксессуары для телефонов / Зарядные устройства',
+  'компьютеры, ноутбуки и периферия': 'Компьютеры и оргтехника / Ноутбуки',
+  'комплектующие и накопители данных': 'Компьютеры и оргтехника / Комплектующие и аксессуары / Прочие комплектующие',
+  'фото-, видео-, тв и блогерская техника': 'Электроника и бытовая техника / Фото и видеокамеры',
+  'игровые приставки и гейминг': 'Компьютеры и оргтехника / Игровые приставки',
+  'умный дом и безопасность': 'Электроника и бытовая техника / Системы видеонаблюдения, охраны, &#34;Умный дом&#34;',
+  'принтеры и сканеры': 'Компьютеры и оргтехника / Принтеры и сканеры',
+  'игрушки и игры': 'Детский мир / Игрушки',
+  'техника для приготовления пищи': 'Электроника и бытовая техника / Техника для дома и кухни / Прочая техника для кухни',
+  'техника для измельчения и смешивания': 'Электроника и бытовая техника / Техника для дома и кухни / Кухонные комбайны, измельчители, соковыжималки',
+  'техника для напитков': 'Электроника и бытовая техника / Техника для дома и кухни / Кофеварки / кофемолки',
+  'уборка и уход за одеждой': 'Электроника и бытовая техника / Техника для дома и кухни / Пылесосы',
+  'климатическая техника': 'Электроника и бытовая техника / Климатическая техника / Вентиляторы',
+  'приборы для красоты и здоровья': 'Электроника и бытовая техника / Для личного ухода',
+  'хозяйственные мелочи': 'Все для дома / Другие товары для дома',
+  'автотовары и автоаксессуары': '',
+  'смартфон': '',
+};
+
 function normalizeSubcategoryName(categoryName: string, productText: string = ''): string {
-  const normalized = String(categoryName || '').trim().toLocaleLowerCase('ru');
-  for (const subcategory of STRICT_ALLOWED_CATEGORIES) {
-    if (subcategory.toLocaleLowerCase('ru') === normalized) return subcategory;
-  }
-  return determineSubcategoryRuleBased(`${categoryName} ${productText}`);
+  const exact = somonCategoryName(categoryName, productText);
+  if (exact) return exact;
+  const legacy = LEGACY_CATEGORY_TO_SOMON[String(categoryName || '').trim().toLocaleLowerCase('ru')];
+  if (legacy !== undefined) return legacy;
+  const text = `${categoryName} ${productText}`.toLocaleLowerCase('ru');
+  if (/(смартфон|iphone|айфон|мобильн.{0,8}телефон|сотов.{0,8}телефон|легков.{0,8}автомоб|пассажирск.{0,8}автомоб|автотранспорт)/i.test(text)) return '';
+  const rules: Array<[RegExp, string]> = [
+    [/кроссов|туфл|сандал|обув|ботин|сапог/i, 'Одежда и личные вещи / Обувь / Мужская обувь'],
+    [/худи|толстовк|свитер/i, 'Одежда и личные вещи / Мужская одежда / Кофты'],
+    [/смарт.?час|умн.{0,8}час/i, 'Телефоны и связь / Аксессуары для телефонов / Смарт часы'],
+    [/наушник|гарнитур|headphone|earphone/i, 'Телефоны и связь / Аксессуары для телефонов / Гарнитуры и наушники'],
+    [/принтер|чернил|картридж|тонер/i, 'Компьютеры и оргтехника / Принтеры и сканеры'],
+    [/барабан|игрушк|детск.{0,10}машин/i, 'Детский мир / Игрушки'],
+    [/источник бесперебой|\bups\b|аккумулятор|электростанц|инвертор|зарядн.{0,12}электромобил/i, 'Компьютеры и оргтехника / Комплектующие и аксессуары / Источники бесперебойного питания (ИБП)'],
+    [/ламп|светильник|освещен/i, 'Все для дома / Текстиль и интерьер / Светильники'],
+    [/электросамокат|гироскутер/i, 'Транспорт / Другой транспорт / Гироскутеры и электросамокаты'],
+  ];
+  const legacyCategory = rules.find(([pattern]) => pattern.test(text))?.[1] || '';
+  return LEGACY_CATEGORY_TO_SOMON[legacyCategory.toLocaleLowerCase('ru')] || somonCategoryName(legacyCategory, text);
 }
 
 function inferSpecificSubcategory(productText: string): string | null {
   const text = String(productText || '').trim();
   if (!text) return null;
-  const category = determineSubcategoryRuleBased(text);
-  if (category !== 'Хозяйственные мелочи') return category;
-  return null;
+  const category = normalizeSubcategoryName('', determineSubcategoryRuleBased(text));
+  return category || null;
 }
 
 function resolveImportSubcategory(
@@ -918,29 +1054,23 @@ function resolveImportSubcategory(
   context?: ExtractedHtmlContext | null,
   trustModelCategory = false,
 ): string {
-  const normalizedModelCategory = String(modelCategory || '').trim().toLocaleLowerCase('ru');
-  const validModelCategory = STRICT_ALLOWED_CATEGORIES.find(
-    (category) => category.toLocaleLowerCase('ru') === normalizedModelCategory,
-  );
+  const validModelCategory = somonCategoryName(modelCategory, productTitle);
   if (trustModelCategory && validModelCategory) return validModelCategory;
 
-  const titleCategory = inferSpecificSubcategory(productTitle)
-    || inferSpecificSubcategory(context?.title || '');
+  const titleCategory = normalizeSubcategoryName('', `${productTitle} ${context?.title || ''}`);
   if (titleCategory) return titleCategory;
 
   const hint = String(context?.categoryHint || '').trim();
   const normalizedHint = hint.toLocaleLowerCase('ru');
-  const exactHint = STRICT_ALLOWED_CATEGORIES.find(
-    (category) => category.toLocaleLowerCase('ru') === normalizedHint,
-  );
+  const exactHint = somonCategoryName(hint);
   if (exactHint) return exactHint;
 
-  const matchingHint = STRICT_ALLOWED_CATEGORIES.find((category) =>
-    normalizedHint.includes(category.toLocaleLowerCase('ru')),
-  );
+  const matchingHint = somonLeafCategories.find((category) =>
+    normalizedHint.includes(category.path.toLocaleLowerCase('ru')),
+  )?.path;
   if (matchingHint) return matchingHint;
 
-  const hintedCategory = inferSpecificSubcategory(hint);
+  const hintedCategory = normalizeSubcategoryName('', hint);
   if (hintedCategory && !/(женск|мужск|детск).{0,12}одежд|女装|男装|服装|электроника|数码产品/i.test(hint)) {
     return hintedCategory;
   }
@@ -948,19 +1078,32 @@ function resolveImportSubcategory(
   const specificationText = (context?.specifications || [])
     .map((item) => `${item.name} ${item.value}`)
     .join(' ');
-  const specificationCategory = inferSpecificSubcategory(specificationText);
+  const specificationCategory = normalizeSubcategoryName('', specificationText);
   if (specificationCategory) return specificationCategory;
 
   return normalizeSubcategoryName(modelCategory, productTitle);
 }
 
 function getFixedSubcategoryId(categoryName: string): number {
-  const safeName = normalizeSubcategoryName(categoryName);
-  const row = db.prepare('SELECT id FROM categories WHERE name = ? AND parent_id IS NOT NULL').get(safeName) as { id: number } | undefined;
-  if (!row) {
-    throw new Error(`Фиксированная подкатегория не найдена в базе: ${safeName}`);
-  }
+  const safePath = normalizeSubcategoryName(categoryName);
+  const row = db.prepare('SELECT id FROM categories WHERE name = ? AND parent_id IS NOT NULL').get(safePath) as { id: number } | undefined;
+  if (!row) throw new Error(`Категория Somon не найдена в базе: ${safePath || categoryName}`);
   return row.id;
+}
+
+function getSomonRubricId(categoryId: number | null): number | null {
+  if (!Number.isSafeInteger(categoryId)) return null;
+  const row = db.prepare(`
+    SELECT c.name, parent.name AS parent_name
+    FROM categories c
+    LEFT JOIN categories parent ON parent.id = c.parent_id
+    WHERE c.id = ? AND c.parent_id IS NOT NULL
+  `).get(categoryId) as { name: string; parent_name: string | null } | undefined;
+  if (!row || !row.parent_name) return null;
+  // Category rows keep the full official Somon path in `name`; older rows may
+  // contain only the leaf name, so support both representations.
+  const path = row.name.includes(' / ') ? row.name : `${row.parent_name} / ${row.name}`;
+  return somonCategoryByPath.get(path)?.rubric_id ?? null;
 }
 
 db.exec('BEGIN IMMEDIATE;');
@@ -969,19 +1112,14 @@ try {
     INSERT INTO categories (name, parent_id) VALUES (?, ?)
     ON CONFLICT(name) DO UPDATE SET parent_id = excluded.parent_id
   `);
-  for (const root of FIXED_CATEGORY_TREE) {
-    upsertCategory.run(root.name, null);
-    const rootRow = db.prepare('SELECT id FROM categories WHERE name = ?').get(root.name) as { id: number };
-    for (const subcategory of root.subcategories) {
-      upsertCategory.run(subcategory, rootRow.id);
-    }
-  }
-
   const allowedCategoryNames = new Set<string>();
   for (const root of FIXED_CATEGORY_TREE) {
     allowedCategoryNames.add(root.name);
+    upsertCategory.run(root.name, null);
+    const rootRow = db.prepare('SELECT id FROM categories WHERE name = ?').get(root.name) as { id: number };
     for (const subcategory of root.subcategories) {
       allowedCategoryNames.add(subcategory);
+      upsertCategory.run(subcategory, rootRow.id);
     }
   }
 
@@ -993,18 +1131,17 @@ try {
   `).all() as Array<{ id: number; title: string; category_name: string | null; parent_name: string | null }>;
   const updateProductCategory = db.prepare('UPDATE products SET category_id = ? WHERE id = ?');
   for (const product of existingProducts) {
-    if (product.category_name && STRICT_ALLOWED_CATEGORIES.includes(product.category_name)) continue;
-    const legacyCategoryContext = `${product.category_name || ''} ${product.parent_name || ''} ${product.title || ''}`;
-    const destination = determineSubcategoryRuleBased(legacyCategoryContext);
+    const context = `${product.category_name || ''} ${product.parent_name || ''} ${product.title || ''}`;
+    const destination = normalizeSubcategoryName('', context);
+    if (!destination || !allowedCategoryNames.has(destination)) {
+      updateProductCategory.run(null, product.id);
+      continue;
+    }
     updateProductCategory.run(getFixedSubcategoryId(destination), product.id);
   }
 
   const fixedNames = Array.from(allowedCategoryNames);
-  let placeholders = '';
-  for (const name of fixedNames) {
-    if (placeholders) placeholders += ', ';
-    placeholders += '?';
-  }
+  const placeholders = fixedNames.map(() => '?').join(', ');
   db.prepare(`DELETE FROM categories WHERE name NOT IN (${placeholders})`).run(...fixedNames);
   db.exec('COMMIT;');
 } catch (error) {
@@ -1012,28 +1149,7 @@ try {
   throw error;
 }
 
-// Очистка существующих товаров от запрещенных слов и фраз о контроле производства
-try {
-  const existingProds = db.prepare("SELECT p.id, p.title, p.description, p.delivery_type, p.specifications, c.name AS category_name FROM products p LEFT JOIN categories c ON c.id = p.category_id WHERE COALESCE(p.status, '') != 'deleted'").all() as Array<{ id: number; title: string; description: string; delivery_type: string | null; specifications: string | null; category_name: string | null }>;
-  const updateProd = db.prepare('UPDATE products SET title = ?, description = ? WHERE id = ?');
-  for (const p of existingProds) {
-    const cleanT = cleanBannedWordsAndPhrases(p.title || '');
-    const description = cleanBannedWordsAndPhrases(p.description || '');
-    const parsedSpecs = parseSpecifications(p.specifications);
-    const cleanD = buildBilingualProductDescription(
-      description,
-      cleanT,
-      parsedSpecs,
-      p.delivery_type === 'stock' ? 'stock' : 'order',
-      p.category_name || '',
-    );
-    if (cleanT !== p.title || cleanD !== p.description) {
-      updateProd.run(cleanT, cleanD, p.id);
-    }
-  }
-} catch (e) {
-  console.warn('[DB Sanitizer]', e);
-}
+// Existing product fields are preserved during category migration.
 
 // Настройки по умолчанию
 function getSetting(key: string, defaultValue: string): string {
@@ -1196,17 +1312,17 @@ function queueInstagramProduct(productId: number, force = false): void {
     VALUES (?, 'queued', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, (SELECT COALESCE(MAX(queue_order), 0) + 1 FROM instagram_publications))
     ON CONFLICT(product_id) DO UPDATE SET
       status = CASE
-        WHEN instagram_publications.status = 'published' THEN 'published'
+        WHEN instagram_publications.status IN ('published', 'publishing') THEN instagram_publications.status
         WHEN ? = 1 OR instagram_publications.status = 'failed' THEN 'queued'
         ELSE instagram_publications.status
       END,
       error = CASE
-        WHEN instagram_publications.status = 'published' THEN instagram_publications.error
+        WHEN instagram_publications.status IN ('published', 'publishing') THEN instagram_publications.error
         WHEN ? = 1 OR instagram_publications.status = 'failed' THEN NULL
         ELSE instagram_publications.error
       END,
       attempts = CASE
-        WHEN instagram_publications.status = 'published' THEN instagram_publications.attempts
+        WHEN instagram_publications.status IN ('published', 'publishing') THEN instagram_publications.attempts
         WHEN ? = 1 OR instagram_publications.status = 'failed' THEN 0
         ELSE instagram_publications.attempts
       END,
@@ -1343,43 +1459,26 @@ async function publishInstagramProduct(productId: number): Promise<void> {
 
 async function processInstagramQueue(): Promise<void> {
   const now = Date.now();
-  if (instagramWorkerRunning || now < instagramWorkerBlockedUntil || now < instagramWorkerNextRunAt || !getSetting('instagram_auto_publish', '0').trim() || !getSetting('instagram_user_id', '').trim()) return;
+  if (instagramWorkerRunning || now < instagramWorkerBlockedUntil || now < instagramWorkerNextRunAt ||
+      getSetting('instagram_auto_publish', '0').trim() !== '1' || !getSetting('instagram_user_id', '').trim()) return;
   instagramWorkerRunning = true;
   try {
-    const jobs = db.prepare(`
-      SELECT product_id, attempts
-      FROM instagram_publications
-      WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes')))
-        AND attempts < 5
-      ORDER BY COALESCE(queue_order, rowid) ASC, product_id ASC
-      LIMIT 1
-    `).all() as Array<{ product_id: number; attempts: number }>;
-    for (const job of jobs) {
-      const claim = db.prepare(`
-        UPDATE instagram_publications
-        SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
-        WHERE product_id = ? AND status IN ('queued', 'failed')
-      `).run(job.product_id);
-      if (claim.changes !== 1) continue;
-      try {
-        await publishInstagramProduct(job.product_id);
-        instagramWorkerNextRunAt = Date.now() + instagramPublishIntervalMs;
-      } catch (error) {
-        const uncertain = error instanceof InstagramPublicationUncertainError;
-        const message = error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram';
-        if (uncertain) {
-          db.prepare("UPDATE instagram_publications SET error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND status = 'publishing'").run(message, job.product_id);
-        } else {
-          db.prepare("UPDATE instagram_publications SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND status = 'publishing'").run(message, job.product_id);
-        }
-        instagramWorkerNextRunAt = Date.now() + instagramPublishIntervalMs;
-        if (/код 4|code 4|rate limit|request limit/i.test(message)) {
-          instagramWorkerBlockedUntil = Date.now() + instagramRateLimitCooldownMs;
-        } else if (/HTTP (401|403).*?(token|session|OAuth|permission)|session has expired|access token|OAuthException|(?:код|code)\s+190/i.test(message)) {
-          instagramWorkerBlockedUntil = Date.now() + 30 * 60 * 1000;
-        }
-      }
+    const job = db.prepare(`
+      SELECT product_id FROM instagram_publications
+      WHERE status = 'queued' AND attempts < 5
+      ORDER BY COALESCE(queue_order, rowid), product_id LIMIT 1
+    `).get() as { product_id: number } | undefined;
+    if (!job) return;
+    const claim = db.prepare(`UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND status = 'queued'`).run(job.product_id);
+    if (claim.changes !== 1) return;
+    try {
+      await publishInstagramProduct(job.product_id);
+    } catch (error) {
+      const uncertain = error instanceof InstagramPublicationUncertainError;
+      db.prepare(`UPDATE instagram_publications SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE product_id = ? AND status = 'publishing'`)
+        .run(uncertain ? 'publishing' : 'failed', error instanceof Error ? error.message.slice(0, 1000) : 'Неизвестная ошибка Instagram', job.product_id);
     }
+    instagramWorkerNextRunAt = Date.now() + instagramPublishIntervalMs;
   } finally {
     instagramWorkerRunning = false;
   }
@@ -1399,23 +1498,16 @@ app.get('/api/admin/instagram', requireAdmin, (_req, res) => {
   });
 });
 
-app.post('/api/admin/instagram/settings', requireAdmin, async (req, res) => {
+app.post('/api/admin/instagram/settings', requireAdmin, (req, res) => {
   const userId = String(req.body?.user_id || '').trim();
   const token = String(req.body?.access_token || '').trim();
   const autoPublish = req.body?.auto_publish === true;
-  if (!/^\d{5,30}$/.test(userId)) return res.status(400).json({ error: 'Укажите корректный Instagram professional account ID.' });
-  if (token && token.length > 4096) return res.status(400).json({ error: 'Instagram access token слишком длинный.' });
-  if (!token && !getSetting('instagram_access_token_encrypted', '')) return res.status(400).json({ error: 'Вставьте Instagram access token.' });
+  if (userId && !/^\d{3,30}$/.test(userId)) return res.status(400).json({ error: 'Укажите корректный Instagram professional account ID.' });
   try {
-    if (token) {
-      setSetting('instagram_access_token_encrypted', encryptInstagramToken(token));
-      instagramWorkerBlockedUntil = 0;
-      db.prepare("UPDATE instagram_publications SET status = 'queued', error = NULL, attempts = 0, updated_at = CURRENT_TIMESTAMP WHERE (status = 'failed' AND (error LIKE '%access token%' OR error LIKE '%session%' OR error LIKE '%OAuth%' OR error LIKE '%code 190%' OR error LIKE '%код 190%')) OR (status = 'queued' AND attempts >= 5)").run();
-    }
     setSetting('instagram_user_id', userId);
-    setSetting('instagram_auto_publish', autoPublish ? '1' : '0');
-    if (token && autoPublish) void processInstagramQueue();
-    return res.json({ success: true, configured: true, auto_publish: autoPublish });
+    if (token) setSetting('instagram_access_token_encrypted', encryptInstagramToken(token));
+    setSetting('instagram_auto_publish', autoPublish && userId && (token || getSetting('instagram_access_token_encrypted', '')) ? '1' : '0');
+    return res.json({ success: true, auto_publish: getSetting('instagram_auto_publish', '0') === '1', user_id: userId });
   } catch (error) {
     return res.status(503).json({ error: error instanceof Error ? error.message : 'Не удалось сохранить Instagram настройки.' });
   }
@@ -1424,9 +1516,9 @@ app.post('/api/admin/instagram/settings', requireAdmin, async (req, res) => {
 app.post('/api/admin/instagram/test', requireAdmin, async (_req, res) => {
   try {
     const userId = getSetting('instagram_user_id', '').trim();
-    if (!/^\d{5,30}$/.test(userId)) throw new Error('Сначала укажите Instagram professional account ID.');
-    const body = await instagramRequest(`/${encodeURIComponent(userId)}`, 'GET', { fields: 'id', access_token: readInstagramToken() });
-    return res.json({ success: true, id: body.id });
+    if (!userId) throw new Error('Не указан Instagram professional account ID.');
+    const result = await instagramRequest(`/${encodeURIComponent(userId)}`, 'GET', { fields: 'id,username', access_token: readInstagramToken() });
+    return res.json({ success: true, id: result.id, username: result.username });
   } catch (error) {
     return res.status(503).json({ error: error instanceof Error ? error.message : 'Instagram недоступен.' });
   }
@@ -1434,11 +1526,12 @@ app.post('/api/admin/instagram/test', requireAdmin, async (_req, res) => {
 
 app.post('/api/admin/instagram/queue/:id', requireAdmin, (req, res) => {
   const productId = Number(req.params.id);
-  const product = db.prepare("SELECT id FROM products WHERE id = ? AND status = 'active'").get(productId) as { id: number } | undefined;
-  if (!product) return res.status(404).json({ error: 'Активный товар не найден.' });
-  queueInstagramProduct(productId, true);
+  if (!Number.isSafeInteger(productId) || productId <= 0) return res.status(400).json({ error: 'Некорректный идентификатор товара.' });
+  const product = db.prepare("SELECT status FROM products WHERE id = ? AND COALESCE(status, '') != 'deleted'").get(productId) as { status: string } | undefined;
+  if (!product) return res.status(404).json({ error: 'Товар не найден.' });
+  queueInstagramProduct(productId, req.body?.force === true);
   void processInstagramQueue();
-  return res.json({ success: true, product_id: productId });
+  return res.json({ success: true });
 });
 
 setInterval(() => { void processInstagramQueue(); }, 30000);
@@ -2050,6 +2143,12 @@ function resolveCategoryId(categoryName: string): number {
 }
 
 function findExplicitCategory(value: unknown): { id: number; name: string } | null {
+  const rubricId = Number(value);
+  const official = somonCategoryById.get(rubricId);
+  if (official) {
+    const mapped = db.prepare('SELECT id, name FROM categories WHERE name = ? AND parent_id IS NOT NULL').get(official.path) as { id: number; name: string } | undefined;
+    if (mapped) return mapped;
+  }
   const id = Number(value);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
   return db.prepare(`
@@ -4690,7 +4789,7 @@ app.put('/api/admin/products/:id', requireAdmin, async (req, res) => {
       }
     }
     db.exec('COMMIT;');
-    if (cleanStatus === 'active' && getSetting('instagram_auto_publish', '0') === '1') {
+    if (existingStatus?.status === 'draft' && cleanStatus === 'active' && getSetting('instagram_auto_publish', '0') === '1') {
       queueInstagramProduct(id);
       void processInstagramQueue();
     }
@@ -4931,6 +5030,8 @@ app.post('/api/add-product', (req, res, next) => {
     }
     const fullRawText = raw_html_text.trim() || raw_text.trim().slice(0, MAX_IMPORT_TEXT_LENGTH);
     const structuredMedia = extractStructuredFromHtmlOrJson(fullRawText);
+    let sourceCategoryPath = '';
+    let sourceRubricId: number | null = null;
     if (structured_data && typeof structured_data === 'object' && !Array.isArray(structured_data)) {
       const structuredTitleCandidates = [
         structured_data.title,
@@ -4940,6 +5041,22 @@ app.post('/api/add-product', (req, res, next) => {
       if (productTitle) structuredMedia.title = productTitle.trim().slice(0, 500);
       if (typeof structured_data.category_hint === 'string') {
         structuredMedia.categoryHint = structured_data.category_hint.trim().slice(0, 500);
+      }
+      if (typeof structured_data.category_path === 'string') sourceCategoryPath = structured_data.category_path.trim().slice(0, 500);
+      if (typeof structured_data.rubric_id === 'number' && Number.isSafeInteger(structured_data.rubric_id)) sourceRubricId = structured_data.rubric_id;
+      if (sourceCategoryPath || sourceRubricId !== null) {
+        const byPath = sourceCategoryPath ? somonCategoryByPath.get(sourceCategoryPath) : undefined;
+        const byId = sourceRubricId !== null ? somonCategoryById.get(sourceRubricId) : undefined;
+        const resolvedSourceCategory = byPath || byId;
+        if (
+          (sourceCategoryPath && (!byPath || !STRICT_ALLOWED_CATEGORIES.includes(byPath.path)))
+          || (sourceRubricId !== null && (!byId || !STRICT_ALLOWED_CATEGORIES.includes(byId.path)))
+          || (byPath && byId && byPath.rubric_id !== byId.rubric_id)
+        ) {
+          return res.status(400).json({ status: 'error', message: 'Источник передал неизвестную или противоречивую официальную категорию.' });
+        }
+        sourceCategoryPath = resolvedSourceCategory?.path || '';
+        sourceRubricId = resolvedSourceCategory?.rubric_id || null;
       }
       if (typeof structured_data.brand === 'string') structuredMedia.brand = structured_data.brand.trim().slice(0, 100);
       if (typeof structured_data.manufacturer === 'string') structuredMedia.manufacturer = structured_data.manufacturer.trim().slice(0, 150);
@@ -5030,7 +5147,7 @@ app.post('/api/add-product', (req, res, next) => {
 
     let finalTitle = effectiveTitle;
     let finalDesc = inputDesc;
-    let finalCategory = 'Мужские футболки, майки и поло';
+    let finalCategory = '';
     let aiCategoryTrusted = false;
     let analysisSource = 'local';
     let finalWeight = initialWeight;
@@ -5144,7 +5261,7 @@ app.post('/api/add-product', (req, res, next) => {
     finalDesc = cleanProductDescription(cleanBannedWordsAndPhrases(finalDesc));
 
     // Привязываем категорию
-    finalCategory = resolveImportSubcategory(finalCategory, finalTitle, structuredMedia, aiCategoryTrusted);
+    finalCategory = sourceCategoryPath || resolveImportSubcategory(finalCategory, finalTitle, structuredMedia, aiCategoryTrusted);
     if (requestedCategoryName && (typeof requestedCategoryName !== 'string' || !STRICT_ALLOWED_CATEGORIES.includes(requestedCategoryName))) {
       return res.status(400).json({ error: 'Укажите точное название существующей подкатегории.' });
     }
@@ -5272,13 +5389,31 @@ app.post('/api/add-product', (req, res, next) => {
           if (!current || current.status !== 'draft' || current.title !== originalTitle || current.description !== originalDescription) {
             throw new Error('Товар был изменён до обработки. Проверьте его в админке.');
           }
-          const suggestedCategory = await requestTokenPlanSuggestion(readTokenPlanKey(), 'category', {
-            title: originalTitle, description: originalDescription.slice(0, 4000), specifications: [],
-          }, STRICT_ALLOWED_CATEGORIES);
+          let officialCategory = sourceCategoryPath ? somonCategoryByPath.get(sourceCategoryPath) : undefined;
+          if (!officialCategory) {
+            const classifierResult = await runPythonCategoryClassifier({
+              title: originalTitle,
+              description: originalDescription.slice(0, 4000),
+              category_hint: structuredMedia.categoryHint,
+              specifications: specificationsToProcess.slice(0, 100),
+            });
+            if (classifierResult.status !== 'classified' || !classifierResult.path || !Number.isSafeInteger(classifierResult.rubric_id)) {
+              throw new Error(`Python classifier: ${classifierResult.reason || classifierResult.status}`);
+            }
+            const classifierRubricId = classifierResult.rubric_id;
+            if (typeof classifierRubricId !== 'number' || !Number.isSafeInteger(classifierRubricId)) {
+              throw new Error('Python classifier returned an invalid rubric ID.');
+            }
+            officialCategory = somonCategoryById.get(classifierRubricId);
+            if (!officialCategory || officialCategory.path !== classifierResult.path) {
+              throw new Error('Python classifier returned an inconsistent official category.');
+            }
+          }
+          if (!officialCategory) throw new Error('Official category was not resolved.');
           const categoryUpdate = db.prepare(`
             UPDATE products SET category_id = ?
             WHERE id = ? AND status = 'draft' AND title = ? AND description = ? AND category_id = ?
-          `).run(resolveCategoryId(suggestedCategory), productId, originalTitle, originalDescription, categoryId);
+          `).run(getFixedSubcategoryId(officialCategory.path), productId, originalTitle, originalDescription, categoryId);
           if (Number(categoryUpdate.changes) !== 1) throw new Error('Товар был изменён во время подбора категории.');
           setJob('completed', 'Категория подобрана ИИ. Проверьте товар перед публикацией.');
         } catch (error) {
@@ -5625,6 +5760,10 @@ app.get('/api/categories', (_req, res) => {
     const rootCats = (db.prepare('SELECT id, name FROM categories WHERE parent_id IS NULL').all() as Array<{ id: number; name: string }>)
       .sort((a, b) => (rootOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER) - (rootOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER));
     const getSubs = db.prepare('SELECT id, name FROM categories WHERE parent_id = ? ORDER BY name ASC');
+    const exposeCategory = (category: { id: number; name: string; parent_id?: number | null; product_count?: number; subcategories?: unknown[] }) => ({
+      ...category,
+      rubric_id: somonCategoryByPath.get(category.name)?.rubric_id ?? null,
+    });
     const productCounts = new Map(
       (db.prepare(`
         SELECT category_id, COUNT(*) AS product_count
@@ -5637,23 +5776,23 @@ app.get('/api/categories', (_req, res) => {
 
     const tree: any[] = [];
     for (const root of rootCats) {
-      const subcategories = (getSubs.all(root.id) as Array<{ id: number; name: string }>).map((category) => ({
+      const subcategories = (getSubs.all(root.id) as Array<{ id: number; name: string }>).map((category) => exposeCategory({
         ...category,
         product_count: productCounts.get(category.id) || 0,
       }));
-      tree.push({
+      tree.push(exposeCategory({
         ...root,
         product_count: (productCounts.get(root.id) || 0)
-          + subcategories.reduce((count, category) => count + category.product_count, 0),
+          + subcategories.reduce((count, category) => count + (category.product_count || 0), 0),
         subcategories,
-      });
+      }));
     }
 
     const all = (db.prepare('SELECT id, name, parent_id FROM categories ORDER BY name ASC').all() as Array<{
       id: number;
       name: string;
       parent_id: number | null;
-    }>).map((category) => ({
+    }>).map((category) => exposeCategory({
       ...category,
       product_count: productCounts.get(category.id) || 0,
     }));
@@ -5927,8 +6066,10 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
         }
         const entry = config as { rubric_id?: unknown; attributes_json?: unknown };
         const rubricId = String(entry.rubric_id ?? '').trim();
-        if (rubricId && (!/^\d+$/.test(rubricId) || !Number.isSafeInteger(Number(rubricId)) || Number(rubricId) <= 0)) {
-          return res.status(400).json({ error: 'ID рубрик Somon должны быть числами' });
+        const linkedCategory = db.prepare('SELECT name FROM categories WHERE id = ? AND parent_id IS NOT NULL').get(Number(categoryKey)) as { name: string } | undefined;
+        const linkedRubric = linkedCategory ? somonCategoryByPath.get(linkedCategory.name)?.rubric_id : undefined;
+        if (rubricId && (!/^\d+$/.test(rubricId) || !Number.isSafeInteger(Number(rubricId)) || Number(rubricId) <= 0 || (linkedRubric === undefined || Number(rubricId) !== linkedRubric))) {
+          return res.status(400).json({ error: 'Укажите официальный ID рубрики Somon из справочника' });
         }
         let attributes: unknown = {};
         try {
@@ -6664,6 +6805,37 @@ app.get('/business-xml-guide/', (_req, res) => {
   return res.sendFile(path.join(__dirname, 'docs', 'somon', 'business-xml-guide.html'));
 });
 
+app.get('/api/admin/somon/category-report', requireAdmin, (_req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT p.id, p.title, p.category_id, c.name AS category_name, parent.name AS parent_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN categories parent ON parent.id = c.parent_id
+      WHERE p.status = 'active'
+      ORDER BY p.id ASC
+    `).all() as Array<{ id: number; title: string; category_id: number | null; category_name: string | null; parent_name: string | null }>;
+    const products = rows.map((product) => {
+      const path = product.category_name && product.category_name.includes(' / ')
+        ? product.category_name
+        : product.category_name && product.parent_name ? `${product.parent_name} / ${product.category_name}` : null;
+      const official = path ? somonCategoryByPath.get(path) : undefined;
+      return {
+        id: product.id,
+        title: product.title,
+        category_id: product.category_id,
+        path: official?.path || null,
+        rubric_id: official?.rubric_id || null,
+        reason: official ? null : !product.category_id ? 'Не определена официальная рубрика' : 'Категория отсутствует в официальном справочнике',
+      };
+    });
+    return res.json({ total_active: products.length, assigned: products.filter((product) => product.rubric_id !== null).length, unassigned: products.filter((product) => product.rubric_id === null).length, products });
+  } catch (error) {
+    console.error('[Somon Category Report]', error);
+    return res.status(500).json({ error: 'Не удалось сформировать отчёт категорий Somon' });
+  }
+});
+
 app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
   try {
     const parsedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
@@ -6688,13 +6860,8 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
     for (const product of rows) {
       if (!product.category_id) { reasons.no_category++; continue; }
       if (!Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) { reasons.no_price++; continue; }
-      const config = storedConfig[String(product.category_id)];
-      const rubricId = String(config?.rubric_id ?? '');
-      const attributes = config?.attributes && typeof config.attributes === 'object' && !Array.isArray(config.attributes)
-        ? config.attributes as Record<string, unknown> : {};
-      // These mappings are resolved automatically by the feed itself.
-      const hasAutomaticMapping = [28, 29, 49, 52, 85].includes(Number(product.category_id));
-      if ((!/^\d+$/.test(rubricId) || !Object.keys(attributes).length) && !hasAutomaticMapping) { reasons.no_rubric++; continue; }
+      const rubricId = getSomonRubricId(product.category_id);
+      if (!rubricId) { reasons.no_rubric++; continue; }
       if (!cleanSomonTitle(product.title)) { reasons.invalid_title++; continue; }
       const allImages = getPublicProductImageUrls(product.id, product.main_image, product.images,
         product.variant_images ? product.variant_images.split(',') : [], 32);
@@ -6732,6 +6899,142 @@ const saveSomonFeedState = db.prepare(`
 
 app.get('/somon-feed.xml', (_req, res) => {
   try {
+    const parsedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
+    const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
+      ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
+      : {};
+    const cityId = '513';
+
+    const products = db.prepare(`
+      SELECT p.id, p.title, p.description, p.delivery_type, p.category_id, p.main_image, p.images,
+             p.specifications,
+             MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
+             GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images,
+             GROUP_CONCAT(DISTINCT NULLIF(v.size, '')) AS variant_sizes
+      FROM products p
+      LEFT JOIN product_variants v ON v.product_id = p.id
+      WHERE p.status = 'active'
+      GROUP BY p.id
+      ORDER BY p.id
+    `).all() as Array<{
+      id: number;
+      title: string;
+      description: string | null;
+      delivery_type: string | null;
+      category_id: number | null;
+      main_image: string | null;
+      images: string | null;
+      specifications: string | null;
+      price_tjs: number | null;
+      variant_images: string | null;
+      variant_sizes: string | null;
+    }>;
+
+    const items: string[] = [];
+    for (const product of products) {
+      if (!product.category_id || !Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) continue;
+      const specifications = parseSomonSpecifications(product.specifications);
+      const categoryConfig = storedConfig[String(product.category_id)];
+      const rubricId = String(getSomonRubricId(product.category_id) ?? '');
+      let attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
+        ? categoryConfig.attributes as Record<string, unknown>
+        : {};
+      if (!Object.keys(attributes).length) attributes = { sostoyanie: 'const:2' };
+      if (!/^\d+$/.test(rubricId) || !somonCategoryById.has(Number(rubricId)) || !Object.keys(attributes).length) continue;
+
+      const xmlAttributes: string[] = [];
+      const xmlFields: string[] = [];
+      let hasAllAttributeValues = true;
+      for (const [slug, source] of Object.entries(attributes)) {
+        if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(slug) || typeof source !== 'string') {
+          hasAllAttributeValues = false;
+          break;
+        }
+        let value = '';
+        if (source.startsWith('const:')) {
+          value = source.slice('const:'.length).trim();
+        } else if (source.startsWith('spec:')) {
+          const specName = source.slice('spec:'.length).trim();
+          const matchingEntry = Object.entries(specifications).find(([name]) =>
+            name.toLocaleLowerCase('ru') === specName.toLocaleLowerCase('ru')
+          );
+          value = matchingEntry?.[1] || '';
+        }
+        if (!value) {
+          hasAllAttributeValues = false;
+          break;
+        }
+        if (slug === 'condition') {
+          xmlFields.push(`<condition>${escapeXml(value)}</condition>`);
+        } else {
+          xmlAttributes.push(`<${slug}>${escapeXml(value)}</${slug}>`);
+        }
+      }
+      if (!hasAllAttributeValues) continue;
+
+      const title = cleanSomonTitle(product.title);
+      if (!title) continue;
+      const sourceDescription = String(product.description || product.title);
+      const description = cleanProductDescription(sourceDescription)
+        .replace(/Ключевые слова для поиска:[\\s\\S]*$/i, '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\\s+/g, ' ')
+        .trim()
+        .slice(0, 5000) || title;
+      const images = getPublicProductImageUrls(
+        product.id,
+        product.main_image,
+        product.images,
+        product.variant_images ? product.variant_images.split(',') : [],
+        32,
+      )
+        .filter(isSomonImageUrl)
+        .slice(0, 16);
+      if (!images.length) continue;
+      const imageXml = images.map((image) => `<list-item>${escapeXml(image)}</list-item>`).join('');
+      const delivery = product.delivery_type === 'stock' ? '0' : '1';
+      const itemPayload = `
+      <external_id>${product.id}</external_id>
+      <images>${imageXml}</images>
+      <status>active</status>
+      <rubric>${rubricId}</rubric>
+      <city>${cityId}</city>
+      <description>${escapeXml(description)}</description>
+      <price>${Math.max(0, Math.round(Number(product.price_tjs)))}</price>
+      <phone_hide>0</phone_hide>
+      <whatsapp>${escapeXml(String(getSetting('whatsapp_phone', '992444431')).replace(/\\D/g, ''))}</whatsapp>
+      <negotiable_price>0</negotiable_price>
+      <exchange>0</exchange>
+      <delivery>${delivery}</delivery>
+      ${xmlFields.join('')}
+      <attrs>${xmlAttributes.join('')}</attrs>
+      <geometry></geometry>
+      <title>${escapeXml(title)}</title>
+      <chosen_phone>${escapeXml(String(getSetting('whatsapp_phone', '+992038444431')).replace(/\\D/g, ''))}</chosen_phone>
+`;
+      const payloadHash = crypto.createHash('sha256').update(itemPayload).digest('hex');
+      const previous = getSomonFeedState.get(product.id) as { payload_hash: string; last_update: string } | undefined;
+      const lastUpdate = previous?.payload_hash === payloadHash
+        ? previous.last_update
+        : new Date().toISOString().replace('T', ' ').slice(0, 19);
+      saveSomonFeedState.run(product.id, payloadHash, lastUpdate);
+      items.push(`
+    <list-item>
+      <last_update>${escapeXml(lastUpdate)}</last_update>${itemPayload}    </list-item>`);
+    }
+
+    return res
+      .type('application/xml')
+      .set('Cache-Control', 'public, max-age=300')
+      .send(`<?xml version="1.0" encoding="utf-8"?><root>${items.join('')}</root>`);
+  } catch (error) {
+    console.error('[Somon Feed] Не удалось сформировать XML-ленту:', error);
+    return res.status(500).type('text/plain').send('Не удалось сформировать XML-ленту Somon');
+  }
+});
+
+/* Disabled outbound feed implementation retained below for reference during migration.
+try {
     const parsedConfig = JSON.parse(getSetting('somon_category_config', '{}'));
     const storedConfig = parsedConfig && typeof parsedConfig === 'object' && !Array.isArray(parsedConfig)
       ? parsedConfig as Record<string, { rubric_id?: unknown; attributes?: unknown }>
@@ -6901,6 +7204,7 @@ app.get('/somon-feed.xml', (_req, res) => {
     return res.status(500).type('text/plain').send('Не удалось сформировать XML-ленту Somon');
   }
 });
+*/
 
 function cleanSearchText(value: string | null): string {
   return removeOrderDeliveryNotice(String(value || ''))

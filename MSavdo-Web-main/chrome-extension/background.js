@@ -156,6 +156,12 @@ async function handleImportProduct(payload, sender) {
       category_hint: typeof sourceStructuredData.category_hint === "string"
         ? sourceStructuredData.category_hint.slice(0, 500)
         : "",
+      category_path: typeof sourceStructuredData.category_path === "string"
+        ? sourceStructuredData.category_path.slice(0, 500)
+        : "",
+      rubric_id: /^\d+$/.test(String(sourceStructuredData.rubric_id || "").trim())
+        ? Number(sourceStructuredData.rubric_id)
+        : null,
       title_candidates: (Array.isArray(sourceStructuredData.title_candidates) ? sourceStructuredData.title_candidates : [])
         .filter((title) => typeof title === "string")
         .slice(0, 5)

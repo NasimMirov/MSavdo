@@ -622,6 +622,9 @@
     ];
     const title = chooseBestTitle(titleCandidates);
     const categoryHint = cleanStructuredText(offer?.categoryName ?? firstField(["categoryName", "category_name", "category"]));
+    const categoryPath = cleanStructuredText(firstField(["categoryPath", "category_path", "rubricPath", "rubric_path"]));
+    const rawRubricId = firstField(["rubricId", "rubric_id"]);
+    const rubricId = /^\d+$/.test(String(rawRubricId || "").trim()) ? Number(rawRubricId) : null;
     const specifications = [];
     const seenSpecifications = new Set();
     for (const object of objects) {
@@ -722,6 +725,8 @@
     return {
       title,
       category_hint: categoryHint,
+      category_path: categoryPath.slice(0, 500),
+      rubric_id: Number.isSafeInteger(rubricId) && rubricId > 0 ? rubricId : null,
       title_candidates: [...new Set([title, ...titleCandidates.map(cleanStructuredText).filter(Boolean)])].slice(0, 5),
       specifications,
       brand: findSpecification(["бренд", "торговая марка", "brand", "品牌", "商标"]),

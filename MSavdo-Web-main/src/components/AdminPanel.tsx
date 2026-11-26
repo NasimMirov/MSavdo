@@ -4245,7 +4245,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     {categories.map((category) => (
                       <optgroup key={category.id} label={category.name}>
                         {(category.subcategories || []).map((subcategory) => (
-                          <option key={subcategory.id} value={subcategory.id}>{subcategory.name}</option>
+                          <option key={subcategory.id} value={subcategory.id}>{subcategory.name}{subcategory.rubric_id ? ` (ID ${subcategory.rubric_id})` : ''}</option>
                         ))}
                       </optgroup>
                     ))}
@@ -4828,7 +4828,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 {categories.map((category) => (
                   <optgroup key={category.id} label={category.name}>
                     {(category.subcategories || []).map((subcategory) => (
-                      <option key={subcategory.id} value={subcategory.id}>{subcategory.name}</option>
+                      <option key={subcategory.id} value={subcategory.id}>{subcategory.name}{subcategory.rubric_id ? ` (ID ${subcategory.rubric_id})` : ''}</option>
                     ))}
                   </optgroup>
                 ))}

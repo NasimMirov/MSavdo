@@ -1,5 +1,5 @@
 export type ProductSuggestionAction = 'title' | 'description' | 'description-proofread' | 'category';
-const API_URL = (typeof process !== 'undefined' && process.env?.TOKENPLAN_API_URL?.trim()) || 'https://tokenplan.art/v1/chat/completions';
+const API_URL = (typeof process !== 'undefined' && process.env?.TOKENPLAN_API_URL?.trim()) || 'https://tokenplan.su/v1/chat/completions';
 const MODEL = (typeof process !== 'undefined' && process.env?.TOKENPLAN_MODEL?.trim()) || 'gemini-3.8-flash';
 const tasks: Record<ProductSuggestionAction, string> = {
   title: 'Перепиши название товара по-русски кратко и точно. Сохрани модель, размер и количество. Удали рекламу. Верни только название.',

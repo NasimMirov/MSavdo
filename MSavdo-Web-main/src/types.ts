@@ -53,6 +53,7 @@ export interface Category {
   name: string;
   parent_id: number | null;
   product_count?: number;
+  rubric_id?: number | null;
   subcategories?: Category[];
 }
 

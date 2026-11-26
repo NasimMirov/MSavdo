@@ -9,7 +9,7 @@ test('TokenPlan suggestions use the configured endpoint and validate each output
   const replies = ['"Фонарь для кемпинга"', 'Описание товара с подтверждёнными характеристиками.', 'Туризм'];
   const prompts: string[] = [];
   const fetcher: typeof fetch = async (input, init) => {
-    assert.equal(input, 'https://tokenplan.art/v1/chat/completions');
+    assert.equal(input, 'https://tokenplan.su/v1/chat/completions');
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer test-key');
     assert.equal(init?.redirect, 'error');
     assert.equal(JSON.stringify(init?.body).includes('test-key'), false);
@@ -19,8 +19,8 @@ test('TokenPlan suggestions use the configured endpoint and validate each output
   assert.equal(await requestTokenPlanSuggestion('test-key', 'title', product, categories, fetcher), 'Фонарь для кемпинга');
   assert.equal(await requestTokenPlanSuggestion('test-key', 'description', product, categories, fetcher), 'Описание товара с подтверждёнными характеристиками.');
   assert.equal(await requestTokenPlanSuggestion('test-key', 'category', product, categories, fetcher), 'Туризм');
-  assert.match(prompts[0], /Полностью переведи название с китайского/);
-  assert.match(prompts[1], /существенные подтверждённые характеристики/);
+  assert.match(prompts[0], /Перепиши название товара по-русски кратко и точно/);
+  assert.match(prompts[1], /только по подтверждённым данным/);
   await assert.rejects(requestTokenPlanSuggestion('test-key', 'category', product, categories,
     async () => Response.json({ choices: [{ message: { content: 'Неизвестно' } }] })), /вне каталога/);
 });
