@@ -1305,7 +1305,7 @@ async function processInstagramQueue(): Promise<void> {
   instagramWorkerRunning = true;
   try {
     db.prepare("UPDATE instagram_publications SET status = 'queued', error = 'Восстановлено после перезапуска очереди.', attempts = 0 WHERE status = 'publishing' AND updated_at < datetime('now', '-10 minutes')").run();
-    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes'))) AND attempts < 5 ORDER BY updated_at ASC LIMIT 1`).all() as Array<{ product_id: number; attempts: number }>;
+    const jobs = db.prepare(`SELECT product_id, attempts FROM instagram_publications WHERE (status = 'queued' OR (status = 'failed' AND updated_at <= datetime('now', '-10 minutes'))) AND attempts < 5 ORDER BY updated_at DESC LIMIT 1`).all() as Array<{ product_id: number; attempts: number }>;
     for (const job of jobs) {
       db.prepare("UPDATE instagram_publications SET status = 'publishing', attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?").run(job.product_id);
       try {
