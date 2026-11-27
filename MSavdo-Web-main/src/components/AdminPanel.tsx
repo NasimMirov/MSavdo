@@ -344,12 +344,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [siteContentHistory, setSiteContentHistory] = useState<any[]>([]);
   const [contentSaving, setContentSaving] = useState(false);
   const [contentMessage, setContentMessage] = useState('');
-  const somonPresets = [
-    { id: '182', label: 'Универсально: другие товары для дома (ID 182)', attributes: '{"sostoyanie":"const:2"}' },
-    { id: '165', label: 'Электроника и аксессуары (ID 165)', attributes: '{"sostoyanie":"const:2"}' },
-  ];
-  const [somonQuickPreset, setSomonQuickPreset] = useState('182');
-  const [somonQuickRubric, setSomonQuickRubric] = useState('182');
   const [somonQuickAttributes, setSomonQuickAttributes] = useState('{"sostoyanie":"const:2"}');
   const [somonFeedStatus, setSomonFeedStatus] = useState('');
   const [tokenPlanKey, setTokenPlanKey] = useState('');
@@ -965,24 +959,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const applySomonQuickConfig = async () => {
-    const rubricId = somonQuickRubric.trim();
-    if (!/^\d+$/.test(rubricId) || Number(rubricId) <= 0) {
-      setSomonFeedStatus('Укажите корректный ID рубрики Somon.');
-      return;
-    }
     let parsedAttributes: unknown;
     try { parsedAttributes = JSON.parse(somonQuickAttributes); } catch { setSomonFeedStatus('Атрибуты должны быть корректным JSON.'); return; }
     if (!parsedAttributes || typeof parsedAttributes !== 'object' || Array.isArray(parsedAttributes)) {
       setSomonFeedStatus('Атрибуты должны быть JSON-объектом.');
       return;
     }
-    const categoryEntries = categories.flatMap((category) => [
-      category,
-      ...(category.subcategories || []),
-    ]);
-    const nextConfig = { ...settings.somon_category_config };
+    const categoryEntries = categories.flatMap((category) => {
+      const flatten = (item: typeof category): typeof category[] => [item, ...(item.subcategories || []).flatMap(flatten)];
+      return flatten(category);
+    }).filter((category) => category.parent_id !== null && category.rubric_id);
+    const nextConfig: Record<string, { rubric_id: string; attributes_json: string }> = {};
     categoryEntries.forEach((category) => {
-      nextConfig[String(category.id)] = { rubric_id: rubricId, attributes_json: JSON.stringify(parsedAttributes) };
+      nextConfig[String(category.id)] = { rubric_id: String(category.rubric_id), attributes_json: JSON.stringify(parsedAttributes) };
     });
     const nextSettings = { ...settings, somon_category_config: nextConfig };
     setSettings(nextSettings);
@@ -995,14 +984,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     } catch (error) {
       setSomonFeedStatus(error instanceof Error ? error.message : 'Не удалось сохранить настройки Somon.');
     }
-  };
-
-  const chooseSomonPreset = (value: string) => {
-    const preset = somonPresets.find((item) => item.id === value);
-    if (!preset) return;
-    setSomonQuickPreset(value);
-    setSomonQuickRubric(preset.id);
-    setSomonQuickAttributes(preset.attributes);
   };
 
   const checkSomonFeed = async () => {
@@ -3361,46 +3342,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
                 <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 p-3 space-y-2">
                   <div className="font-bold text-emerald-900">Быстрая публикация всех товаров</div>
-                  <p className="text-[10px] leading-relaxed text-emerald-900/80">Выберите готовый вариант и нажмите кнопку. Настройка применится ко всем категориям магазина.</p>
+                  <p className="text-[10px] leading-relaxed text-emerald-900/80">ID конечных категорий подставляются автоматически из официального справочника Somon. Кнопка синхронизирует официальный mapping и атрибуты.</p>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-[160px_1fr]">
-                    <select value={somonQuickPreset} onChange={(e) => chooseSomonPreset(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs sm:col-span-2">
-                      {somonPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
-                    </select>
+                    <p className="text-xs text-emerald-900 sm:col-span-2">Официальный rubric ID каждой категории берётся автоматически из справочника Somon. Здесь задаются только общие атрибуты XML.</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={() => void applySomonQuickConfig()} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white">Применить ко всем категориям</button>
+                    <button type="button" onClick={() => void applySomonQuickConfig()} className="rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white">Заполнить официальные ID Somon</button>
                     <button type="button" onClick={() => void checkSomonFeed()} className="rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-800">Проверить XML-ленту</button>
                   </div>
                   {somonFeedStatus && <p role="status" className="text-[11px] font-semibold text-emerald-900">{somonFeedStatus}</p>}
                 </div>
                 <div className="space-y-2">
-                  {categories.flatMap((category) => [
-                    { id: category.id, name: category.name },
-                    ...(category.subcategories || []).map((subcategory) => ({
-                      id: subcategory.id,
-                      name: `${category.name} / ${subcategory.name}`,
-                    })),
-                  ]).map((category) => (
+                  {categories.flatMap((category) => {
+                    const flatten = (item: Category): Category[] => [item, ...(item.subcategories || []).flatMap(flatten)];
+                    return flatten(category);
+                  }).filter((category) => category.parent_id !== null && category.rubric_id).map((category) => (
                     <div key={category.id} className="rounded-xl border border-sky-100 bg-white p-3 space-y-2">
                       <label className="grid grid-cols-1 items-center gap-1 sm:grid-cols-[1fr_150px] sm:gap-3">
-                        <span className="text-[10px] text-slate-700">{category.name}</span>
-                        <input
-                          type="number"
-                          min="1"
-                          value={settings.somon_category_config[String(category.id)]?.rubric_id || ''}
-                          onChange={(e) => setSettings({
-                            ...settings,
-                            somon_category_config: {
-                              ...settings.somon_category_config,
-                              [String(category.id)]: {
-                                rubric_id: e.target.value,
-                                attributes_json: settings.somon_category_config[String(category.id)]?.attributes_json || '{}',
-                              },
-                            },
-                          })}
-                          placeholder="ID рубрики"
-                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
-                        />
+                        <span className="text-[10px] text-slate-700">{category.path || category.name}</span>
+                        <input type="text" readOnly value={`ID ${category.rubric_id}`} className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs font-mono font-bold" />
                       </label>
                       <textarea
                         rows={2}
@@ -3410,7 +3370,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           somon_category_config: {
                             ...settings.somon_category_config,
                             [String(category.id)]: {
-                              rubric_id: settings.somon_category_config[String(category.id)]?.rubric_id || '',
+                              rubric_id: String(category.rubric_id),
                               attributes_json: e.target.value,
                             },
                           },

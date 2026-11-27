@@ -55,6 +55,8 @@ export interface Category {
   product_count?: number;
   rubric_id?: number | null;
   subcategories?: Category[];
+  /** Official Somon path for this category node. */
+  path?: string;
 }
 
 export interface CartItem {

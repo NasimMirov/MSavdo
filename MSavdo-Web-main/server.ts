@@ -776,10 +776,11 @@ const somonCategoryByPath = new Map(SOMON_CATEGORIES.map((category) => [category
 const somonCategoryById = new Map(SOMON_CATEGORIES.map((category) => [category.rubric_id, category]));
 const somonLeafCategories = SOMON_CATEGORIES.filter((category) => !SOMON_CATEGORIES.some((other) => other.path.startsWith(`${category.path} / `)));
 const STRICT_ALLOWED_CATEGORIES = somonLeafCategories.map((category) => category.path);
-const FIXED_CATEGORY_TREE = [...new Set(somonLeafCategories.map((category) => category.path.split(' / ')[0]))].map((name) => ({
-  name,
-  subcategories: somonLeafCategories.filter((category) => category.path.startsWith(`${name} / `)).map((category) => category.path),
-}));
+const somonCategoryPaths = [...new Set(SOMON_CATEGORIES.flatMap(({ path: categoryPath }) => {
+  const parts = categoryPath.split(' / ');
+  return parts.map((_, index) => parts.slice(0, index + 1).join(' / '));
+}))];
+const OFFICIAL_ROOT_NAMES = [...new Set(somonCategoryPaths.map((categoryPath) => categoryPath.split(' / ')[0]))];
 
 type PythonCategoryResult = {
   status: 'classified' | 'ambiguous' | 'unclassified' | 'forbidden' | 'error';
@@ -969,7 +970,7 @@ function determineSubcategoryRuleBased(productText: string): string {
   return '';
 }
 
-const LEGACY_CATEGORY_TO_SOMON: Record<string, string> = {
+const UNUSED_LEGACY_CATEGORY_TO_SOMON: Record<string, string> = {
   'мужские футболки, майки и поло': 'Одежда и личные вещи / Мужская одежда / Футболки',
   'мужские рубашки и сорочки': 'Одежда и личные вещи / Мужская одежда / Рубашки',
   'мужские худи, толстовки и свитеры': 'Одежда и личные вещи / Мужская одежда / Кофты',
@@ -1022,8 +1023,8 @@ const LEGACY_CATEGORY_TO_SOMON: Record<string, string> = {
 function normalizeSubcategoryName(categoryName: string, productText: string = ''): string {
   const exact = somonCategoryName(categoryName, productText);
   if (exact) return exact;
-  const legacy = LEGACY_CATEGORY_TO_SOMON[String(categoryName || '').trim().toLocaleLowerCase('ru')];
-  if (legacy !== undefined) return legacy;
+  // Legacy category names are not accepted as a source of truth. Only official leaf paths may pass through.
+  if (String(categoryName || '').trim() && !somonCategoryByPath.has(String(categoryName || '').trim())) return '';
   const text = `${categoryName} ${productText}`.toLocaleLowerCase('ru');
   if (/(смартфон|iphone|айфон|мобильн.{0,8}телефон|сотов.{0,8}телефон|легков.{0,8}автомоб|пассажирск.{0,8}автомоб|автотранспорт)/i.test(text)) return '';
   const rules: Array<[RegExp, string]> = [
@@ -1038,7 +1039,7 @@ function normalizeSubcategoryName(categoryName: string, productText: string = ''
     [/электросамокат|гироскутер/i, 'Транспорт / Другой транспорт / Гироскутеры и электросамокаты'],
   ];
   const legacyCategory = rules.find(([pattern]) => pattern.test(text))?.[1] || '';
-  return LEGACY_CATEGORY_TO_SOMON[legacyCategory.toLocaleLowerCase('ru')] || somonCategoryName(legacyCategory, text);
+  return somonCategoryName(legacyCategory, text);
 }
 
 function inferSpecificSubcategory(productText: string): string | null {
@@ -1112,15 +1113,15 @@ try {
     INSERT INTO categories (name, parent_id) VALUES (?, ?)
     ON CONFLICT(name) DO UPDATE SET parent_id = excluded.parent_id
   `);
-  const allowedCategoryNames = new Set<string>();
-  for (const root of FIXED_CATEGORY_TREE) {
-    allowedCategoryNames.add(root.name);
-    upsertCategory.run(root.name, null);
-    const rootRow = db.prepare('SELECT id FROM categories WHERE name = ?').get(root.name) as { id: number };
-    for (const subcategory of root.subcategories) {
-      allowedCategoryNames.add(subcategory);
-      upsertCategory.run(subcategory, rootRow.id);
-    }
+  const allowedCategoryNames = new Set<string>(somonCategoryPaths);
+  for (const categoryPath of somonCategoryPaths.sort((a, b) => a.split(' / ').length - b.split(' / ').length || a.localeCompare(b, 'ru'))) {
+    const parts = categoryPath.split(' / ');
+    const parentPath = parts.length > 1 ? parts.slice(0, -1).join(' / ') : null;
+    const parentId = parentPath
+      ? (db.prepare('SELECT id FROM categories WHERE name = ?').get(parentPath) as { id: number } | undefined)?.id
+      : null;
+    if (parentPath && !parentId) throw new Error(`Родительская категория Somon не найдена: ${parentPath}`);
+    upsertCategory.run(categoryPath, parentId ?? null);
   }
 
   const existingProducts = db.prepare(`
@@ -2946,8 +2947,14 @@ app.get('/api/products', (req, res) => {
       }
     }
     if (categoryId !== null) {
-      where += ' AND (p.category_id = ? OR p.category_id IN (SELECT id FROM categories WHERE parent_id = ?))';
-      params.push(categoryId, categoryId);
+      where += ` AND p.category_id IN (
+        WITH RECURSIVE descendants(id) AS (
+          SELECT id FROM categories WHERE id = ?
+          UNION ALL
+          SELECT child.id FROM categories child JOIN descendants parent ON child.parent_id = parent.id
+        ) SELECT id FROM descendants
+      )`;
+      params.push(categoryId);
     }
     const whereNoDelivery = where;
     if (deliveryType === 'stock') where += " AND p.delivery_type = 'stock'";
@@ -5754,16 +5761,16 @@ app.post('/api/parse-product-html', requireAdmin, async (req, res) => {
 // 8.2. КАТЕГОРИИ (ДВУХУРОВНЕВОЕ ДЕРЕВО)
 app.get('/api/categories', (_req, res) => {
   try {
-    const rootOrder = new Map<string, number>(FIXED_CATEGORY_TREE.map(
-      (category, index): [string, number] => [category.name, index],
-    ));
-    const rootCats = (db.prepare('SELECT id, name FROM categories WHERE parent_id IS NULL').all() as Array<{ id: number; name: string }>)
+    const rootOrder = new Map<string, number>(OFFICIAL_ROOT_NAMES.map((name, index): [string, number] => [name, index]));
+    const rootCats = (db.prepare('SELECT id, name, parent_id FROM categories WHERE parent_id IS NULL').all() as Array<{ id: number; name: string; parent_id: null }>)
       .sort((a, b) => (rootOrder.get(a.name) ?? Number.MAX_SAFE_INTEGER) - (rootOrder.get(b.name) ?? Number.MAX_SAFE_INTEGER));
-    const getSubs = db.prepare('SELECT id, name FROM categories WHERE parent_id = ? ORDER BY name ASC');
-    const exposeCategory = (category: { id: number; name: string; parent_id?: number | null; product_count?: number; subcategories?: unknown[] }) => ({
-      ...category,
-      rubric_id: somonCategoryByPath.get(category.name)?.rubric_id ?? null,
-    });
+    const categoryRows = db.prepare('SELECT id, name, parent_id FROM categories ORDER BY name ASC').all() as Array<{ id: number; name: string; parent_id: number | null }>;
+    const childrenByParent = new Map<number | null, typeof categoryRows>();
+    for (const category of categoryRows) {
+      const children = childrenByParent.get(category.parent_id) || [];
+      children.push(category);
+      childrenByParent.set(category.parent_id, children);
+    }
     const productCounts = new Map(
       (db.prepare(`
         SELECT category_id, COUNT(*) AS product_count
@@ -5773,27 +5780,24 @@ app.get('/api/categories', (_req, res) => {
       `).all() as Array<{ category_id: number; product_count: number }>)
         .map((row) => [row.category_id, row.product_count]),
     );
-
-    const tree: any[] = [];
-    for (const root of rootCats) {
-      const subcategories = (getSubs.all(root.id) as Array<{ id: number; name: string }>).map((category) => exposeCategory({
+    const buildTree = (category: { id: number; name: string; parent_id: number | null }): any => {
+      const subcategories = (childrenByParent.get(category.id) || []).map(buildTree);
+      return {
         ...category,
-        product_count: productCounts.get(category.id) || 0,
-      }));
-      tree.push(exposeCategory({
-        ...root,
-        product_count: (productCounts.get(root.id) || 0)
-          + subcategories.reduce((count, category) => count + (category.product_count || 0), 0),
+        path: category.name,
+        label: category.name.split(' / ').at(-1) || category.name,
+        rubric_id: somonCategoryByPath.get(category.name)?.rubric_id ?? null,
+        product_count: (productCounts.get(category.id) || 0) + subcategories.reduce((count, child) => count + (child.product_count || 0), 0),
         subcategories,
-      }));
-    }
+      };
+    };
+    const tree = rootCats.map(buildTree);
 
-    const all = (db.prepare('SELECT id, name, parent_id FROM categories ORDER BY name ASC').all() as Array<{
-      id: number;
-      name: string;
-      parent_id: number | null;
-    }>).map((category) => exposeCategory({
+    const all = categoryRows.map((category) => ({
       ...category,
+      path: category.name,
+      label: category.name.split(' / ').at(-1) || category.name,
+      rubric_id: somonCategoryByPath.get(category.name)?.rubric_id ?? null,
       product_count: productCounts.get(category.id) || 0,
     }));
     return res.json({ tree, all });
@@ -5820,7 +5824,7 @@ app.get('/api/categories/:id/recommendations', (req, res) => {
         'SELECT id FROM categories WHERE parent_id = ? AND id != ?',
       ).all(selected.parent_id, selected.id) as Array<{ id: number }>).map((category) => category.id);
     } else {
-      const familyRoots = FIXED_CATEGORY_TREE.filter((root) => {
+      const familyRoots = OFFICIAL_ROOT_NAMES.map((name) => ({ name })).filter((root) => {
         const name = root.name.toLocaleLowerCase('ru');
         const selectedName = selected.name.toLocaleLowerCase('ru');
         const isFashion = (value: string) => /одежд|белье|обувь|сумк|аксессуар/.test(value);
@@ -6065,11 +6069,12 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
           return res.status(400).json({ error: 'Настройки категорий Somon имеют неверный формат' });
         }
         const entry = config as { rubric_id?: unknown; attributes_json?: unknown };
-        const rubricId = String(entry.rubric_id ?? '').trim();
-        const linkedCategory = db.prepare('SELECT name FROM categories WHERE id = ? AND parent_id IS NOT NULL').get(Number(categoryKey)) as { name: string } | undefined;
+        const requestedRubricId = String(entry.rubric_id ?? '').trim();
+        const linkedCategory = db.prepare('SELECT name, parent_id FROM categories WHERE id = ?').get(Number(categoryKey)) as { name: string; parent_id: number | null } | undefined;
         const linkedRubric = linkedCategory ? somonCategoryByPath.get(linkedCategory.name)?.rubric_id : undefined;
-        if (rubricId && (!/^\d+$/.test(rubricId) || !Number.isSafeInteger(Number(rubricId)) || Number(rubricId) <= 0 || (linkedRubric === undefined || Number(rubricId) !== linkedRubric))) {
-          return res.status(400).json({ error: 'Укажите официальный ID рубрики Somon из справочника' });
+        const rubricId = linkedRubric === undefined ? '' : String(linkedRubric);
+        if (!linkedCategory || linkedCategory.parent_id === null || !linkedRubric) {
+          return res.status(400).json({ error: 'Категория должна иметь официальный ID рубрики Somon из справочника' });
         }
         let attributes: unknown = {};
         try {
@@ -7071,45 +7076,10 @@ try {
       if (!product.category_id || !Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) continue;
       const specifications = parseSomonSpecifications(product.specifications);
       const categoryConfig = storedConfig[String(product.category_id)];
-      let rubricId = String(categoryConfig?.rubric_id ?? '');
-      let attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
+      const rubricId = String(getSomonRubricId(product.category_id) ?? '');
+      const attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
         ? categoryConfig.attributes as Record<string, unknown>
         : {};
-      // The universal profile remains the safe fallback. For categories with
-      // stable Somon requirements, use a ready mapping automatically.
-      if (rubricId === '182' && product.category_id === 85) {
-        rubricId = '3447';
-        attributes = { sostoyanie: 'const:2', tip: 'const:30' };
-      }
-      if (rubricId === '182' && (product.category_id === 28 || product.category_id === 29)) {
-        const sizeKeys = (product.variant_sizes || '').split(',')
-          .map((value) => Number.parseInt(value.trim(), 10))
-          .filter((value) => Number.isInteger(value) && value >= 32 && value <= 49)
-          .map((value) => String(value - 31));
-        if (sizeKeys.length) {
-          const lowerTitle = product.title.toLocaleLowerCase('ru');
-          const tip = /кроссов|кеды/.test(lowerTitle)
-            ? (product.category_id === 28 ? '50' : '40')
-            : /сапог/.test(lowerTitle) ? (product.category_id === 28 ? '70' : '70')
-              : /сандал/.test(lowerTitle) ? (product.category_id === 28 ? '80' : '60')
-                : product.category_id === 28 ? '100' : '90';
-          rubricId = product.category_id === 28 ? '2963' : '2961';
-          attributes = { 'razmer-obuvi': `const:${Array.from(new Set(sizeKeys)).join(',')}`, sostoyanie: 'const:2', tip: `const:${tip}` };
-        }
-      }
-      if (rubricId === '182' && product.category_id === 49) {
-        const memory = Object.entries(specifications).find(([name, value]) => /memory|storage/i.test(`${name} ${value}`) || /(?:^|\D)(4|8|16|32|64|128|256|512|1024|1536|2048)\s*(?:\u0433\u0431?|gb|tb)/i.test(value));
-        const match = memory?.[1].match(/(?:^|\D)(4|8|16|32|64|128|256|512|1024|1536|2048)\s*(?:\u0433\u0431?|gb|tb)/i);
-        if (match) {
-          const gb = Number(match[1]) * (/tb/i.test(match[0]) ? 1024 : 1);
-          const key = ({ 4: '10', 8: '20', 16: '30', 32: '40', 64: '50', 128: '60', 256: '70', 512: '80', 1024: '90', 1536: '100', 2048: '110' } as Record<number, string>)[gb];
-          if (key) { rubricId = '2911'; attributes = { 'obem-pamyati': `const:${key}`, sostoyanie: 'const:2' }; }
-        }
-      }
-      if (rubricId === '182' && product.category_id === 52) {
-        rubricId = '3081';
-        attributes = { sostoyanie: 'const:2', tip: /беспровод|wireless/i.test(product.title) ? 'const:20' : 'const:10' };
-      }
       if (!/^\d+$/.test(rubricId) || !Object.keys(attributes).length) continue;
 
       const xmlAttributes: string[] = [];

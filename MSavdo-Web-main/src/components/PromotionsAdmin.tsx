@@ -55,7 +55,13 @@ export function PromotionsAdmin({ products, categories }: { products: Product[];
   }
   const selectIds = (field: 'product_ids' | 'category_ids', id: number, checked: boolean) =>
     set(field, checked ? [...draft[field], id] : draft[field].filter((value) => value !== id));
-  const flatCategories = categories.flatMap((category) => category.subcategories?.length ? category.subcategories : category.parent_id ? [category] : []);
+  const flatCategories = categories.flatMap((category) => {
+    const flatten = (item: Category): Category[] => [
+      ...(item.parent_id !== null ? [item] : []),
+      ...(item.subcategories || []).flatMap(flatten),
+    ];
+    return flatten(category);
+  });
   const visibleProducts = products.filter((p) => p.title.toLowerCase().includes(search.toLowerCase()) || p.base_sku.toLowerCase().includes(search.toLowerCase()));
   return <section className="space-y-4 py-4">
     <div><h2 className="text-lg font-bold">Акции и промокоды</h2>

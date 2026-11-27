@@ -48,11 +48,34 @@ type VideoFeedProduct = Pick<Product, 'id' | 'title' | 'main_image' | 'images' |
 
 type VideoFeedItem = { product: VideoFeedProduct; src: string };
 
+function findCategoryById(categories: Category[], id: number | null): Category | null {
+  if (id === null) return null;
+  for (const category of categories) {
+    if (category.id === id) return category;
+    const nested = findCategoryById(category.subcategories || [], id);
+    if (nested) return nested;
+  }
+  return null;
+}
+
 const isRemoteVideoSource = (src: string) => /^https:\/\/[^/]*(taobao|alicdn|tbcdn|1688|tmall|alibaba|aliyuncs)\./i.test(src);
 
 const getVideoSource = (src: string) => isRemoteVideoSource(src)
   ? apiUrl(`/api/video-proxy?url=${encodeURIComponent(src)}`)
   : src;
+
+function categoryHasDescendant(category: Category, id: number | null): boolean {
+  return category.id === id || (category.subcategories || []).some((child) => categoryHasDescendant(child, id));
+}
+
+function findCategoryParent(categories: Category[], id: number): Category | null {
+  for (const category of categories) {
+    if ((category.subcategories || []).some((child) => child.id === id)) return category;
+    const nested = findCategoryParent(category.subcategories || [], id);
+    if (nested) return nested;
+  }
+  return null;
+}
 
 function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { products: Product[]; initialProductId?: number; onOpenProduct: (product: Product) => void; onBack: () => void }) {
   const [feedVideos, setFeedVideos] = useState<VideoFeedItem[] | null>(null);
@@ -1117,7 +1140,7 @@ export default function App() {
                 <span className="truncate">
                   {selectedCategoryId === null
                     ? t('allCategories')
-                    : (categoriesTree.flatMap((c) => [c, ...(c.subcategories || [])]).find((c) => c.id === selectedCategoryId)?.name || t('allCategories'))}
+                    : (findCategoryById(categoriesTree, selectedCategoryId)?.name || t('allCategories'))}
                 </span>
                 <ChevronDown className={`h-3 w-3 shrink-0 transition-transform ${isCategoriesOpen ? 'rotate-180' : ''}`} />
               </button>
@@ -1142,8 +1165,7 @@ export default function App() {
                 </button>
 
                 {categoriesTree.map((section) => {
-                  const isSelected = selectedCategoryId === section.id
-                    || section.subcategories?.some((category) => category.id === selectedCategoryId) === true;
+                  const isSelected = categoryHasDescendant(section, selectedCategoryId);
                   const isExpanded = expandedCategoryId === section.id;
                   return (
                     <button
@@ -1183,7 +1205,8 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           setSelectedCategoryId(selectedCategoryId === category.id ? section.id : category.id);
-                          setIsCategoriesOpen(false);
+                          setExpandedCategoryId(category.subcategories?.length ? category.id : null);
+                          if (!category.subcategories?.length) setIsCategoriesOpen(false);
                         }}
                         aria-pressed={selectedCategoryId === category.id}
                         title={category.name}
@@ -1194,6 +1217,7 @@ export default function App() {
                         }`}
                       >
                         {category.name}
+                        {category.subcategories?.length ? ' ›' : ''}
                       </button>
                     ))}
                   </div>
@@ -1371,7 +1395,10 @@ export default function App() {
               {browsingCategoryId !== null && (
                 <button
                   type="button"
-                  onClick={() => setBrowsingCategoryId(null)}
+                  onClick={() => {
+                    const parent = browsingCategoryId === null ? null : findCategoryParent(categoriesTree, browsingCategoryId);
+                    setBrowsingCategoryId(parent?.id ?? null);
+                  }}
                   aria-label={t('backToCatalog')}
                   className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"
                 >
@@ -1385,7 +1412,7 @@ export default function App() {
                 <p className="truncate text-xs text-slate-500">
                   {browsingCategoryId === null
                     ? t('chooseCategory')
-                    : categoriesTree.find((category) => category.id === browsingCategoryId)?.name}
+                    : findCategoryById(categoriesTree, browsingCategoryId)?.name}
                 </p>
               </div>
               <button
@@ -1417,7 +1444,7 @@ export default function App() {
                   ))}
                 </div>
               ) : (() => {
-                const section = categoriesTree.find((category) => category.id === browsingCategoryId);
+                const section = findCategoryById(categoriesTree, browsingCategoryId);
                 if (!section) return null;
                 return (
                   <div className="space-y-1.5">
@@ -1439,6 +1466,10 @@ export default function App() {
                         key={category.id}
                         type="button"
                         onClick={() => {
+                          if (category.subcategories?.length) {
+                            setBrowsingCategoryId(category.id);
+                            return;
+                          }
                           setSelectedCategoryId(category.id);
                           setExpandedCategoryId(section.id);
                           setIsCategoryBrowserOpen(false);
@@ -1448,7 +1479,10 @@ export default function App() {
                         className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-200 px-2.5 py-2 text-left text-[10px] font-semibold text-slate-700 transition hover:border-amber-400 hover:bg-amber-50"
                       >
                         <span className="min-w-0 truncate">{category.name}</span>
-                        <span className="shrink-0 text-[9px] font-medium text-slate-500">{t('categoryProductCount')}: {category.product_count || 0}</span>
+                        <span className="flex shrink-0 items-center gap-1 text-[9px] font-medium text-slate-500">
+                          {t('categoryProductCount')}: {category.product_count || 0}
+                          {category.subcategories?.length ? <ChevronDown className="h-3 w-3 -rotate-90" /> : null}
+                        </span>
                       </button>
                     ))}
                   </div>
