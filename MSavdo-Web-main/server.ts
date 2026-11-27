@@ -1086,8 +1086,12 @@ function resolveImportSubcategory(
 
 function getFixedSubcategoryId(categoryName: string): number {
   const safePath = normalizeSubcategoryName(categoryName);
+  if (!safePath || !STRICT_ALLOWED_CATEGORIES.includes(safePath)) {
+    throw new Error(`Выберите конечную категорию Somon из официального списка: ${categoryName}`);
+  }
+  const official = somonCategoryByPath.get(safePath);
   const row = db.prepare('SELECT id FROM categories WHERE name = ? AND parent_id IS NOT NULL').get(safePath) as { id: number } | undefined;
-  if (!row) throw new Error(`Категория Somon не найдена в базе: ${safePath || categoryName}`);
+  if (!row || !official) throw new Error(`Конечная категория Somon не найдена в базе: ${safePath}`);
   return row.id;
 }
 
@@ -2146,15 +2150,18 @@ function findExplicitCategory(value: unknown): { id: number; name: string } | nu
   const rubricId = Number(value);
   const official = somonCategoryById.get(rubricId);
   if (official) {
-    const mapped = db.prepare('SELECT id, name FROM categories WHERE name = ? AND parent_id IS NOT NULL').get(official.path) as { id: number; name: string } | undefined;
+    const mapped = STRICT_ALLOWED_CATEGORIES.includes(official.path)
+      ? db.prepare('SELECT id, name FROM categories WHERE name = ? AND parent_id IS NOT NULL').get(official.path) as { id: number; name: string } | undefined
+      : undefined;
     if (mapped) return mapped;
   }
   const id = Number(value);
   if (!Number.isSafeInteger(id) || id <= 0) return null;
-  return db.prepare(`
+  const row = db.prepare(`
     SELECT id, name FROM categories
     WHERE id = ? AND parent_id IS NOT NULL
-  `).get(id) as { id: number; name: string } | undefined || null;
+  `).get(id) as { id: number; name: string } | undefined;
+  return row && STRICT_ALLOWED_CATEGORIES.includes(row.name) ? row : null;
 }
 
 function determineAdminCategoryFallback(title: string): string {
