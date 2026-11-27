@@ -143,6 +143,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [categoryEditorProduct, setCategoryEditorProduct] = useState<any | null>(null);
   const [categoryDraftId, setCategoryDraftId] = useState('');
   const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const selectableCategories = useMemo(() => {
+    const flatten = (items: Category[]): Category[] => items.flatMap((item) => [item, ...(item.subcategories ? flatten(item.subcategories) : [])]);
+    return flatten(categories).filter((category) => category.parent_id !== null && Number.isSafeInteger(category.rubric_id));
+  }, [categories]);
   const editingColorOptions = useMemo(() => {
     if (!editingProduct) return [];
     const specificationColors = extractProductColors(
@@ -4188,8 +4192,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <select
                     value={editingProduct.category_id ? String(editingProduct.category_id) : ''}
                     onChange={(event) => {
-                      const selectedCategory = categories
-                        .flatMap((category) => category.subcategories || [])
+                      const selectedCategory = selectableCategories
                         .find((category) => String(category.id) === event.target.value);
                       setEditingProduct({
                         ...editingProduct,
@@ -4202,12 +4205,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <option value="">
                       {editingProduct.id === 0 ? 'Выберите категорию или оставьте для ИИ' : 'Выберите подкатегорию'}
                     </option>
-                    {categories.map((category) => (
-                      <optgroup key={category.id} label={category.name}>
-                        {(category.subcategories || []).map((subcategory) => (
-                          <option key={subcategory.id} value={subcategory.id}>{subcategory.name}{subcategory.rubric_id ? ` (ID ${subcategory.rubric_id})` : ''}</option>
-                        ))}
-                      </optgroup>
+                    {selectableCategories.map((category) => (
+                      <option key={category.id} value={category.id}>{category.name} (ID {category.rubric_id})</option>
                     ))}
                   </select>
                   <p className="text-[10px] text-slate-500">
@@ -4785,12 +4784,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 className="w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-800 focus:ring-2 focus:ring-amber-500"
               >
                 <option value="" disabled>Выберите подкатегорию</option>
-                {categories.map((category) => (
-                  <optgroup key={category.id} label={category.name}>
-                    {(category.subcategories || []).map((subcategory) => (
-                      <option key={subcategory.id} value={subcategory.id}>{subcategory.name}{subcategory.rubric_id ? ` (ID ${subcategory.rubric_id})` : ''}</option>
-                    ))}
-                  </optgroup>
+                {selectableCategories.map((category) => (
+                  <option key={category.id} value={category.id}>{category.name} (ID {category.rubric_id})</option>
                 ))}
               </select>
             </label>
