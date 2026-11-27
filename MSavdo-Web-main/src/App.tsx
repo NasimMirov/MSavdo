@@ -272,23 +272,18 @@ function VideoFeed({ products, initialProductId, onOpenProduct, onBack }: { prod
 }
 
 function getCategoryIllustration(name: string): string {
-  const category = name.toLocaleLowerCase('ru');
-  if (/женская одежда/.test(category)) return '👗';
-  if (/мужская одежда/.test(category)) return '👔';
-  if (/нижнее белье/.test(category)) return '🩱';
-  if (/^обувь$/.test(category)) return '👟';
-  if (/сумки, рюкзаки/.test(category)) return '👜';
-  if (/аксессуары, часы/.test(category)) return '⌚';
-  if (/электроника и гаджеты/.test(category)) return '📱';
-  if (/электронные компоненты/.test(category)) return '🔌';
-  if (/бытовая техника/.test(category)) return '🔌';
-  if (/товары для дома/.test(category)) return '🏠';
-  if (/мебель, ремонт/.test(category)) return '🛋️';
-  if (/красота, уход/.test(category)) return '🪞';
-  if (/детские товары/.test(category)) return '🧸';
-  if (/спорт, туризм/.test(category)) return '⛺';
-  if (/транспорт:/.test(category)) return '🚲';
-  if (/канцелярия, хобби/.test(category)) return '🎨';
+  const category = name.toLocaleLowerCase('ru').trim();
+  if (category === 'все для бизнеса') return '💼';
+  if (category === 'все для дома') return '🏠';
+  if (category === 'детский мир') return '🧸';
+  if (category === 'животные и растения') return '🐾';
+  if (category === 'компьютеры и оргтехника') return '💻';
+  if (category === 'одежда и личные вещи') return '👗';
+  if (category === 'строительство, сырье и ремонт') return '🧱';
+  if (category === 'телефоны и связь') return '📱';
+  if (category === 'транспорт') return '🚗';
+  if (category === 'хобби, музыка и спорт') return '🎨';
+  if (category === 'электроника и бытовая техника') return '🔌';
   return '🎁';
 }
 
