@@ -1026,7 +1026,6 @@ function normalizeSubcategoryName(categoryName: string, productText: string = ''
   // Legacy category names are not accepted as a source of truth. Only official leaf paths may pass through.
   if (String(categoryName || '').trim() && !somonCategoryByPath.has(String(categoryName || '').trim())) return '';
   const text = `${categoryName} ${productText}`.toLocaleLowerCase('ru');
-  if (/(смартфон|iphone|айфон|мобильн.{0,8}телефон|сотов.{0,8}телефон|легков.{0,8}автомоб|пассажирск.{0,8}автомоб|автотранспорт)/i.test(text)) return '';
   const rules: Array<[RegExp, string]> = [
     [/кроссов|туфл|сандал|обув|ботин|сапог/i, 'Одежда и личные вещи / Обувь / Мужская обувь'],
     [/худи|толстовк|свитер/i, 'Одежда и личные вещи / Мужская одежда / Кофты'],
