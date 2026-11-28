@@ -6853,10 +6853,21 @@ function resolveSomonAttributes(
     if (slug === 'tip') return [[slug, `const:${/беспровод|wireless|bluetooth|wi-fi|wifi/i.test(text) ? '20' : '10'}`]];
     return [];
   }));
-  const attributes = { ...genericDefaults, ...defaults, ...configured };
+  const attributes = { ...genericDefaults, ...defaults };
+  for (const [slug, source] of Object.entries(configured)) {
+    if (typeof source !== 'string') continue;
+    if (source.startsWith('spec:')) {
+      const specValue = findSomonSpecificationValue(specifications, source.slice('spec:'.length).trim());
+      if (!specValue) continue;
+    }
+    attributes[slug] = source;
+  }
   // Never allow a saved legacy config to remove an official required field.
   if (rubricId === '155' && typeof attributes.autoservice !== 'string') {
     attributes.autoservice = defaults.autoservice;
+  }
+  if (required.includes('tip') && typeof attributes.tip !== 'string') {
+    attributes.tip = genericDefaults.tip || 'const:10';
   }
   return Object.keys(attributes).length ? attributes : { sostoyanie: 'const:2' };
 }
