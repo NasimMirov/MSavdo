@@ -29,6 +29,7 @@ import { isWatermarkedUpload, productImageToken, renderProductWatermark, saveWat
 import { shouldSeedDemoProducts } from './src/utils/demoSeed.js';
 import { catalogSearchCondition, catalogSearchTerms, escapeSearchLike } from './src/utils/catalogSearch.js';
 import { SOMON_CATEGORIES } from './src/data/somonCategories.js';
+import { SOMON_REQUIRED_ATTRIBUTES } from './src/data/somonRequiredAttributes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -6808,6 +6809,51 @@ const DEFAULT_SOMON_ATTRIBUTES_BY_RUBRIC: Record<string, Record<string, string>>
   },
 };
 
+function getDefaultSomonAttributes(
+  rubricId: string,
+  title: string,
+  description: string,
+  specifications: Record<string, string>,
+): Record<string, string> {
+  if (rubricId !== '155') return DEFAULT_SOMON_ATTRIBUTES_BY_RUBRIC[rubricId] || {};
+
+  // Rubric 155 (Транспорт / Автосервис и ремонт) has one required enum
+  // attribute. Choose the enum key from the product text so diagnostic
+  // equipment and service listings remain valid XML without manual setup.
+  const text = `${title} ${description} ${Object.entries(specifications).flat().join(' ')}`.toLocaleLowerCase('ru');
+  const serviceKey = /автомой|мойк/i.test(text) ? '10'
+    : /шиномон|сход.?развал/i.test(text) ? '3'
+      : /кузовн|покрас|бампер/i.test(text) ? '1'
+        : /полиров|антикорроз|предпродаж/i.test(text) ? '2'
+          : /техобслуж|\bто\b|замен.{0,12}(масл|жидк)/i.test(text) ? '4'
+            : /автоэлектр|диагност|сканер|obd|vas\d|odis|двигател|коробк|кпп/i.test(text) ? '5'
+              : /слесар/i.test(text) ? '6'
+                : /стекл|тониров/i.test(text) ? '7'
+                  : /автозвук|сигнализац|дополнительн.{0,10}оборуд|свет\b/i.test(text) ? '8'
+                    : /шумоизоляц|обшив|декор.{0,10}салон/i.test(text) ? '9'
+                      : '5';
+  return { autoservice: `const:${serviceKey}` };
+}
+
+function resolveSomonAttributes(
+  rubricId: string,
+  categoryConfig: { attributes?: unknown } | undefined,
+  title: string,
+  description: string,
+  specifications: Record<string, string>,
+): Record<string, unknown> {
+  const configured = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
+    ? categoryConfig.attributes as Record<string, unknown>
+    : {};
+  const defaults = getDefaultSomonAttributes(rubricId, title, description, specifications);
+  const required = SOMON_REQUIRED_ATTRIBUTES[rubricId]?.required || [];
+  const genericDefaults = Object.fromEntries(required
+    .filter((slug) => slug === 'sostoyanie' || slug === 'sostoyanie-teh')
+    .map((slug) => [slug, 'const:2']));
+  const attributes = { ...genericDefaults, ...defaults, ...configured };
+  return Object.keys(attributes).length ? attributes : { sostoyanie: 'const:2' };
+}
+
 function normalizeSomonSpecificationName(value: string): string {
   return value
     .toLocaleLowerCase('ru')
@@ -6905,7 +6951,7 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
       : {};
     const cityId = '513';
     const rows = db.prepare(`
-      SELECT p.id, p.title, p.category_id, p.main_image, p.images,
+      SELECT p.id, p.title, p.description, p.specifications, p.category_id, p.main_image, p.images,
              MIN(CASE WHEN v.price_tjs > 0 THEN v.price_tjs END) AS price_tjs,
              GROUP_CONCAT(DISTINCT NULLIF(v.image_url, '')) AS variant_images
       FROM products p
@@ -6913,16 +6959,28 @@ app.get('/api/admin/somon/feed-report', requireAdmin, (_req, res) => {
       WHERE p.status = 'active'
       GROUP BY p.id
     `).all() as Array<{
-      id: number; title: string; category_id: number | null; main_image: string | null;
+      id: number; title: string; description: string | null; specifications: string | null; category_id: number | null; main_image: string | null;
       images: string | null; price_tjs: number | null; variant_images: string | null;
     }>;
-    const reasons = { no_category: 0, no_price: 0, no_rubric: 0, invalid_title: 0, no_images: 0, invalid_images: 0 };
+    const reasons = { no_category: 0, no_price: 0, no_rubric: 0, missing_required_attributes: 0, invalid_title: 0, no_images: 0, invalid_images: 0 };
     let publishable = 0;
     for (const product of rows) {
       if (!product.category_id) { reasons.no_category++; continue; }
       if (!Number.isFinite(product.price_tjs) || Number(product.price_tjs) <= 0) { reasons.no_price++; continue; }
       const rubricId = getSomonRubricId(product.category_id);
       if (!rubricId) { reasons.no_rubric++; continue; }
+      const required = SOMON_REQUIRED_ATTRIBUTES[String(rubricId)]?.required || [];
+      const attributes = resolveSomonAttributes(
+        String(rubricId),
+        storedConfig[String(product.category_id)],
+        product.title,
+        String(product.description || ''),
+        parseSomonSpecifications(product.specifications),
+      );
+      if (required.some((slug) => typeof attributes[slug] !== 'string' || !String(attributes[slug]).trim())) {
+        reasons.missing_required_attributes++;
+        continue;
+      }
       if (!cleanSomonTitle(product.title)) { reasons.invalid_title++; continue; }
       const allImages = getPublicProductImageUrls(product.id, product.main_image, product.images,
         product.variant_images ? product.variant_images.split(',') : [], 32);
@@ -6997,13 +7055,16 @@ app.get('/somon-feed.xml', (_req, res) => {
       const specifications = parseSomonSpecifications(product.specifications);
       const categoryConfig = storedConfig[String(product.category_id)];
       const rubricId = String(getSomonRubricId(product.category_id) ?? '');
-      const configuredAttributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
-        ? categoryConfig.attributes as Record<string, unknown>
-        : {};
-      const defaultAttributes = DEFAULT_SOMON_ATTRIBUTES_BY_RUBRIC[rubricId] || {};
-      let attributes = { ...defaultAttributes, ...configuredAttributes };
-      if (!Object.keys(attributes).length) attributes = { sostoyanie: 'const:2' };
+      const attributes = resolveSomonAttributes(
+        rubricId,
+        categoryConfig,
+        product.title,
+        String(product.description || ''),
+        specifications,
+      );
+      const requiredAttributes = SOMON_REQUIRED_ATTRIBUTES[rubricId]?.required || [];
       if (!/^\d+$/.test(rubricId) || !somonCategoryById.has(Number(rubricId)) || !Object.keys(attributes).length) continue;
+      if (requiredAttributes.some((slug) => typeof attributes[slug] !== 'string' || !String(attributes[slug]).trim())) continue;
 
       const xmlAttributes: string[] = [];
       const xmlFields: string[] = [];
