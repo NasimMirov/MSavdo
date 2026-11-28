@@ -6847,9 +6847,12 @@ function resolveSomonAttributes(
     : {};
   const defaults = getDefaultSomonAttributes(rubricId, title, description, specifications);
   const required = SOMON_REQUIRED_ATTRIBUTES[rubricId]?.required || [];
-  const genericDefaults = Object.fromEntries(required
-    .filter((slug) => slug === 'sostoyanie' || slug === 'sostoyanie-teh')
-    .map((slug) => [slug, 'const:2']));
+  const text = `${title} ${description} ${Object.entries(specifications).flat().join(' ')}`.toLocaleLowerCase('ru');
+  const genericDefaults = Object.fromEntries(required.flatMap((slug) => {
+    if (slug === 'sostoyanie' || slug === 'sostoyanie-teh') return [[slug, 'const:2']];
+    if (slug === 'tip') return [[slug, `const:${/беспровод|wireless|bluetooth|wi-fi|wifi/i.test(text) ? '20' : '10'}`]];
+    return [];
+  }));
   const attributes = { ...genericDefaults, ...defaults, ...configured };
   // Never allow a saved legacy config to remove an official required field.
   if (rubricId === '155' && typeof attributes.autoservice !== 'string') {
