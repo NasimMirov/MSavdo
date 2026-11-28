@@ -6851,6 +6851,10 @@ function resolveSomonAttributes(
     .filter((slug) => slug === 'sostoyanie' || slug === 'sostoyanie-teh')
     .map((slug) => [slug, 'const:2']));
   const attributes = { ...genericDefaults, ...defaults, ...configured };
+  // Never allow a saved legacy config to remove an official required field.
+  if (rubricId === '155' && typeof attributes.autoservice !== 'string') {
+    attributes.autoservice = defaults.autoservice;
+  }
   return Object.keys(attributes).length ? attributes : { sostoyanie: 'const:2' };
 }
 
