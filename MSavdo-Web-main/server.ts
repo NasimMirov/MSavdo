@@ -971,7 +971,7 @@ function determineSubcategoryRuleBased(productText: string): string {
   return '';
 }
 
-const UNUSED_LEGACY_CATEGORY_TO_SOMON: Record<string, string> = {
+const LEGACY_CATEGORY_TO_SOMON: Record<string, string> = {
   'мужские футболки, майки и поло': 'Одежда и личные вещи / Мужская одежда / Футболки',
   'мужские рубашки и сорочки': 'Одежда и личные вещи / Мужская одежда / Рубашки',
   'мужские худи, толстовки и свитеры': 'Одежда и личные вещи / Мужская одежда / Кофты',
@@ -1017,15 +1017,34 @@ const UNUSED_LEGACY_CATEGORY_TO_SOMON: Record<string, string> = {
   'климатическая техника': 'Электроника и бытовая техника / Климатическая техника / Вентиляторы',
   'приборы для красоты и здоровья': 'Электроника и бытовая техника / Для личного ухода',
   'хозяйственные мелочи': 'Все для дома / Другие товары для дома',
-  'автотовары и автоаксессуары': '',
-  'смартфон': '',
+  'автотовары и автоаксессуары': 'Транспорт / Запчасти и принадлежности / Аксессуары для авто',
+  'смартфон': 'Телефоны и связь / Мобильные телефоны / Другая марка',
+  'микроконтроллеры и отладочные платы': 'Компьютеры и оргтехника / Комплектующие и аксессуары / Прочие комплектующие',
+  'электронные модули и датчики': 'Электроника и бытовая техника / Электронные компоненты и радиодетали',
+  'резисторы, конденсаторы и катушки': 'Электроника и бытовая техника / Электронные компоненты и радиодетали',
+  'микросхемы и полупроводники': 'Электроника и бытовая техника / Электронные компоненты и радиодетали',
+  'разъёмы, провода и монтажные платы': 'Электроника и бытовая техника / Электронные компоненты и радиодетали',
+  'реле, переключатели и защита цепей': 'Электроника и бытовая техника / Электронные компоненты и радиодетали',
+  'источники питания и dc-dc модули': 'Компьютеры и оргтехника / Комплектующие и аксессуары / Блоки питания',
+  'наборы для пайки и разработки': 'Электроника и бытовая техника / Электронные компоненты и радиодетали',
+  'трициклы и коммерческий транспорт': 'Транспорт / Коммерческий транспорт / Легкий коммерческий транспорт',
+  'мотоэкипировка, тюнинг и мотозапчасти': 'Транспорт / Запчасти и принадлежности / Мотозапчасти',
+  'велосипеды, самокаты и ролики': 'Хобби, музыка и спорт / Велосипеды и принадлежности',
+  'зоотовары': 'Животные и растения / Товары для животных',
+  'школьная и офисная канцелярия': 'Все для дома / Канцтовары',
+  'рисование, творчество и рукоделие': 'Хобби, музыка и спорт / Антиквариат и коллекции',
+  'товары для праздников и подарков': 'Все для дома / Товары для праздников / Подарки',
 };
 
 function normalizeSubcategoryName(categoryName: string, productText: string = ''): string {
-  const exact = somonCategoryName(categoryName, productText);
+  const rawCategory = String(categoryName || '').trim();
+  const legacyMapped = LEGACY_CATEGORY_TO_SOMON[rawCategory.toLocaleLowerCase('ru')];
+  if (legacyMapped && somonCategoryByPath.has(legacyMapped)) return legacyMapped;
+  const exact = somonCategoryName(rawCategory, productText);
   if (exact) return exact;
-  // Legacy category names are not accepted as a source of truth. Only official leaf paths may pass through.
-  if (String(categoryName || '').trim() && !somonCategoryByPath.has(String(categoryName || '').trim())) return '';
+  // Legacy category names are only accepted when they have an explicit mapping
+  // to a leaf in the official Somon catalog.
+  if (rawCategory && !somonCategoryByPath.has(rawCategory)) return '';
   const text = `${categoryName} ${productText}`.toLocaleLowerCase('ru');
   const rules: Array<[RegExp, string]> = [
     [/диагностическ|автодиагност|\bobd\b|\bvas\d|\bodis\b|автосканер|сканер.{0,12}(авто|автомобил)|кодирован.{0,12}(авто|автомобил)|дилерск.{0,12}(авто|автомобил)/i, 'Транспорт / Автосервис и ремонт'],
@@ -1057,7 +1076,7 @@ function resolveImportSubcategory(
   context?: ExtractedHtmlContext | null,
   trustModelCategory = false,
 ): string {
-  const validModelCategory = somonCategoryName(modelCategory, productTitle);
+  const validModelCategory = normalizeSubcategoryName(modelCategory, productTitle);
   if (trustModelCategory && validModelCategory) return validModelCategory;
 
   const titleCategory = normalizeSubcategoryName('', `${productTitle} ${context?.title || ''}`);
@@ -6780,6 +6799,34 @@ function parseSomonSpecifications(rawSpecifications: string | null): Record<stri
   return {};
 }
 
+const DEFAULT_SOMON_ATTRIBUTES_BY_RUBRIC: Record<string, Record<string, string>> = {
+  // Somon requires these fields in the Автозапчасти rubric, even when no
+  // category-specific configuration has been saved in the admin panel.
+  '3115': {
+    'tip-zapchasti': 'spec:Тип запчасти',
+    'marka-avtomobilya': 'spec:Марка автомобиля',
+  },
+};
+
+function normalizeSomonSpecificationName(value: string): string {
+  return value
+    .toLocaleLowerCase('ru')
+    .replace(/[ё]/g, 'е')
+    .replace(/[\s_\-–—:]+/g, ' ')
+    .trim();
+}
+
+function findSomonSpecificationValue(specifications: Record<string, string>, requestedName: string): string {
+  const normalizedRequestedName = normalizeSomonSpecificationName(requestedName);
+  const matchingEntry = Object.entries(specifications).find(([name]) => {
+    const normalizedName = normalizeSomonSpecificationName(name);
+    return normalizedName === normalizedRequestedName
+      || normalizedName.includes(normalizedRequestedName)
+      || normalizedRequestedName.includes(normalizedName);
+  });
+  return matchingEntry?.[1]?.trim() || '';
+}
+
 function cleanSomonTitle(title: string): string {
   const stopWords = new Set([
     'продаю', 'продаем', 'продам', 'прадаю', 'продается', 'прадается', 'продаеться',
@@ -6950,9 +6997,11 @@ app.get('/somon-feed.xml', (_req, res) => {
       const specifications = parseSomonSpecifications(product.specifications);
       const categoryConfig = storedConfig[String(product.category_id)];
       const rubricId = String(getSomonRubricId(product.category_id) ?? '');
-      let attributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
+      const configuredAttributes = categoryConfig?.attributes && typeof categoryConfig.attributes === 'object' && !Array.isArray(categoryConfig.attributes)
         ? categoryConfig.attributes as Record<string, unknown>
         : {};
+      const defaultAttributes = DEFAULT_SOMON_ATTRIBUTES_BY_RUBRIC[rubricId] || {};
+      let attributes = { ...defaultAttributes, ...configuredAttributes };
       if (!Object.keys(attributes).length) attributes = { sostoyanie: 'const:2' };
       if (!/^\d+$/.test(rubricId) || !somonCategoryById.has(Number(rubricId)) || !Object.keys(attributes).length) continue;
 
@@ -6969,10 +7018,7 @@ app.get('/somon-feed.xml', (_req, res) => {
           value = source.slice('const:'.length).trim();
         } else if (source.startsWith('spec:')) {
           const specName = source.slice('spec:'.length).trim();
-          const matchingEntry = Object.entries(specifications).find(([name]) =>
-            name.toLocaleLowerCase('ru') === specName.toLocaleLowerCase('ru')
-          );
-          value = matchingEntry?.[1] || '';
+          value = findSomonSpecificationValue(specifications, specName);
         }
         if (!value) {
           hasAllAttributeValues = false;
@@ -7104,10 +7150,7 @@ try {
           value = source.slice('const:'.length).trim();
         } else if (source.startsWith('spec:')) {
           const specName = source.slice('spec:'.length).trim();
-          const matchingEntry = Object.entries(specifications).find(([name]) =>
-            name.toLocaleLowerCase('ru') === specName.toLocaleLowerCase('ru')
-          );
-          value = matchingEntry?.[1] || '';
+          value = findSomonSpecificationValue(specifications, specName);
         }
         if (!value) {
           hasAllAttributeValues = false;
